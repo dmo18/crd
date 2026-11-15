@@ -24,6 +24,7 @@ export function activeFilterLabels(f: Filters, locations: Pick<Location, "id" | 
   if (f.status) out.push(`Status ${STATUS_LABELS[f.status]}`);
   if (f.location === "none") out.push("No location");
   else if (f.location != null) out.push(`Location ${locations.find((l) => l.id === f.location)?.name ?? "Unknown"}`);
+  if (f.value === "none") out.push("Needs a value");
   if (f.rookie) out.push("Rookies only");
   if (f.yearFrom != null) out.push(`From ${f.yearFrom}`);
   if (f.yearTo != null) out.push(`To ${f.yearTo}`);
@@ -75,6 +76,12 @@ export function InventoryFilters({ filters, locations }: { filters: Filters; loc
               <option value="">Anywhere</option>
               <option value="none">No location</option>
               {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Value" htmlFor="inv-value">
+            <select id="inv-value" name="value" defaultValue={filters.value ?? ""} className={INPUT_CLASS}>
+              <option value="">Any</option>
+              <option value="none">Needs a value</option>
             </select>
           </Field>
           <label htmlFor="inv-rookie" className="flex min-h-11 items-center gap-3 text-base font-semibold">

@@ -3,6 +3,7 @@ import { ValueChart } from "@/components/dashboard/ValueChart";
 import { DecadeBars } from "@/components/dashboard/DecadeBars";
 import { ItemRow } from "@/components/items/ItemRow";
 import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
+import { recognitionMode } from "@/lib/env";
 import { requireOwner } from "@/lib/auth/guard";
 import { decadeBreakdown, highlights, kindBreakdown, recentItems, topItems } from "@/lib/items/stats";
 import { formatCents } from "@/lib/money";
@@ -43,6 +44,7 @@ export default async function Home() {
   }
 
   const hl = highlights();
+  const mode = recognitionMode();
   const kinds = kindBreakdown();
   const snapshots = getSnapshots(90);
   const top = summarize(topItems(5));
@@ -54,7 +56,7 @@ export default async function Home() {
     { label: "Rookies", count: hl.rookies, href: "/items?rookie=1" },
     { label: "Key cards", count: hl.keyCards, href: "/items?tier=key" },
     { label: "Worth grading", count: hl.worthGrading, href: null },
-    { label: "No value yet", count: hl.noValue, href: null },
+    { label: "No value yet", count: hl.noValue, href: "/items?value=none" },
   ].filter((t) => t.count > 0);
 
   return (
@@ -67,8 +69,13 @@ export default async function Home() {
         <p className="text-sm text-muted">
           {plural(totals.itemCount, "item", "items")} · {plural(totals.unitCount, "card and product", "cards and products")}
         </p>
-        {hl.sampleValued > 0 ? (
-          <Notice tone="warn">Some values are sample data, not real estimates. Add an AI key to get real ones.</Notice>
+        {mode === "sample" ? <Notice tone="warn">These are sample cards for trying the app.</Notice> : null}
+        {mode === "free" && hl.noValue > 0 ? (
+          <Notice tone="accent">
+            <Link href="/items?value=none&sort=newest" className="flex min-h-11 items-center font-semibold">
+              {plural(hl.noValue, "item needs", "items need")} a value. Start with rookies and Hall of Famers.
+            </Link>
+          </Notice>
         ) : null}
       </Card>
 

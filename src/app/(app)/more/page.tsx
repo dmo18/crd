@@ -7,7 +7,7 @@ export const metadata = { title: "More" };
 
 export default async function MorePage() {
   await requireOwner();
-  const real = recognitionMode() === "anthropic";
+  const mode = recognitionMode();
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="More" />
@@ -30,18 +30,21 @@ export default async function MorePage() {
       </Card>
 
       <Card className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">AI recognition</h2>
-        <Notice tone={real ? "accent" : "warn"}>
-          {real
-            ? "Real AI recognition is on."
-            : "Sample mode: scans return made-up example cards. Add an AI key in the server settings to read real cards."}
+        <h2 className="text-lg font-semibold">Card reading</h2>
+        <Notice tone={mode === "sample" ? "warn" : "accent"}>
+          {mode === "free"
+            ? "Cards are read on this server with free text recognition, and players are checked on Wikidata, a free public database. No keys or accounts needed. Blurry or glossy photos may need a quick fix in Review."
+            : mode === "sample"
+              ? "Sample mode: scans return made-up example cards."
+              : "Optional paid AI reading is on."}
         </Notice>
       </Card>
 
       <Card className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">About values</h2>
         <p className="text-sm text-muted">
-          Values are AI estimates, not appraisals. Check recent sold listings before you sell or insure anything.
+          Values come from your own entries, using sold listings. AI estimates appear only if paid AI is turned on.
+          They are a guide, not an appraisal. Check recent sold listings before you sell or insure anything.
           If you enter your own value for an item, your value always wins.
         </p>
       </Card>

@@ -30,7 +30,8 @@ function searchBody(ids: string[]) {
 
 /** A fake Wikidata: answers the search call and the SPARQL call. */
 function fakeFetch(rows: object[], ids = ["Q1", "Q2", "Q3"]) {
-  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+  return vi.fn(async (input: RequestInfo | URL, ...rest: [RequestInit?]) => {
+    void rest;
     const url = new URL(String(input));
     const body = url.hostname === "www.wikidata.org" ? searchBody(ids) : { results: { bindings: rows } };
     return new Response(JSON.stringify(body), { status: 200 });
@@ -157,5 +158,28 @@ describe("rankCandidates", () => {
 
   it("drops names that do not match", () => {
     expect(rankCandidates([base], { name: "Frank Thompson" })).toEqual([]);
+  });
+});
+
+describe("missing English label in the query service", () => {
+  it("uses the name from the search step", async () => {
+    const { createDb } = await import("@/db");
+    const { lookupPlayer } = await import("./wikidata");
+    const fake: typeof fetch = async (input) => {
+      const url = String(input);
+      const body = url.includes("wbsearchentities")
+        ? { search: [{ id: "Q41421", label: "Michael Jordan" }] }
+        : { results: { bindings: [{
+            item: { value: "http://www.wikidata.org/entity/Q41421" },
+            sports: { value: "basketball|baseball" },
+            occupations: { value: "basketball player" },
+            start: { value: "1984" },
+            birth: { value: "1963" },
+          }] } };
+      return new Response(JSON.stringify(body), { status: 200 });
+    };
+    const facts = await lookupPlayer("Michael Jordan", { sport: "basketball", year: 1986, db: createDb(":memory:"), fetchImpl: fake });
+    expect(facts?.name).toBe("Michael Jordan");
+    expect(facts?.sports).toContain("basketball");
   });
 });

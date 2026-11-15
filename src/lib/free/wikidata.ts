@@ -77,13 +77,15 @@ const ATHLETE_WORDS = /player|athlete|pitcher|quarterback|goaltender|goalkeeper|
 // ---------- response shapes ----------
 
 const searchSchema = z.object({
-  search: z.array(z.object({ id: z.string().regex(/^Q\d{1,12}$/) }).passthrough()).max(50),
+  search: z.array(z.object({ id: z.string().regex(/^Q\d{1,12}$/), label: z.string().optional() }).passthrough()).max(50),
 });
 
 const cell = z.object({ value: z.string() });
 const rowSchema = z.object({
   item: cell,
-  label: cell,
+  // Some well known people have no English label in the query service, so
+  // the label is optional and the search result's label is used instead.
+  label: cell.optional(),
   description: cell.optional(),
   sports: cell.optional(),
   teams: cell.optional(),
@@ -120,9 +122,11 @@ function yearOf(v: string | undefined): number | null {
   return Number.isInteger(n) && n > 0 && n < 3000 ? n : null;
 }
 
-function toFacts(row: z.infer<typeof rowSchema>): PlayerFacts | null {
+function toFacts(row: z.infer<typeof rowSchema>, fallbackName?: string): PlayerFacts | null {
   const id = row.item.value.split("/").pop() ?? "";
   if (!/^Q\d{1,12}$/.test(id)) return null;
+  const name = row.label?.value ?? fallbackName;
+  if (!name) return null;
   const sportLabels = list(row.sports?.value);
   const occupations = list(row.occupations?.value);
   const isAthlete = sportLabels.length > 0 || occupations.some((o) => ATHLETE_WORDS.test(o));
@@ -140,7 +144,7 @@ function toFacts(row: z.infer<typeof rowSchema>): PlayerFacts | null {
   });
 
   return {
-    name: row.label.value.slice(0, 120),
+    name: name.slice(0, 120),
     wikidataId: id,
     description: row.description?.value ? row.description.value.slice(0, 300) : null,
     sports,
@@ -236,7 +240,7 @@ function sparqlFor(ids: string[]): string {
   (MIN(YEAR(?ps)) AS ?start) (MAX(YEAR(?pe)) AS ?end) (MIN(YEAR(?dob)) AS ?birth)
 WHERE {
   VALUES ?item { ${values} }
-  ?item rdfs:label ?l . FILTER(LANG(?l) = "en")
+  OPTIONAL { ?item rdfs:label ?l . FILTER(LANG(?l) = "en") }
   OPTIONAL { ?item schema:description ?d . FILTER(LANG(?d) = "en") }
   OPTIONAL { ?item wdt:P641 ?s . ?s rdfs:label ?sl . FILTER(LANG(?sl) = "en") }
   OPTIONAL { ?item wdt:P54 ?t . ?t rdfs:label ?tl . FILTER(LANG(?tl) = "en") }
@@ -261,7 +265,8 @@ async function fetchCandidates(name: string, fetchImpl: typeof fetch, signal: Ab
   const data = sparqlSchema.parse(await getJson(fetchImpl, `${SPARQL_URL}?${sparql}`, signal));
   const byId = new Map<string, PlayerFacts>();
   for (const row of data.results.bindings) {
-    const facts = toFacts(row);
+    const id = row.item.value.split("/").pop() ?? "";
+    const facts = toFacts(row, found.search.find((s) => s.id === id)?.label);
     if (facts) byId.set(facts.wikidataId, facts);
   }
   // Keep Wikidata's own search order, which helps break ties.

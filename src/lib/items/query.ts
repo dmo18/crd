@@ -23,6 +23,7 @@ export const inventoryFilterSchema = z.object({
   yearFrom: intText(1860, 2100).optional().catch(undefined),
   yearTo: intText(1860, 2100).optional().catch(undefined),
   location: z.preprocess(first, z.union([z.literal("none"), intText(1, 2_000_000_000)])).optional().catch(undefined),
+  value: z.preprocess(first, z.literal("none")).optional().catch(undefined),
   sort: z.preprocess(first, z.enum(SORTS)).catch("newest"),
   page: intText(1, 10000).catch(1),
 });
@@ -60,6 +61,7 @@ function where(f: InventoryFilters): SQL | undefined {
   if (f.yearTo != null) conds.push(lte(items.year, f.yearTo));
   if (f.location === "none") conds.push(isNull(items.locationId));
   else if (f.location != null) conds.push(eq(items.locationId, f.location));
+  if (f.value === "none") conds.push(and(isNull(items.manualValueCents), isNull(items.estValueCents)));
   return and(...conds);
 }
 
