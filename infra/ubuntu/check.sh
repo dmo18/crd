@@ -76,7 +76,7 @@ if have ufw; then
             warn "These firewall rules allow traffic from anywhere:"
             while IFS= read -r line; do note "$line"; done <<<"$open_rules"
         fi
-        if iptables -w -S ufw-before-input 2>/dev/null | grep -qx -- '-A ufw-before-input -i lo -j ACCEPT'; then
+        if grep -qx -- '-A ufw-before-input -i lo -j ACCEPT' <<<"$(iptables -w -S ufw-before-input 2>/dev/null)"; then
             pass "This server may connect to itself (the tunnel needs that)"
         else
             fail "The firewall blocks this server's own connections (loopback), so the tunnel cannot reach Coolify"
@@ -91,7 +91,7 @@ if have ufw; then
             while IFS= read -r line; do note "$line"; done <<<"$open_rules"
         fi
     fi
-    if ufw status 2>/dev/null | grep -qE '^22(/tcp)? on [^ ]+ +DENY'; then
+    if grep -qE '^22(/tcp)? on [^ ]+ +DENY' <<<"$(ufw status 2>/dev/null)"; then
         pass "SSH (22) is refused on the internet network card"
     else
         warn "No rule refusing SSH on the internet network card"
@@ -200,7 +200,7 @@ if have sshd; then
     else
         val() { awk -v k="$1" '$1 == k { print $2; exit }' <<<"$sshd_out"; }
         if [ "$(val passwordauthentication)" = "no" ]; then pass "Password login over SSH is off"; else fail "Password login over SSH is ON"; fi
-        match_val() { sshd -T -C "addr=$1,user=$2,host=localhost,laddr=127.0.0.1,lport=22" 2>/dev/null | awk -v k="$3" '$1 == k { print $2; exit }'; }
+        match_val() { awk -v k="$3" '$1 == k { print $2; exit }' <<<"$(sshd -T -C "addr=$1,user=$2,host=localhost,laddr=127.0.0.1,lport=22" 2>/dev/null)"; }
         owner="${SUDO_USER:-}"
         [ -n "$owner" ] && [ "$owner" != root ] || owner="check"
         pw_any=""
@@ -311,17 +311,17 @@ if [ "$MODE" = cloudflare ]; then
     else
         fail "Tunnel token file $CF_TOKEN_FILE is missing"
     fi
-    if systemctl cat cloudflared.service 2>/dev/null | grep -qE -- '--token[ =]|TUNNEL_TOKEN=|eyJ'; then
+    if grep -qE -- '--token[ =]|TUNNEL_TOKEN=|eyJ' <<<"$(systemctl cat cloudflared.service 2>/dev/null)"; then
         fail "The cloudflared service settings contain the token itself, which other users can read"
     else
         pass "The token is not in the service settings"
     fi
-    if apt-cache policy cloudflared 2>/dev/null | grep -q 'pkg.cloudflare.com/cloudflared'; then
+    if grep -q 'pkg.cloudflare.com/cloudflared' <<<"$(apt-cache policy cloudflared 2>/dev/null)"; then
         pass "cloudflared comes from Cloudflare's signed package repository"
     else
         warn "cloudflared is not installed from Cloudflare's package repository"
     fi
-    if apt-config dump 2>/dev/null | grep -q 'origin=cloudflared'; then
+    if grep -q 'origin=cloudflared' <<<"$(apt-config dump 2>/dev/null)"; then
         warn "cloudflared still updates by itself (old setting). Fix: run bootstrap.sh again with --cloudflare"
     else
         pass "cloudflared updates only when you run: sudo server-update"
@@ -381,7 +381,7 @@ else
     warn "server-update is missing. Fix: run bootstrap.sh again"
 fi
 if [ -f /etc/apt/preferences.d/docker-major-pin ]; then
-    pin_v="$(sed -n 's/^Pin: version \(.*\)\.\*$/\1/p' /etc/apt/preferences.d/docker-major-pin | head -n 1)"
+    pin_v="$(sed -n 's/^Pin: version \(.*\)\.\*$/\1/p' /etc/apt/preferences.d/docker-major-pin | sed -n 1p)"
     pass "Docker stays on major version ${pin_v#*:} unless you choose otherwise (server-update --allow-docker-major)"
 elif dpkg-query -W -f '${db:Status-Abbrev}' docker-ce 2>/dev/null | grep -q '^ii'; then
     warn "Docker's major version is not pinned. Fix: sudo server-update pin"
@@ -422,7 +422,7 @@ if [ -n "${sec_pkgs// /}" ]; then
     cutoff="$(date -d '3 days ago' '+%Y-%m-%d %H:%M:%S')"
     old=""
     for pkg in $sec_pkgs; do
-        first="$(zcat -f "$uu_log"* 2>/dev/null | grep -E "(Packages that will be upgraded|kept back)" | grep -E "[: ]${pkg}( |$)" | cut -c1-19 | sort | head -n 1)"
+        first="$(zcat -f "$uu_log"* 2>/dev/null | grep -E "(Packages that will be upgraded|kept back)" | grep -E "[: ]${pkg}( |$)" | cut -c1-19 | sort | sed -n 1p)"
         if [ -n "$first" ] && [[ $first < $cutoff ]]; then old="$old $pkg"; fi
     done
     if [ -n "$old" ]; then
@@ -565,14 +565,14 @@ fi
 section "Alerts"
 if [ -x /usr/local/sbin/server-alert ]; then
     if [ -f /etc/server-alert/config ]; then
-        provider="$(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | head -n 1)"
+        provider="$(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | sed -n 1p)"
         perm="$(stat -c '%a %U' /etc/server-alert/config)"
         if [ "$perm" = "600 root" ]; then
             pass "Alerts go to ${provider:-?} (settings readable only by root)"
         else
             fail "The alert settings file is not root-only ($perm). Fix: sudo chmod 600 /etc/server-alert/config"
         fi
-        note "Daily summary: $(sed -n 's/^DIGEST=//p' /etc/server-alert/config | head -n 1)"
+        note "Daily summary: $(sed -n 's/^DIGEST=//p' /etc/server-alert/config | sed -n 1p)"
     else
         warn "Alerts are not set up, so nobody hears about problems. Set up: sudo server-alert setup"
     fi
@@ -621,7 +621,7 @@ if have lynis; then
             pass "Hardening index $l_score of 100 (previous: ${l_prev:-none}, $(date -d "@$l_time" '+%Y-%m-%d'))"
         fi
         if [ -r "$l_report" ]; then
-            while IFS= read -r line; do note "$line"; done < <(sed -n 's/^warning\[\]=//p' "$l_report" | awk -F'|' '{ printf "Lynis warning %s: %s\n", $1, $2 }' | head -n 5)
+            while IFS= read -r line; do note "$line"; done < <(sed -n 's/^warning\[\]=//p' "$l_report" | awk -F'|' '{ printf "Lynis warning %s: %s\n", $1, $2 }' | sed -n 1,5p)
         fi
     else
         warn "No Lynis audit has finished yet. Run one: sudo server-lynis run"
@@ -668,7 +668,7 @@ if id -u ops-agent >/dev/null 2>&1; then
     else
         fail "ops-agent is in these groups:$bad_groups (docker equals root). Fix: sudo usermod -G '' ops-agent"
     fi
-    if have sshd && sshd -T -C user=ops-agent,addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=22 2>/dev/null | grep -qx 'denyusers ops-agent'; then
+    if have sshd && grep -qx 'denyusers ops-agent' <<<"$(sshd -T -C user=ops-agent,addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=22 2>/dev/null)"; then
         pass "ops-agent cannot log in over SSH"
     else
         warn "SSH does not refuse ops-agent (DenyUsers). Fix: run bootstrap.sh again"
