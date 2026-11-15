@@ -4545,6 +4545,27 @@ EOF
     print_ops_footer
 }
 
+# ---------------------------------------------------------------------------
+# Backup and disaster recovery (see backup/README.md)
+# ---------------------------------------------------------------------------
+install_backup_tool() {
+    step "Backup and disaster recovery tool"
+    local src
+    src="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/backup/server-backup"
+    if [ ! -f "$src" ]; then
+        warn "backup/server-backup was not found next to this script, so backups are not installed. Download it with this script (see README)."
+        return 0
+    fi
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends restic rclone jq openssh-client openssl
+    run install -m 0755 -o root -g root "$src" /usr/local/sbin/server-backup
+    ok "server-backup installed"
+    if [ -f /etc/server-backup/config ]; then
+        done_item "Backups: already set up. Status: sudo server-backup status"
+    else
+        done_item "Backups: NOT set up yet. Next: sudo server-backup setup (to your SFTP or FTPS server)"
+    fi
+}
+
 main() {
     parse_args "$@"
     printf '%sServer setup for Coolify (bootstrap.sh %s)%s\n' "$C_BOLD" "$SCRIPT_VERSION" "$C_RESET"
@@ -4571,6 +4592,7 @@ main() {
     configure_auditd
     configure_lynis
     configure_alerts
+    install_backup_tool
     open_setup_window
     print_summary
     if [ "$CF_RESTART_AT_END" = true ]; then

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015,SC2016  # test style: cmd && ok || bad, remote commands in single quotes
 # End to end test of server-backup, entirely in containers (never on a real server).
 #
 #   tests/images/build.sh            (once: builds sb-dest, sb-node, sb-cardvault)
@@ -383,7 +384,7 @@ extras() {
 
     say_step "restore-dr with settings already on the server, older snapshot chosen by ID"
     local first
-    first="$(in_ "$S" 'server-backup list' | awk '$1 ~ /^[0-9]+$/ {id=$6} END {print id}')"
+    first="$(in_ "$S" 'server-backup list' | awk '$1 ~ /^[0-9]+$/ && NF == 8 {id=$7} END {print id}')"
     in_ "$S" "docker exec coolify-db psql -U coolify -d coolify -qc 'create table after_backup (x int)'"
     printf 'RESTORE\n' | docker exec -i "$S" server-backup restore-dr --snapshot "$first" >"$LOG_DIR/x-dr-local.log" 2>&1 && ok "restore-dr --snapshot $first using saved settings" || bad "restore-dr with saved settings (see $LOG_DIR/x-dr-local.log)"
     expect "database is back to the backup state (table made later is gone)" in_ "$S" "! docker exec coolify-db psql -U coolify -d coolify -tAc 'select 1 from after_backup' 2>/dev/null"

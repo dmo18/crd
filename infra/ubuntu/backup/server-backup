@@ -38,7 +38,7 @@ readonly TAG="server-backup"
 readonly UNIT_DIR="/etc/systemd/system"
 readonly BIN_PATH="/usr/local/sbin/server-backup"
 # Paths outside /data/coolify and Docker volumes that are backed up when present.
-readonly ETC_PATHS=(/etc/cloudflared /etc/server-backup /etc/default/docker-port-guard
+readonly ETC_PATHS=(/etc/cloudflared /etc/server-backup /etc/server-alert /etc/default/docker-port-guard
     /etc/ssh/sshd_config.d /etc/ssh/ca.pub /etc/ssh/principals)
 # Inside /data/coolify: metrics and monitoring data that rebuild by themselves.
 readonly COOLIFY_EXCLUDES=("$COOLIFY_DIR/sentinel" "$COOLIFY_DIR/metrics")
@@ -236,7 +236,7 @@ explain_error() {
 
 show_error_details() {
     [[ -n $ERRF && -s $ERRF ]] || return 0
-    say "Details from the backup tool:" >&2
+    say "Details:" >&2
     grep -v -E '^\s*$' "$ERRF" | tail -n 8 | sed 's/^/  /' >&2 || true
 }
 
@@ -614,21 +614,25 @@ run_hooks() {
 
 have_docker() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
 
-# The folder that holds coolify-db's live PostgreSQL files (not backed up raw).
-coolify_db_source() {
-    docker container inspect coolify-db --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true
+# Folders and volumes that hold coolify-db's live PostgreSQL files. They are
+# never copied raw (the dump replaces them), whatever the PostgreSQL version.
+coolify_db_sources() {
+    docker container inspect coolify-db --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null | grep -v '^$' || true
 }
-coolify_db_volume() {
-    docker container inspect coolify-db --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' 2>/dev/null || true
+coolify_db_volumes() {
+    docker container inspect coolify-db --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{"\n"}}{{end}}{{end}}' 2>/dev/null | grep -v '^$' || true
+}
+is_coolify_db_volume() { # is_coolify_db_volume NAME "list of coolify-db volumes"
+    [[ $1 == coolify-db || $1 == coolify-db-* ]] && return 0
+    grep -qx -- "$1" <<<"$2"
 }
 
 # Named, local volumes to back up: "name<TAB>mountpoint" lines.
 list_volumes() {
     local skip v mp drv
-    skip="$(coolify_db_volume)"
-    [[ -n $skip ]] || skip="coolify-db"
+    skip="$(coolify_db_volumes)"
     docker volume ls -q | while IFS= read -r v; do
-        [[ $v == "$skip" ]] && continue
+        is_coolify_db_volume "$v" "$skip" && continue
         [[ $v =~ ^[0-9a-f]{64}$ ]] && continue # anonymous volume
         drv="$(docker volume inspect -f '{{.Driver}}' "$v" 2>/dev/null || true)"
         [[ $drv == local ]] || continue
@@ -643,6 +647,12 @@ coolify_version() {
     if [[ -n $img ]]; then printf '%s' "${img##*:}"; else printf 'not installed'; fi
 }
 
+pg_major() { # pg_major USER: major version of the running coolify-db, e.g. 15
+    local num
+    num="$(docker exec coolify-db psql -U "$1" -d postgres -tAc 'show server_version_num' </dev/null 2>/dev/null | tr -d '[:space:]')"
+    [[ $num =~ ^[0-9]+$ ]] && printf '%s\n' "$((num / 10000))"
+}
+
 dump_coolify_db() {
     if ! docker container inspect coolify-db >/dev/null 2>&1; then
         say "No Coolify database container (coolify-db) on this server; skipping its dump."
@@ -654,6 +664,7 @@ dump_coolify_db() {
     say "Saving Coolify's database (user $user)"
     docker exec coolify-db pg_dumpall -U "$user" >"$STAGING/coolify-db.sql.part" 2>"$ERRF" </dev/null || return 1
     printf '%s\n' "$user" >"$STAGING/coolify-db.user"
+    pg_major "$user" >"$STAGING/coolify-db.version"
     mv -f "$STAGING/coolify-db.sql.part" "$STAGING/coolify-db.sql"
     say "  $(human "$(stat -c %s "$STAGING/coolify-db.sql")") saved"
 }
@@ -684,7 +695,7 @@ write_manifest() { # write_manifest volumes.tsv
         if have_docker; then
             printf 'Coolify version: %s\n' "$(coolify_version)"
         fi
-        printf 'Coolify database dump: %s\n' "$([[ -f $STAGING/coolify-db.sql ]] && echo yes || echo no)"
+        printf 'Coolify database dump: %s\n' "$([[ -f $STAGING/coolify-db.sql ]] && echo "yes (PostgreSQL $(cat "$STAGING/coolify-db.version" 2>/dev/null))" || echo no)"
         printf '\nDocker volumes (name, size):\n'
         while IFS=$'\t' read -r name mp bytes; do
             printf '  %-50s %s\n' "$name" "$(human "$bytes")"
@@ -867,8 +878,9 @@ cmd_run() {
     excludes=(--exclude "$PASS_FILE" --exclude "$CONF_DIR/.*" --exclude-caches)
     for p in "${COOLIFY_EXCLUDES[@]}"; do excludes+=(--exclude "$p"); done
     if ((docker_ok)); then
-        p="$(coolify_db_source)"
-        [[ -n $p ]] && excludes+=(--exclude "$p")
+        while IFS= read -r p; do
+            [[ -n $p ]] && excludes+=(--exclude "$p")
+        done < <(coolify_db_sources)
     fi
     write_manifest "$vols"
     say ""
@@ -1216,6 +1228,7 @@ coolify_compose_up() {
     files=(-f "$src/docker-compose.yml")
     [[ -f $src/docker-compose.prod.yml ]] && files+=(-f "$src/docker-compose.prod.yml")
     [[ -f $src/docker-compose.custom.yml ]] && files+=(-f "$src/docker-compose.custom.yml")
+    [[ -f $src/docker-compose.postgres-upgrade.yml ]] && files+=(-f "$src/docker-compose.postgres-upgrade.yml")
     (cd "$src" && docker compose --env-file "$src/.env" "${files[@]}" up -d --remove-orphans --force-recreate --wait --wait-timeout 180 </dev/null)
 }
 
@@ -1308,6 +1321,15 @@ cmd_restore_dr() {
     rtmp="$STATE_DIR/restore-$stamp"
     say "Anything replaced is first moved to $pre"
 
+    # Coolify's database: the dump must not come from a newer PostgreSQL.
+    local old_pg new_pg
+    old_pg="$(R dump "$snap" "$STAGING/coolify-db.version" 2>/dev/null | tr -d '[:space:]' || true)"
+    new_pg="$(pg_major "$(env_get DB_USERNAME "$COOLIFY_ENV" | sed 's/^$/coolify/')" | tr -d '[:space:]' || true)"
+    if [[ $old_pg =~ ^[0-9]+$ && $new_pg =~ ^[0-9]+$ ]] && ((old_pg > new_pg)); then
+        die "$E_FAIL" "The old server's Coolify database ran PostgreSQL $old_pg, this one runs $new_pg. Upgrade it here first (bash $COOLIFY_DIR/source/upgrade-postgres.sh $old_pg), then run restore-dr again. Nothing was changed."
+    fi
+    [[ -n $old_pg && -n $new_pg ]] && say "Coolify database: PostgreSQL $old_pg in the backup, $new_pg on this server."
+
     local need avail
     need="$(R stats --json --mode restore-size "$snap" | jq -r '.total_size // 0')"
     mkdir -p "$STATE_DIR"
@@ -1360,18 +1382,17 @@ cmd_restore_dr() {
         for e in "$rtmp$COOLIFY_DIR"/*; do
             base="$(basename "$e")"
             if [[ $base == source && -d $COOLIFY_DIR/source ]]; then
-                # Keep this server's freshly installed Coolify program files; take
-                # the old server's secrets (.env keys win) and any extra files.
-                mkdir -p "$pre$COOLIFY_DIR/source"
+                # Keep this server's freshly installed Coolify program files (they
+                # match the installed version); take the old server's secrets: its
+                # .env keys win (APP_KEY, database and Redis passwords). The old
+                # source folder is kept for reference next to the moved-aside files.
+                mkdir -p "$pre$COOLIFY_DIR/source" "$pre/from-backup$COOLIFY_DIR"
                 cp -a "$COOLIFY_DIR/source/." "$pre$COOLIFY_DIR/source/"
                 if [[ -f $e/.env ]]; then
                     merge_env "$e/.env" "$COOLIFY_ENV" "$work/env.merged"
                     cat "$work/env.merged" >"$COOLIFY_ENV"
                 fi
-                local f
-                for f in "$e"/*; do
-                    [[ -e $COOLIFY_DIR/source/$(basename "$f") ]] || cp -a "$f" "$COOLIFY_DIR/source/"
-                done
+                mv -- "$e" "$pre/from-backup$COOLIFY_DIR/source"
                 say "  source: .env from the backup (APP_KEY and passwords), Coolify program files kept"
             else
                 move_aside "$COOLIFY_DIR/$base" "$pre"
@@ -1387,8 +1408,14 @@ cmd_restore_dr() {
     # 7. Docker volumes.
     step "5/7 Docker volumes"
     local name amp bytes bmp
+    local dbvols
+    dbvols="$(coolify_db_volumes)"
     while IFS=$'\t' read -r name amp bytes; do
         [[ -n $name ]] || continue
+        if is_coolify_db_volume "$name" "$dbvols"; then
+            warn "Volume $name belongs to Coolify's database, which was restored from its dump; skipped."
+            continue
+        fi
         if [[ ! -d $rtmp$amp ]]; then
             warn "Volume $name is listed but its files are not in the backup; skipped."
             continue
