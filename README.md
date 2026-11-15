@@ -1,7 +1,11 @@
 # Card Vault
 
-Scan sports cards from your phone. The app identifies each card with AI, files
-it in a searchable inventory, and estimates what it is worth. It also tracks
+**Owner: to set up your server, follow [docs/SERVER.md](docs/SERVER.md).**
+The rest of this page is for developers.
+
+Scan sports cards from your phone. The app reads the printed text on each
+card, files it in a searchable inventory, and links to real sold prices so
+you can record what it is worth. It also tracks
 sealed packs and boxes and bulk lots.
 
 ## Run it on a computer
@@ -31,4 +35,6 @@ the production build.
   appraisals.
 - Clear, flat, well lit photos without glare read best. Card backs (with
   the copyright line and card number) identify cards most reliably.
-- Photos and the database are stored in the `data` folder. Back it up.
+- Locally, photos and the database are stored in the `data` folder. On the
+  server they live in the app's storage and are backed up by the server
+  backup (see docs/SERVER.md).

@@ -6,7 +6,7 @@ collection mostly from about 40 years ago (roughly 1980 to 1995).
 ## Must haves
 1. Scan from the phone camera: one card at a time (front, optional back), or
    one photo holding many cards, or a fast back-to-back queue.
-2. AI identifies each card: sport, year, brand, set, number, player, team,
+2. The server identifies each card (free text reading, no paid AI): sport, year, brand, set, number, player, team,
    variation, plus rookie, error, parallel, insert, autograph flags.
 3. Every item gets a rarity tier and an estimated value range.
 4. Three kinds of item:
@@ -22,7 +22,7 @@ collection mostly from about 40 years ago (roughly 1980 to 1995).
 7. Dashboard: total value, counts, top cards, value over time.
 
 ## Value
-AI estimate (low to high range, labeled as an estimate) plus one-tap links to
+Your own value, guided by one-tap links to
 real sold listings. The owner can type their own value, which wins. A paid
 price feed can be plugged in later without redesign.
 
@@ -35,9 +35,10 @@ price feed can be plugged in later without redesign.
 
 ## Out of scope for now
 Marketplace or selling inside the app, multiple users, native app store apps,
-formal grading. Going live on a public host is a separate, approved step.
+formal grading.
 
 ## Decisions by the owner (2026-11-15)
-- Prices: AI estimate plus sold-listing links.
+- Prices: sold-listing links plus quick owner entry (owner rule: no API keys,
+  free only; no automatic prices).
 - Users: owner only, one password.
 - Preview: phone-size screenshots in chat, sample data.
