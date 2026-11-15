@@ -85,6 +85,10 @@
 - No paid price feed yet. The `PriceSource` interface is where one plugs in.
 
 ## Open security findings
+Milestone 4 review: no critical or high. Three lows fixed (edge label
+crop, at most 3 extra label passes per photo, text engine start timeout).
+Open lows: a scan has no overall time limit (each reading pass has 60s);
+Wikidata cache rows are never pruned (small, owner-only growth).
 None critical or high. Low: forwarded-address trust (above). Info: the
 content security policy allows inline scripts (needed by the framework
 without per-request nonces); photos stay in the browser cache after sign-out.

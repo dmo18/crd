@@ -53,14 +53,15 @@ function langPath(): string {
 }
 
 async function startWorker(): Promise<Worker> {
-  const worker = await createWorker("eng", 1, {
+  // Starting the engine reads local files only; it should never take long.
+  const worker = await withTimeout(createWorker("eng", 1, {
     langPath: langPath(),
     gzip: true,
     cacheMethod: "none",
     errorHandler: () => {
       // Errors also reject the job that caused them; the worker is replaced then.
     },
-  });
+  }), JOB_TIMEOUT_MS);
   await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
   return worker;
 }
@@ -288,12 +289,19 @@ async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrR
   if (options.thorough) {
     const v = variants[0];
     const all = [...best, ...linesFrom(await recognizeOnce(v.png, PSM.AUTO), v.width, v.height)];
-    for (const region of await findLabelRegions(image)) {
+    // At most 3 labels, so one photo costs no more than 6 reading passes.
+    for (const region of await findLabelRegions(image, 3)) {
       const left = Math.floor(region.x * v.width);
       const top = Math.floor(region.y * v.height);
-      const width = Math.max(16, Math.min(v.width - left, Math.round(region.w * v.width)));
-      const height = Math.max(16, Math.min(v.height - top, Math.round(region.h * v.height)));
-      const crop = await sharp(v.png).extract({ left, top, width, height }).png().toBuffer();
+      const width = Math.min(v.width - left, Math.round(region.w * v.width));
+      const height = Math.min(v.height - top, Math.round(region.h * v.height));
+      if (width < 16 || height < 16) continue;
+      let crop: Buffer;
+      try {
+        crop = await sharp(v.png).extract({ left, top, width, height }).png().toBuffer();
+      } catch {
+        continue;
+      }
       // Boxes come back relative to the crop; map them onto the whole photo.
       for (const line of linesFrom(await recognizeOnce(crop), width, height)) {
         all.push({
