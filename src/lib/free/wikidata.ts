@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, lt } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { playerFacts, SPORTS, type Sport } from "@/db/schema";
@@ -12,7 +12,9 @@ import { playerFacts, SPORTS, type Sport } from "@/db/schema";
 const API_URL = "https://www.wikidata.org/w/api.php";
 const SPARQL_URL = "https://query.wikidata.org/sparql";
 const USER_AGENT = "CardVault/1.0 (personal sports card collection app)";
-const CACHE_MS = 90 * 24 * 60 * 60 * 1000;
+export const CACHE_MS = 90 * 24 * 60 * 60 * 1000;
+/** Old cache rows are deleted on the first cache write and then every this many writes. */
+export const PRUNE_EVERY = 100;
 const MIN_GAP_MS = 200;
 const DEFAULT_TIMEOUT_MS = 8000;
 const MAX_TEAMS = 15;
@@ -328,8 +330,22 @@ function readCache(db: Db, key: string, now: Date): PlayerFacts | null | undefin
   }
 }
 
+/** Deletes cached facts older than the 90 day cache window. Returns how many were removed. */
+export function prunePlayerFacts(db: Db = getDb(), now: Date = new Date()): number {
+  return db.delete(playerFacts).where(lt(playerFacts.fetchedAt, new Date(now.getTime() - CACHE_MS))).run().changes;
+}
+
+const counter = globalThis as unknown as { __crdFactWrites?: number };
+
+/** For tests only: makes the next cache write prune. */
+export function resetFactsPruneCounter(): void {
+  counter.__crdFactWrites = 0;
+}
+
 function writeCache(db: Db, key: string, facts: PlayerFacts | null, now: Date) {
   try {
+    counter.__crdFactWrites = ((counter.__crdFactWrites ?? 0) + 1) % PRUNE_EVERY;
+    if (counter.__crdFactWrites === 1) prunePlayerFacts(db, now);
     const json = facts ? JSON.stringify(facts) : null;
     db.insert(playerFacts)
       .values({ key, facts: json, fetchedAt: now })

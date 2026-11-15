@@ -11,7 +11,29 @@ const GENERIC_FAILURE = "Something went wrong with this scan. Try again.";
 /** A scan still "processing" after this long was interrupted by a restart. */
 const STUCK_AFTER_MS = 5 * 60 * 1000;
 
-export type ProcessDeps = { db?: Db; recognizer?: Recognizer; now?: () => Date };
+/** Longest time recognition may take for one scan. */
+export const RECOGNITION_DEADLINE_MS = 5 * 60 * 1000;
+export const TOO_SLOW = "This scan took too long. Try fewer cards per photo.";
+
+export type ProcessDeps = { db?: Db; recognizer?: Recognizer; now?: () => Date; deadlineMs?: number };
+
+/**
+ * Resolves or rejects like `work`, or rejects with a plain message once
+ * `ms` have passed. The timer is always cleared. The recognizer contract has
+ * no way to cancel, so slow work may finish in the background; its result is
+ * ignored.
+ */
+async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new RecognitionError(TOO_SLOW)), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function safeMessage(err: unknown): string {
   if (err instanceof RecognitionError || err instanceof ImageError) return err.userMessage;
@@ -43,7 +65,10 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
       photos.push({ role: row.role as RecognitionPhoto["role"], data: await readStored(row.file), width: row.width, height: row.height });
     }
 
-    const recognized = await recognizer.recognize({ mode: scan.mode, photos, hint: scan.hint });
+    const work = recognizer.recognize({ mode: scan.mode, photos, hint: scan.hint });
+    // A late failure after the deadline must not become an unhandled rejection.
+    work.catch(() => undefined);
+    const recognized = await withDeadline(work, deps.deadlineMs ?? RECOGNITION_DEADLINE_MS);
 
     // Cut each card out of a multi-card photo before touching the database.
     const crops = new Map<number, StoredImage>();

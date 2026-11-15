@@ -11,7 +11,7 @@ const schema = z.object({
   /** Public address of the app, e.g. https://cards.example.com (no trailing slash). */
   APP_ORIGIN: z
     .url({ protocol: /^https?$/ })
-    .refine((v) => new URL(v).origin === v, "APP_ORIGIN must be only the address, like https://cards.example.com, with no slash at the end")
+    .refine((v) => URL.canParse(v) && new URL(v).origin === v, "APP_ORIGIN must be only the address, like https://cards.example.com, with no slash at the end")
     .optional(),
   /** How many proxies in front of the app add to X-Forwarded-For (0 to 5). */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),

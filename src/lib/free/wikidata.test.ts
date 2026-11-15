@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDb } from "@/db";
 import { playerFacts } from "@/db/schema";
-import { lookupPlayer, normalizeName, rankCandidates, type PlayerFacts } from "./wikidata";
+import {
+  CACHE_MS, lookupPlayer, normalizeName, prunePlayerFacts, PRUNE_EVERY, rankCandidates, resetFactsPruneCounter, type PlayerFacts,
+} from "./wikidata";
 
 const cell = (value: string) => ({ type: "literal", value });
 const ent = (id: string) => ({ type: "uri", value: `http://www.wikidata.org/entity/${id}` });
@@ -181,5 +183,35 @@ describe("missing English label in the query service", () => {
     const facts = await lookupPlayer("Michael Jordan", { sport: "basketball", year: 1986, db: createDb(":memory:"), fetchImpl: fake });
     expect(facts?.name).toBe("Michael Jordan");
     expect(facts?.sports).toContain("basketball");
+  });
+});
+
+describe("cache prune", () => {
+  const T = new Date("2026-06-01T00:00:00Z");
+  const ago = (ms: number) => new Date(T.getTime() - ms);
+
+  it("deletes rows older than the 90 day window and keeps newer ones", () => {
+    const db = createDb(":memory:");
+    db.insert(playerFacts).values([
+      { key: "old|", facts: null, fetchedAt: ago(CACHE_MS + 1000) },
+      { key: "new|", facts: null, fetchedAt: ago(CACHE_MS - 1000) },
+    ]).run();
+    expect(prunePlayerFacts(db, T)).toBe(1);
+    expect(db.select().from(playerFacts).all().map((r) => r.key)).toEqual(["new|"]);
+  });
+
+  it("runs on the first cache write, then not again until PRUNE_EVERY more writes", async () => {
+    const db = createDb(":memory:");
+    resetFactsPruneCounter();
+    const old = () => db.insert(playerFacts).values({ key: `old${Math.random()}|`, facts: null, fetchedAt: ago(CACHE_MS * 2) }).run();
+    const stale = () => db.select().from(playerFacts).all().filter((r) => r.fetchedAt < ago(CACHE_MS)).length;
+    const f = asFetch(fakeFetch([POLITICIAN], ["Q3"]));
+    old();
+    await lookupPlayer("Name One", { db, now: T, fetchImpl: f });
+    expect(stale()).toBe(0);
+    old();
+    await lookupPlayer("Name Two", { db, now: T, fetchImpl: f });
+    expect(stale()).toBe(1);
+    expect(PRUNE_EVERY).toBe(100);
   });
 });

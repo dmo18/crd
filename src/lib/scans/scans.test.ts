@@ -1,12 +1,12 @@
 import sharp from "sharp";
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, locations, scans, valuations } from "@/db/schema";
 import { readStored } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan, ScanInputError } from "./create";
-import { enqueueScan, processScan, queueIdle, recoverScans } from "./process";
+import { enqueueScan, processScan, queueIdle, RECOGNITION_DEADLINE_MS, recoverScans, TOO_SLOW } from "./process";
 
 async function photo(color = "#336699"): Promise<Buffer> {
   return sharp({ create: { width: 900, height: 1200, channels: 3, background: color } }).jpeg().toBuffer();
@@ -122,6 +122,42 @@ describe("processScan", () => {
     expect(second.status).toBe("failed");
     expect(second.error).not.toContain("secret");
     expect(db.select().from(items).all()).toHaveLength(0);
+  });
+
+  it("fails a scan that takes longer than the deadline", async () => {
+    const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }] }, db);
+    let started!: () => void;
+    const called = new Promise<void>((r) => { started = r; });
+    const never: Recognizer = { name: "stuck", recognize: () => { started(); return new Promise(() => undefined); } };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const done = processScan(scanId, { db, recognizer: never });
+      await called;
+      await vi.advanceTimersByTimeAsync(RECOGNITION_DEADLINE_MS - 1000);
+      expect(db.select().from(scans).get()?.status).toBe("processing");
+      await vi.advanceTimersByTimeAsync(2000);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(db.select().from(scans).get()).toMatchObject({ status: "failed", error: TOO_SLOW });
+    expect(db.select().from(items).all()).toHaveLength(0);
+  });
+
+  it("clears the deadline timer when recognition finishes in time", async () => {
+    const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    await processScan(scanId, { db, recognizer: fake([griffey]), deadlineMs: 60_000 });
+    expect(cleared).toHaveBeenCalled();
+    cleared.mockRestore();
+    expect(db.select().from(scans).get()).toMatchObject({ status: "done", itemCount: 1 });
+  });
+
+  it("uses a short injected deadline", async () => {
+    const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    const never: Recognizer = { name: "stuck", recognize: () => new Promise(() => undefined) };
+    await processScan(scanId, { db, recognizer: never, deadlineMs: 20 });
+    expect(db.select().from(scans).get()).toMatchObject({ status: "failed", error: TOO_SLOW });
   });
 
   it("handles a photo with nothing in it, and never processes a scan twice", async () => {

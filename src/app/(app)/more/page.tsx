@@ -1,3 +1,4 @@
+import { ConnectionCheck } from "@/components/more/ConnectionCheck";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { Card, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { recognitionMode } from "@/lib/env";
@@ -48,6 +49,8 @@ export default async function MorePage() {
           If you enter your own value for an item, your value always wins.
         </p>
       </Card>
+
+      <ConnectionCheck />
 
       <SignOutButton />
     </div>
