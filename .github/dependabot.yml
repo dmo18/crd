@@ -8,6 +8,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 10
+    ignore:
+      # typescript-eslint (used by the code checker) does not support
+      # TypeScript 7 yet: https://github.com/typescript-eslint/typescript-eslint/issues/10940
+      # Remove this once it does.
+      - dependency-name: typescript
+        versions: [">=7"]
     groups:
       # Small, low risk updates come together in one pull request.
       minor-and-patch:
