@@ -143,3 +143,9 @@ backup made and 14 kept. Image: 1.01 GB on disk, 227 MB download.
 
 Building inside this sandbox needed its network proxy for npm; Coolify does
 not. The Dockerfile itself was not changed for that.
+
+## Notes on the password set in Coolify
+If you set `OWNER_PASSWORD_HASH_B64`, changing it does not sign out phones
+that are already signed in; change `SESSION_SECRET` too to sign everyone
+out. If you later remove it, the password chosen on the setup page (if
+any) becomes the active one again.

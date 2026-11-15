@@ -30,6 +30,9 @@ that public IP:
 | `cards` | Card Vault, for example cards.ssi.com |
 
 (Or one wildcard record `*` to cover every future app at once.)
+Add **A records only, no AAAA (IPv6) records**: the server is set up for
+IPv4, and over IPv6 every visitor would look like the same address to the
+sign-in limits.
 
 ## 3. Run the setup command (console, once)
 In the Hyper-V console window, signed in as your user, use
@@ -59,8 +62,11 @@ closes by itself.
    else, then turn on **Two-factor authentication** with an
    authenticator app. Save the recovery codes it shows somewhere safe:
    they are your way back in if you lose the phone.
-4. Back in the console, delete the note with the temporary password:
-   `sudo rm /root/coolify-first-login.txt`
+4. **Settings**: make sure **Registration allowed** is OFF, so nobody else
+   can create an account.
+5. Back in the console, remove the temporary password from both places:
+   `sudo rm /root/coolify-first-login.txt` and
+   `sudo sed -i '/^ROOT_USER_PASSWORD=/d' /data/coolify/source/.env`
 
 Missed the 30 minutes? In the console run
 `sudo docker-port-guard open-setup 30` to reopen the window.
@@ -96,8 +102,10 @@ In the dashboard:
 ## Everyday
 - **Updates**: when a new version is merged on GitHub, open the app in
   Coolify and press **Redeploy** (or turn on automatic deploys).
-- **Backups**: nightly, 14 kept, inside the app's storage. Coolify can also
-  back up the whole server; download a copy now and then.
+- **Backups**: nightly, 14 kept, inside the app's storage on the same
+  server. That does not help if the server itself is lost, so also keep a
+  copy elsewhere: download one now and then, or set up an S3 compatible
+  storage (for example Backblaze B2 or Cloudflare R2) in Coolify.
 - **Health check**: run `sudo bash check.sh` in the console any time
   (download it like bootstrap.sh from `infra/ubuntu/check.sh`). It prints
   PASS or WARN for each protection.

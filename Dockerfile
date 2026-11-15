@@ -8,7 +8,7 @@
 # printed by tesseract.js. The runtime check below proves both native modules load.
 
 # 1. Build: all dependencies, then the production build.
-FROM node:22.23.5-bookworm-slim AS build
+FROM node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
@@ -18,7 +18,7 @@ COPY . .
 RUN mkdir -p public && npm run build && rm -rf .next/cache
 
 # 2. Production dependencies only (native better-sqlite3 and sharp included).
-FROM node:22.23.5-bookworm-slim AS deps
+FROM node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Then drop builds for other C libraries (this image uses glibc) and the
@@ -28,7 +28,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean -
       node_modules/better-sqlite3/deps node_modules/better-sqlite3/src
 
 # 3. Runtime: no compilers, no dev tools, runs as uid 1001.
-FROM node:22.23.5-bookworm-slim AS runtime
+FROM node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     NODE_OPTIONS=--max-old-space-size=512 \

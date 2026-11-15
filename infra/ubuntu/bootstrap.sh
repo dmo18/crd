@@ -584,7 +584,9 @@ rule_set() {
         fi
         proto="${BASH_REMATCH[1]}"
         port="${BASH_REMATCH[2]}"
-        echo "-A $CHAIN -p $proto -m conntrack --ctorigdstport $port --ctdir ORIGINAL -j RETURN"
+        # Only traffic Docker forwarded from a published port (DNAT), not any
+        # container address that happens to listen on the same port.
+        echo "-A $CHAIN -p $proto -m conntrack --ctstate DNAT --ctorigdstport $port --ctdir ORIGINAL -j RETURN"
     done
     echo "-A $CHAIN -j DROP"
     echo "COMMIT"
@@ -630,11 +632,18 @@ open_setup() {
         { echo "Minutes must be between 1 and 120" >&2; exit 2; }
     mkdir -p "$STATE_DIR"
     chmod 700 "$STATE_DIR"
-    echo $(( $(date +%s) + minutes * 60 )) >"$WINDOW_FILE"
-    apply
+    # The closing timer is created first: if it cannot be created, the ports
+    # are never opened. The 5 minute apply timer is a second safety net that
+    # closes any window whose time has passed.
     systemctl stop "$CLOSE_UNIT.timer" >/dev/null 2>&1 || true
     systemctl reset-failed "$CLOSE_UNIT.timer" "$CLOSE_UNIT.service" >/dev/null 2>&1 || true
-    systemd-run --quiet --unit="$CLOSE_UNIT" --on-active="${minutes}min" "$SELF" close
+    if ! systemd-run --quiet --unit="$CLOSE_UNIT" --on-active="${minutes}min" "$SELF" close ||
+        ! systemctl is-active --quiet "$CLOSE_UNIT.timer"; then
+        echo "docker-port-guard: could not create the closing timer, so the window was NOT opened" >&2
+        exit 1
+    fi
+    echo $(( $(date +%s) + minutes * 60 )) >"$WINDOW_FILE"
+    apply
 }
 
 close_setup() {
@@ -704,16 +713,38 @@ ExecStart=$GUARD_BIN apply
 [Install]
 WantedBy=multi-user.target docker.service
 EOF
-    # And again right AFTER every Docker start or restart, in case a Docker
-    # version rebuilds its chains. "-" means a failure here does not stop Docker;
-    # check.sh reports missing rules.
+    # Docker itself loads the rules before it starts (no "-": if the rules
+    # cannot be loaded, Docker does not start, so nothing is ever exposed),
+    # and again right after, in case a Docker version rebuilds its chains.
     write_file "$GUARD_DOCKER_DROPIN" 0644 <<EOF
 [Service]
+ExecStartPre=$GUARD_BIN apply
 ExecStartPost=-$GUARD_BIN apply
+EOF
+    # Every 5 minutes: re-apply, which also closes an expired setup window.
+    write_file /etc/systemd/system/docker-port-guard-apply.service 0644 <<EOF
+[Unit]
+Description=Re-apply docker-port-guard rules
+
+[Service]
+Type=oneshot
+ExecStart=$GUARD_BIN apply
+EOF
+    write_file /etc/systemd/system/docker-port-guard-apply.timer 0644 <<EOF
+[Unit]
+Description=Re-apply docker-port-guard rules every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
 EOF
     run systemctl daemon-reload
     run systemctl enable docker-port-guard.service
     run systemctl restart docker-port-guard.service
+    run systemctl enable --now docker-port-guard-apply.timer
     ok "Only 80/443 of containers can be reached from the internet"
     done_item "docker-port-guard on: container ports other than 80/443 blocked from the internet (8000, 6001, 6002, 8080 included)"
 }
