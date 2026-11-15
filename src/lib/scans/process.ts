@@ -1,7 +1,8 @@
 import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, valuations, type ImageRow, type ValueSource } from "@/db/schema";
-import { cropStored, ImageError, readStored, type StoredImage } from "@/lib/images/store";
+import { startPhotoArchiver } from "@/lib/images/archive";
+import { cropStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
 import { checkScanStreak } from "@/lib/audit/alert-rules";
@@ -62,9 +63,10 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
       .orderBy(asc(images.id)).all();
     if (photoRows.length === 0) throw new RecognitionError("This scan has no photos. Try again.");
 
+    // Always the full quality working copy when it exists, never the small archive.
     const photos: RecognitionPhoto[] = [];
     for (const row of photoRows) {
-      photos.push({ role: row.role as RecognitionPhoto["role"], data: await readStored(row.file), width: row.width, height: row.height });
+      photos.push({ role: row.role as RecognitionPhoto["role"], ...(await readForRecognition(row)) });
     }
 
     const work = recognizer.recognize({ mode: scan.mode, photos, hint: scan.hint });
@@ -72,14 +74,16 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     work.catch(() => undefined);
     const recognized = await withDeadline(work, deps.deadlineMs ?? RECOGNITION_DEADLINE_MS);
 
-    // Cut each card out of a multi-card photo before touching the database.
+    // Cut each card out of a multi-card photo before touching the database,
+    // from the working copy. The archive copies are made afterwards by the
+    // background converter (startPhotoArchiver), once no scan is waiting.
     const crops = new Map<number, StoredImage>();
     if (scan.mode === "multi") {
       for (const [i, r] of recognized.entries()) {
         const source: ImageRow | undefined = photoRows[r.sourceIndex];
         if (!r.box || !source) continue;
         try {
-          crops.set(i, await cropStored(source.file, r.box));
+          crops.set(i, await cropStored(source, r.box));
         } catch {
           // A bad box only costs this item its own picture.
         }
@@ -134,7 +138,12 @@ export function enqueueScan(scanId: number, deps: ProcessDeps = {}): void {
   const q = queue();
   if (q.pending.has(scanId)) return;
   q.pending.add(scanId);
-  q.tail = q.tail.then(() => processScan(scanId, deps)).catch(() => undefined).finally(() => { q.pending.delete(scanId); });
+  q.tail = q.tail.then(() => processScan(scanId, deps)).catch(() => undefined).finally(() => {
+    q.pending.delete(scanId);
+    // Turn this scan's photos into their small archive form once the queue is
+    // empty. Tests pass their own database and convert explicitly.
+    if (!deps.db) void startPhotoArchiver({ busy: scanQueueBusy });
+  });
 }
 
 /**
@@ -163,6 +172,11 @@ export function retryScan(scanId: number, db: Db = getDb()): RetryResult {
       .where(and(eq(scans.id, scanId), eq(scans.status, "failed"))).run();
     return { ok: true };
   }, { behavior: "immediate" });
+}
+
+/** True while any scan waits in or is being read by this server's queue. */
+export function scanQueueBusy(): boolean {
+  return queue().pending.size > 0;
 }
 
 /** Resolves when everything queued so far has finished. Used by tests. */

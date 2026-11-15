@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, scans, valuations } from "@/db/schema";
+import { convertScanPhotos } from "@/lib/images/archive";
 import { uploadsDir } from "@/lib/images/store";
 import { recognizedItemSchema, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan } from "@/lib/scans/create";
@@ -35,6 +36,8 @@ async function multiScan() {
       { ...card, cardNumber: "2", box: { x: 0.55, y: 0.05, w: 0.4, h: 0.4 } },
     ]),
   });
+  // The photos in their archive form, as after the background converter.
+  expect(await convertScanPhotos(scanId, db)).toBe(3);
   const rows = db.select().from(images).all();
   return { scanId, itemIds: db.select({ id: items.id }).from(items).all().map((r) => r.id), files: rows.flatMap((r) => [r.file, r.thumbFile]) };
 }
@@ -54,11 +57,14 @@ describe("deleteItem", () => {
     for (const f of files) expect(await exists(f)).toBe(false);
   });
 
-  it("removes a single card's front and back photos with their small versions", async () => {
+  it("removes a single card's front and back photos with their small versions and working copies", async () => {
     const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }, { role: "back", data: await photo() }] }, db);
     await processScan(scanId, { db, recognizer: fake([card]) });
-    const files = db.select().from(images).all().flatMap((r) => [r.file, r.thumbFile]);
+    // Not converted yet: the working copies must go too.
+    const rows = db.select().from(images).all();
+    const files = rows.flatMap((r) => [r.thumbFile, `work/${r.workFile}`]);
     expect(files).toHaveLength(4);
+    for (const f of files) expect(await exists(f)).toBe(true);
     const id = db.select().from(items).get()!.id;
     await deleteItem(id, db);
     for (const f of files) expect(await exists(f)).toBe(false);

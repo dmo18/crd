@@ -5,6 +5,7 @@ import { SignOutOthers } from "@/components/more/SignOutOthers";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { Card, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { alertChannels, recognitionMode } from "@/lib/env";
+import { formatBytes, storageSummary } from "@/lib/images/archive";
 import { requireOwner } from "@/lib/auth/guard";
 
 export const metadata = { title: "More" };
@@ -13,6 +14,7 @@ export default async function MorePage() {
   await requireOwner();
   const mode = recognitionMode();
   const channels = alertChannels().map((c) => (c === "telegram" ? "Telegram" : "Discord"));
+  const storage = storageSummary();
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="More" />
@@ -43,6 +45,24 @@ export default async function MorePage() {
               ? "Sample mode: scans return made-up example cards."
               : "Optional paid AI reading is on."}
         </Notice>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Photo storage</h2>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          <dt className="text-muted">Photos</dt>
+          <dd className="text-right font-semibold">{storage.photos.toLocaleString("en-US")}</dd>
+          <dt className="text-muted">Space used</dt>
+          <dd className="text-right font-semibold">{formatBytes(storage.totalBytes)}</dd>
+          <dt className="text-muted">Average per card</dt>
+          <dd className="text-right font-semibold">{storage.perItemBytes == null ? "No cards yet" : formatBytes(storage.perItemBytes)}</dd>
+          <dt className="text-muted">Waiting to be made smaller</dt>
+          <dd className="text-right font-semibold">{storage.waiting.toLocaleString("en-US")}</dd>
+        </dl>
+        <p className="text-sm text-muted">
+          Photos are kept in a small, sharp format (AVIF). New photos are made smaller right after they are read, and
+          older photos a few at a time in the background. Photos of a failed scan stay full size for 7 days, so you can try again.
+        </p>
       </Card>
 
       <Card className="flex flex-col gap-2">

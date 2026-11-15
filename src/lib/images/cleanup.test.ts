@@ -42,6 +42,22 @@ describe("removeOrphanPhotos", () => {
     expect(await removeOrphanPhotos(db, dir, NOW)).toBe(2);
     expect(left()).toEqual([kept, keptThumb, fresh, other].sort());
   });
+  it("also removes old unused working copies and half written files, never ones still in use", async () => {
+    fs.mkdirSync(path.join(dir, "work"));
+    const id = randomUUID();
+    const work = file(`work/${id}.jpg`, 3 * DAY);
+    const thumb = file(`${id}_t.avif`, 3 * DAY);
+    db.insert(images).values({ role: "front", file: `${id}.avif`, thumbFile: thumb, workFile: `${id}.jpg`, width: 1, height: 1, bytes: 1 }).run();
+    file(`work/${randomUUID()}.jpg`, 2 * DAY);
+    const freshWork = file(`work/${randomUUID()}.jpg`, 60 * 60 * 1000);
+    file(`${id}.avif.tmp`, 2 * DAY);
+    const freshTmp = file(`${randomUUID()}_t.avif.tmp`, 60 * 60 * 1000);
+    const odd = file("work/notes.txt", 5 * DAY);
+
+    expect(await removeOrphanPhotos(db, dir, NOW)).toBe(2);
+    expect(left()).toEqual([thumb, freshTmp, "work"].sort());
+    expect(fs.readdirSync(path.join(dir, "work")).sort()).toEqual([work, freshWork, odd].map((f) => f.slice(5)).sort());
+  });
   it("copes with a missing folder", async () => {
     expect(await removeOrphanPhotos(db, path.join(dir, "missing"), NOW)).toBe(0);
   });

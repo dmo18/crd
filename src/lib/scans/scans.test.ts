@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, locations, scans, valuations } from "@/db/schema";
-import { readStored } from "@/lib/images/store";
+import { readPhoto } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan, ScanInputError } from "./create";
 import { enqueueScan, processScan, queueIdle, queueOrder, RECOGNITION_DEADLINE_MS, recoverScans, retryScan, TOO_SLOW } from "./process";
@@ -96,7 +96,7 @@ describe("processScan", () => {
     const crops = db.select().from(images).where(eq(images.role, "crop")).all();
     expect(crops).toHaveLength(2);
     expect(new Set(crops.map((c) => c.itemId)).size).toBe(2);
-    expect((await readStored(crops[0].file)).length).toBeGreaterThan(0);
+    expect((await readPhoto(crops[0].file)).data.length).toBeGreaterThan(0);
     // The original photo stays with the scan, not with any one card.
     expect(db.select().from(images).where(eq(images.role, "source")).get()!.itemId).toBeNull();
   });

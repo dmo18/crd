@@ -167,7 +167,11 @@ export const items = sqliteTable("items", {
   index("items_location_idx").on(t.locationId),
 ]);
 
-/** Photos. Files live on disk under DATA_DIR/uploads, never in the database. */
+/**
+ * Photos. Files live on disk under DATA_DIR/uploads, never in the database.
+ * The file name's extension tells the format: `.avif` for the small archive
+ * copy, `.jpg` for photos stored before AVIF (converted in the background).
+ */
 export const images = sqliteTable("images", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   itemId: integer("item_id").references(() => items.id, { onDelete: "cascade" }),
@@ -176,11 +180,20 @@ export const images = sqliteTable("images", {
   /** Server generated file name. Never a name supplied by the browser. */
   file: text("file").notNull().unique(),
   thumbFile: text("thumb_file").notNull(),
+  /**
+   * Full quality JPEG kept in DATA_DIR/uploads/work while card reading may
+   * still need it (same id as `file`). Null once the photo is in its archive
+   * form; until then `file` does not exist yet and the working copy is shown.
+   */
+  workFile: text("work_file"),
   width: integer("width").notNull(),
   height: integer("height").notNull(),
+  /** Size of the full size file on disk (the working copy while there is one). */
   bytes: integer("bytes").notNull(),
+  /** Size of the small picture. 0 on rows from before this was recorded. */
+  thumbBytes: integer("thumb_bytes").notNull().default(0),
   createdAt: ts("created_at").notNull().default(now),
-}, (t) => [index("images_item_idx").on(t.itemId), index("images_scan_idx").on(t.scanId)]);
+}, (t) => [index("images_item_idx").on(t.itemId), index("images_scan_idx").on(t.scanId), index("images_work_idx").on(t.workFile)]);
 
 /** Every value an item has had, so value over time can be shown. */
 export const valuations = sqliteTable("valuations", {

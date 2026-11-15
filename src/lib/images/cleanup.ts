@@ -5,7 +5,7 @@ import { getDb, type Db } from "@/db";
 import { images } from "@/db/schema";
 import { env } from "@/lib/env";
 import { log } from "@/lib/log";
-import { isValidImageName, uploadsDir } from "./store";
+import { isValidImageName, isValidWorkName, TEMP_NAME_RE, uploadsDir } from "./store";
 
 const HOUR = 60 * 60 * 1000;
 /** A photo file must be at least this old before it counts as left over. Uploads in progress are younger. */
@@ -14,39 +14,50 @@ export const ORPHAN_MIN_AGE_MS = 24 * HOUR;
 export const CLEANUP_EVERY_MS = 24 * HOUR;
 
 /**
- * Deletes photo files in the uploads folder that no database row points at
- * and that are older than 24 hours. Only names the server itself generates
- * are considered, so nothing else in the folder is ever touched. Returns how
- * many files were removed.
+ * Deletes photo files that no database row points at and that are older
+ * than 24 hours: in the uploads folder, its working area, and half written
+ * files left by a stop during conversion. Only names the server itself
+ * generates are considered, so nothing else in the folder is ever touched.
+ * Returns how many files were removed.
  */
 export async function removeOrphanPhotos(db: Db = getDb(), dir: string = uploadsDir(), now: Date = new Date()): Promise<number> {
-  let names: string[];
-  try {
-    names = await fs.readdir(dir);
-  } catch {
-    return 0;
-  }
   const known = new Set<string>();
-  for (const r of db.select({ file: images.file, thumb: images.thumbFile }).from(images).all()) {
+  const knownWork = new Set<string>();
+  for (const r of db.select({ file: images.file, thumb: images.thumbFile, work: images.workFile }).from(images).all()) {
     known.add(r.file);
     known.add(r.thumb);
+    if (r.work) knownWork.add(r.work);
   }
   const cutoff = now.getTime() - ORPHAN_MIN_AGE_MS;
+  const stillUnused = (name: string, work: boolean) =>
+    !db.select({ id: images.id }).from(images)
+      .where(work ? eq(images.workFile, name) : or(eq(images.file, name), eq(images.thumbFile, name))).get();
+
   let removed = 0;
-  for (const name of names) {
-    if (!isValidImageName(name) || known.has(name)) continue;
-    const full = path.join(dir, name);
+  const sweep = async (folder: string, wanted: (name: string) => boolean, work: boolean) => {
+    let names: string[];
     try {
-      const stat = await fs.stat(full);
-      if (!stat.isFile() || stat.mtimeMs >= cutoff) continue;
-      // Check again right before deleting, in case a row was written meanwhile.
-      if (db.select({ id: images.id }).from(images).where(or(eq(images.file, name), eq(images.thumbFile, name))).get()) continue;
-      await fs.rm(full, { force: true });
-      removed += 1;
+      names = await fs.readdir(folder);
     } catch {
-      // Skip this one; the next run tries again.
+      return;
     }
-  }
+    for (const name of names) {
+      if (!wanted(name)) continue;
+      const full = path.join(folder, name);
+      try {
+        const stat = await fs.stat(full);
+        if (!stat.isFile() || stat.mtimeMs >= cutoff) continue;
+        // Check again right before deleting, in case a row was written meanwhile.
+        if (!TEMP_NAME_RE.test(name) && !stillUnused(name, work)) continue;
+        await fs.rm(full, { force: true });
+        removed += 1;
+      } catch {
+        // Skip this one; the next run tries again.
+      }
+    }
+  };
+  await sweep(dir, (n) => TEMP_NAME_RE.test(n) || (isValidImageName(n) && !known.has(n)), false);
+  await sweep(path.join(dir, "work"), (n) => isValidWorkName(n) && !knownWork.has(n), true);
   return removed;
 }
 
