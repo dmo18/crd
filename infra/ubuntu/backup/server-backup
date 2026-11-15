@@ -106,33 +106,33 @@ one_line() { tr '\n\r\t' '   ' | sed -e 's/  */ /g' -e 's/^ //' -e 's/ $//' | cu
 
 # All prompts go to stderr so that output can be logged. Input is read from
 # the terminal (or from standard input when it is not a terminal, for testing).
+# Local names start with __ so they never hide the caller's variable.
 ask() {
-    local __var=$1 q=$2 def=${3-} ans=""
-    [[ -n $def ]] && q+=" [$def]"
-    printf '%s: ' "$q" >&2
-    IFS= read -r ans || die "$E_USAGE" "No answer was given."
-    [[ -z $ans ]] && ans=$def
-    printf -v "$__var" '%s' "$ans"
+    local __var=$1 __q=$2 __def=${3-} __ans=""
+    [[ -n $__def ]] && __q+=" [$__def]"
+    printf '%s: ' "$__q" >&2
+    IFS= read -r __ans || die "$E_USAGE" "No answer was given."
+    [[ -z $__ans ]] && __ans=$__def
+    printf -v "$__var" '%s' "$__ans"
 }
 
 ask_secret() {
-    local __var=$1 q=$2 ans=""
-    printf '%s (typing is hidden): ' "$q" >&2
+    local __var=$1 __q=$2 __ans=""
+    printf '%s (typing is hidden): ' "$__q" >&2
     if [[ -t 0 ]]; then
-        IFS= read -r -s ans || die "$E_USAGE" "No answer was given."
-        printf '\n' >&2
+        IFS= read -r -s __ans || die "$E_USAGE" "No answer was given."
     else
-        IFS= read -r ans || die "$E_USAGE" "No answer was given."
-        printf '\n' >&2
+        IFS= read -r __ans || die "$E_USAGE" "No answer was given."
     fi
-    printf -v "$__var" '%s' "$ans"
+    printf '\n' >&2
+    printf -v "$__var" '%s' "$__ans"
 }
 
 ask_yes_no() { # ask_yes_no "Question" default(y|n)
-    local q=$1 def=$2 ans=""
+    local __q=$1 __def=$2 __yn=""
     while :; do
-        if [[ $def == y ]]; then ask ans "$q (y/n)" y; else ask ans "$q (y/n)" n; fi
-        case "${ans,,}" in
+        ask __yn "$__q (y/n)" "$__def"
+        case "${__yn,,}" in
             y | yes) return 0 ;;
             n | no) return 1 ;;
         esac
@@ -141,14 +141,14 @@ ask_yes_no() { # ask_yes_no "Question" default(y|n)
 }
 
 ask_valid() { # ask_valid VAR "Question" default regex "what is allowed"
-    local __var=$1 q=$2 def=$3 re=$4 hint=$5 val=""
+    local __var=$1 __q=$2 __def=$3 __re=$4 __hint=$5 __val=""
     while :; do
-        ask val "$q" "$def"
-        if [[ $val =~ $re && $val != *..* ]]; then
-            printf -v "$__var" '%s' "$val"
+        ask __val "$__q" "$__def"
+        if [[ $__val =~ $__re && $__val != *..* ]]; then
+            printf -v "$__var" '%s' "$__val"
             return 0
         fi
-        say "That does not look right. Allowed: $hint" >&2
+        say "That does not look right. Allowed: $__hint" >&2
     done
 }
 
