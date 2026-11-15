@@ -13,7 +13,7 @@ Cloudflare and Coolify.
 | # | Where | What |
 |---|---|---|
 | 1 | Hyper-V host | Download Ubuntu Server **24.04 LTS** from ubuntu.com/download/server |
-| 2 | Hyper-V Manager | New virtual machine `appy`: Generation 2, 4096 MB, your internet switch, 60 GB, the Ubuntu .iso. Then Settings: Secure Boot template "Microsoft UEFI Certificate Authority", 2 processors, start automatically |
+| 2 | Hyper-V Manager | New virtual machine `appy`: Generation 2, 4096 MB, your internet switch, 60 GB, the Ubuntu .iso. Then Settings: Secure Boot template "Microsoft UEFI Certificate Authority" (still no boot? untick Enable Secure Boot), 2 processors, start automatically |
 | 3 | Console window | Install Ubuntu with the defaults. Server's name `appy`. Write down the username and password |
 | 4 | Cloudflare Zero Trust | Networks, Tunnels, Create a tunnel, Cloudflared, name `appy`. Copy the token (starts `eyJ`) |
 | 5 | Console window | Paste the setup command (below). Answer: token, your email, Enter to skip the SSH key, `n` for alerts. Write down the temporary Coolify password it prints |
