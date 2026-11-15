@@ -170,6 +170,12 @@ function fixedYear(t: string): number | null {
   return validYear(Number(out));
 }
 
+/** "'87" gives 1987. Only with the apostrophe, and only 1950 to 1999. */
+function shortYear(t: string): number | null {
+  const m = /^'([5-9]\d)[.,;:]?$/.exec(t);
+  return m ? 1900 + Number(m[1]) : null;
+}
+
 type YearFind = { year: number; how: "copyright" | "brand" | "stats"; score: number; line?: Line; lastSeason?: number };
 
 /** Year from a stat table: last season shown plus one, only for clearly consecutive seasons. */
@@ -206,13 +212,24 @@ function findYear(lines: Line[], brandLines: Set<Line>): YearFind | null {
     const copyright = l.raw.includes("\u00a9") || /COPYRIGHT/.test(l.lz);
     const branded = brandLines.has(l);
     if (!copyright && !branded) continue;
+    const sideBonus = l.side === "back" ? 1 : 0;
+    let found = false;
     for (const t of l.tokens) {
       const y = fixedYear(t);
       if (y == null) continue;
-      const sideBonus = l.side === "back" ? 1 : 0;
       if (copyright) consider({ year: y, how: "copyright", score: 5 + sideBonus, line: l });
       else consider({ year: y, how: "brand", score: 3 + sideBonus, line: l });
+      found = true;
       break;
+    }
+    // Fronts often show a short year by the logo: "Donruss '87", "'89 Fleer".
+    if (!found && branded) {
+      for (const t of l.tokens) {
+        const y = shortYear(t);
+        if (y == null) continue;
+        consider({ year: y, how: "brand", score: 2.5 + sideBonus, line: l });
+        break;
+      }
     }
   }
   const stats = yearFromStats(lines);
@@ -223,7 +240,17 @@ function findYear(lines: Line[], brandLines: Set<Line>): YearFind | null {
 // ---------------------------------------------------------------------------
 // Brands
 
-type BrandDef = { key: string; brand: string; set?: string; re: RegExp; copyrightOnly?: boolean; sport?: Sport; sportWeight?: number };
+type BrandDef = {
+  key: string;
+  brand: string;
+  set?: string;
+  re: RegExp;
+  copyrightOnly?: boolean;
+  /** A clue that loses to any other brand read on the card. */
+  weak?: boolean;
+  sport?: Sport;
+  sportWeight?: number;
+};
 
 const BRANDS: BrandDef[] = [
   { key: "udminor", brand: "Upper Deck", set: "Upper Deck Minor League", re: /\bUPPER\s*DECK\s*MINOR\s*LEAGUE\b/g, sport: "baseball", sportWeight: 2 },
@@ -232,15 +259,21 @@ const BRANDS: BrandDef[] = [
   { key: "ultra", brand: "Fleer", set: "Fleer Ultra", re: /\bULTRA\b/g },
   { key: "topps", brand: "Topps", re: /\bTOPPS\b/g },
   { key: "upperdeck", brand: "Upper Deck", re: /\bUPPER\s*DECK\b/g },
-  { key: "fleer", brand: "Fleer", re: /\bFLEER\b/g },
+  // "F1EER" is a common misread; the 1 becomes I in the letter version of the line.
+  { key: "fleer", brand: "Fleer", re: /\bF[LI]EER\b/g },
   { key: "donruss", brand: "Donruss", re: /\bDONRUS{1,2}\b/g, sport: "baseball", sportWeight: 1 },
   { key: "score", brand: "Score", re: /\bSCORE\b/g },
+  // Score cards were made by Major League Marketing, named in the copyright line.
+  { key: "mlm", brand: "Score", re: /\bMAJOR\s*LEAGUE\s*MARKETING\b/g },
   { key: "bowman", brand: "Bowman", re: /\bBOWMAN\b/g },
   { key: "opc", brand: "O-Pee-Chee", re: /\bO\s*-?\s*PEE\s*-?\s*CHEE\b|\bOPC\b/g },
   { key: "leafinc", brand: "Leaf", re: /\bLEAF\s*,?\s*INC\b/g },
   { key: "leaf", brand: "Leaf", re: /\bLEAF\b(?!\s*,?\s*INC)/g },
   { key: "proset", brand: "Pro Set", re: /\bPRO\s*SET\b/g, sport: "football", sportWeight: 1 },
   { key: "hoops", brand: "NBA Hoops", re: /\bHOOPS\b/g, sport: "basketball", sportWeight: 2 },
+  // NBA Hoops backs carry only "NBA Properties" in the copyright line. Other
+  // brands may print it too, so it counts only when no other brand was read.
+  { key: "nbaprops", brand: "NBA Hoops", re: /\bNBA\s*PROPERTIES\b/g, copyrightOnly: true, weak: true, sport: "basketball", sportWeight: 2 },
   { key: "skybox", brand: "SkyBox", re: /\bSKY\s*BOX\b/g, sport: "basketball", sportWeight: 1 },
   { key: "pinnacle", brand: "Pinnacle", re: /\bPINNACLE\b/g },
   { key: "classic", brand: "Classic", re: /\bCLASSIC\b/g, copyrightOnly: true },
@@ -268,7 +301,8 @@ function brandHits(lines: Line[]): BrandHit[] {
       def.re.lastIndex = 0;
       const count = l.lz.match(def.re)?.length ?? 0;
       for (let i = 0; i < count; i++) {
-        hits.push({ def, line: l, score: 1 + (copyright ? 3 : 0) + (short ? 2 : 0) + (hasYear ? 1 : 0) + (l.side === "back" ? 0.5 : 0) });
+        const score = def.weak ? 0.5 : 1 + (copyright ? 3 : 0) + (short ? 2 : 0) + (hasYear ? 1 : 0) + (l.side === "back" ? 0.5 : 0);
+        hits.push({ def, line: l, score });
       }
     }
   }
@@ -284,8 +318,13 @@ function pickBrand(hits: BrandHit[], year: number | null): BrandPick | null {
   const leafIncOnly = has("leafinc") && !has("leaf");
   for (const h of hits) {
     let brand = h.def.brand;
-    // Donruss cards of the 1980s carry "Leaf, Inc." in the copyright line.
-    if (h.def.key === "leafinc" && (has("donruss") || (leafIncOnly && year != null && year < 1990))) brand = "Donruss";
+    if (h.def.key === "leafinc") {
+      // Donruss cards carry "Leaf, Inc." in the copyright line, since Leaf, Inc.
+      // owned Donruss. From 1990 the same company also made the Leaf brand, so
+      // "Leaf, Inc." alone no longer says which of the two it is.
+      if (has("donruss") || (leafIncOnly && year != null && year < 1990)) brand = "Donruss";
+      else if (leafIncOnly) continue;
+    }
     scores.set(brand, (scores.get(brand) ?? 0) + h.score);
   }
   let best: string | null = null;
@@ -297,7 +336,7 @@ function pickBrand(hits: BrandHit[], year: number | null): BrandPick | null {
     }
   }
   if (!best) return null;
-  const mine = hits.filter((h) => h.def.brand === best || (best === "Donruss" && h.def.key === "leafinc"));
+  const mine = hits.filter((h) => (h.def.brand === best && h.def.key !== "leafinc") || (h.def.key === "leafinc" && (best === "Donruss" || best === "Leaf")));
   const sub = mine.find((h) => h.def.set);
   const sportDef = mine.find((h) => h.def.sport);
   return {
@@ -372,43 +411,66 @@ function numberToken(t: string | undefined, allowPrefix: boolean): string | null
   return null;
 }
 
+/** Words that make "#1" or "No. 1" a draft pick or a ranking, not the card number. */
+const NOT_A_CARD_NUMBER = /^(?:PICKS?|PICKED|DRAFT(?:S|ED)?|CHOICES?|ROUNDS?|STARTERS?|SELECT(?:ION|IONS|ED)?|OVERALL)$/;
+
+function rankingNear(t: string[], i: number, len: number): boolean {
+  for (let k = Math.max(0, i - 4); k <= Math.min(t.length - 1, i + len + 2); k++) {
+    if (k >= i && k < i + len) continue;
+    if (NOT_A_CARD_NUMBER.test(letterize(upper(t[k])).replace(/[^A-Z]/g, ""))) return true;
+  }
+  return false;
+}
+
+/** "98 T" read as two words is still a Traded number. */
+function withTradedSuffix(n: string | null, next: string | undefined): string | null {
+  if (n && /^\d+$/.test(n) && next && /^[Tt][.,]?$/.test(next)) return `${n}T`;
+  return n;
+}
+
 function numberFromMarkers(l: Line): string | null {
   const t = l.tokens;
   for (let i = 0; i < t.length; i++) {
     const tok = t[i];
     if (/^(?:N[O0o]|n[o0])[.:]?$/.test(tok) && (t.length <= 6 || i <= 1)) {
-      const n = numberToken(t[i + 1], true);
-      if (n) return n;
+      const n = withTradedSuffix(numberToken(t[i + 1], true), t[i + 2]);
+      if (n && !rankingNear(t, i, 2)) return n;
     }
     let m = /^(?:N[O0o]|n[o0])[.:]([0-9A-Za-z|-]+)$/.exec(tok);
     if (m && (t.length <= 6 || i <= 1)) {
-      const n = numberToken(m[1], true);
-      if (n) return n;
+      const n = withTradedSuffix(numberToken(m[1], true), t[i + 1]);
+      if (n && !rankingNear(t, i, 1)) return n;
     }
     m = /^#(.*)$/.exec(tok);
     if (m) {
-      const n = numberToken(m[1] || t[i + 1], true);
-      if (n) return n;
+      const n = m[1] ? withTradedSuffix(numberToken(m[1], true), t[i + 1]) : withTradedSuffix(numberToken(t[i + 1], true), t[i + 2]);
+      if (n && !rankingNear(t, i, m[1] ? 1 : 2)) return n;
     }
   }
   return null;
 }
 
 function numberFromCorner(l: Line): string | null {
-  if (l.tokens.length !== 1) return null;
+  const t = l.tokens;
+  const traded = t.length === 2 && /^[Tt]$/.test(t[1]);
+  if (t.length !== 1 && !traded) return null;
   const top = l.box.y < 0.2;
   const corner = l.box.x < 0.3 || l.box.x + l.box.w > 0.7;
   if (!top || !corner) return null;
-  return numberToken(l.tokens[0], false);
+  // A position such as "1B" in the corner is not a number.
+  if (upper(t[0]) in POS_TOKENS) return null;
+  return withTradedSuffix(numberToken(t[0], false), t[1]);
 }
 
 function findCardNumber(back: Line[], front: Line[]): string | null {
+  // The number printed alone in a top corner is the most reliable clue, then a
+  // "No." or "#" marker. Bio lines ("the No. 1 pick") are skipped by the marker check.
   for (const l of back) {
-    const n = numberFromMarkers(l);
+    const n = numberFromCorner(l);
     if (n) return n;
   }
   for (const l of back) {
-    const n = numberFromCorner(l);
+    const n = numberFromMarkers(l);
     if (n) return n;
   }
   for (const l of front) {
@@ -597,7 +659,7 @@ const LEAGUE_WORDS: [RegExp, Sport][] = [
   [/\bNATIONAL\s*HOCKEY\s*LEAGUE\b|\bNHL\b|\bNHLPA\b|\bHOCKEY\b/, "hockey"],
   [/\bNATIONAL\s*BASKETBALL\b|\bNBA\b|\bBASKETBALL\b/, "basketball"],
   [/\bNATIONAL\s*FOOTBALL\s*LEAGUE\b|\bNFL\b|\bNFLPA\b|\bUSFL\b|\bFOOTBALL\b/, "football"],
-  [/\bMAJOR\s*LEAGUE\b|\bMLB\b|\bMLBPA\b|\bAMERICAN\s*LEAGUE\b|\bNATIONAL\s*LEAGUE\b|\bBASEBALL\b/, "baseball"],
+  [/\bMAJOR\s*LEAGUE\b(?!\s*MARKETING)|\bMLB\b|\bMLBPA\b|\bAMERICAN\s*LEAGUE\b|\bNATIONAL\s*LEAGUE\b|\bBASEBALL\b/, "baseball"],
 ];
 
 const STAT_WORDS: Record<"baseball" | "basketball" | "football" | "hockey", string[]> = {
@@ -718,7 +780,9 @@ const STOP_WORDS = new Set(
     "BUT", "WHO", "ALSO", "AFTER", "BEFORE", "LAST", "BEST", "MOST", "TOP", "ROUND", "OVERALL", "GAMES", "GAME", "HITS",
     "RUNS", "WINS", "POINTS", "GOALS", "ASSISTS", "YARDS", "COPYRIGHT", "RESERVED", "RIGHTS", "MADE", "CANADA",
     "BASEBALL", "BASKETBALL", "FOOTBALL", "HOCKEY", "NATIONAL", "AMERICAN", "MLB", "NFL", "NBA", "NHL", "USFL",
-    "MLBPA", "NFLPA", "NHLPA", "OLYMPIC", "UNIVERSITY", "COLLEGE", "SCHOOL", "HIGH", "ACADEMY", "SERIES", "WORLD", "HIGHLIGHTS", "HIGHLIGHT", "MVP", "AWARD", "CYCLE",
+    "MLBPA", "NFLPA", "NHLPA", "OLYMPIC", "UNIVERSITY", "COLLEGE", "SCHOOL", "HIGH", "ACADEMY",
+    // School words, so "Oklahoma State" or "Texas Tech" is not read as a player.
+    "STATE", "TECH", "A&M", "INSTITUTE", "SERIES", "WORLD", "HIGHLIGHTS", "HIGHLIGHT", "MVP", "AWARD", "CYCLE",
     // Stat headers
     "AVG", "RBI", "ERA", "AB", "HR", "SB", "IP", "BB", "SO", "SLG", "PCT", "REB", "AST", "PTS", "FGA", "FTA", "GP",
     "PIM", "YDS", "TD", "TDS", "ATT", "INT", "REC", "LG", "MIN", "STL", "BLK", "GAA", "PPG",
@@ -894,8 +958,12 @@ function findSlab(lines: Line[]): SlabFind | null {
     }
     if (certNumber) break;
   }
-  // A grade word without a grader or a cert number is too weak to call it a slab.
-  if (!grader && !certNumber) return null;
+  // A grade word without a grader or a cert number is too weak to call it a slab,
+  // unless it sits on a label line with the card's year or number.
+  if (!grader && !certNumber) {
+    const labelLine = lines.some((l) => GRADE_RE.test(l.up) && (/\b(?:19|20)\d{2}\b/.test(l.up) || /#\s*\d/.test(l.up)));
+    if (!labelLine) return null;
+  }
   return { grader, grade, certNumber };
 }
 
@@ -963,6 +1031,9 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
     ev.push(`Read stat table ending with ${yearFind.lastSeason}, so the card is likely from ${yearFind.year}`);
   }
   if (out.brand && yearFind?.how !== "copyright") ev.push(`Read brand: ${out.brand}`);
+  if (!out.brand && hits.some((h) => h.def.key === "leafinc")) {
+    ev.push("The copyright line says Leaf, Inc., which made both Donruss and Leaf cards. Check the logo on the front for the brand.");
+  }
 
   out.cardNumber = findCardNumber(back, front);
   if (out.cardNumber) ev.push(`Read card number ${out.cardNumber}`);

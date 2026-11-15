@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createDb } from "@/db";
 import { playerFacts } from "@/db/schema";
 import {
-  CACHE_MS, lookupPlayer, normalizeName, prunePlayerFacts, PRUNE_EVERY, rankCandidates, resetFactsPruneCounter, type PlayerFacts,
+  CACHE_MS, lookupPlayer, normalizeName, prunePlayerFacts, PRUNE_EVERY, rankCandidates, resetFactsPruneCounter, resetWikidataPause,
+  userAgent, type PlayerFacts,
 } from "./wikidata";
 
 const cell = (value: string) => ({ type: "literal", value });
@@ -59,7 +60,7 @@ describe("lookupPlayer", () => {
     expect(facts?.teams).toContain("Chicago White Sox");
   });
 
-  it("uses only the two Wikidata hosts, a generic User-Agent, and encodes the search text", async () => {
+  it("uses only the two Wikidata hosts, a User-Agent with a contact, and encodes the search text", async () => {
     const db = createDb(":memory:");
     const f = fakeFetch([BIG_HURT]);
     await lookupPlayer("Tom & Jerry #1", { db, fetchImpl: asFetch(f) });
@@ -72,8 +73,7 @@ describe("lookupPlayer", () => {
     expect(first).not.toContain("#");
     for (const call of f.mock.calls) {
       const headers = (call[1] as RequestInit).headers as Record<string, string>;
-      expect(headers["User-Agent"]).toBe("CardVault/1.0 (personal sports card collection app)");
-      expect(headers["User-Agent"]).not.toMatch(/@/);
+      expect(headers["User-Agent"]).toBe(userAgent());
       expect(headers.Accept).toBe("application/json");
     }
   });
@@ -213,5 +213,81 @@ describe("cache prune", () => {
     await lookupPlayer("Name Two", { db, now: T, fetchImpl: f });
     expect(stale()).toBe(1);
     expect(PRUNE_EVERY).toBe(100);
+  });
+});
+
+describe("User-Agent", () => {
+  it("names the project page unless WIKIDATA_CONTACT holds an email or web address", () => {
+    vi.stubEnv("WIKIDATA_CONTACT", "");
+    expect(userAgent()).toBe("CardVault/1.0 (https://github.com/dmo18/crd) personal sports card collection app");
+    vi.stubEnv("WIKIDATA_CONTACT", "owner@example.com");
+    expect(userAgent()).toContain("(owner@example.com)");
+    vi.stubEnv("WIKIDATA_CONTACT", "https://example.com/contact");
+    expect(userAgent()).toContain("(https://example.com/contact)");
+    vi.stubEnv("WIKIDATA_CONTACT", "not a contact)\r\nX-Evil: 1");
+    expect(userAgent()).toContain("(https://github.com/dmo18/crd)");
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("players who share a name across eras", () => {
+  const SR = {
+    item: ent("Q10"), label: cell("Ken Griffey Sr."), description: cell("American baseball player"),
+    sports: cell("baseball"), occupations: cell("baseball player"), start: cell("1973"), end: cell("1991"), birth: cell("1950"),
+  };
+  const JR = {
+    item: ent("Q11"), label: cell("Ken Griffey Jr."), description: cell("American baseball player"),
+    sports: cell("baseball"), occupations: cell("baseball player"), start: cell("1989"), end: cell("2010"), birth: cell("1969"),
+    awards: cell("National Baseball Hall of Fame"),
+  };
+  const fetchBoth = () => vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    const body = url.hostname === "www.wikidata.org"
+      ? { search: [{ id: "Q10", label: "Ken Griffey Sr." }, { id: "Q11", label: "Ken Griffey Jr." }] }
+      : { results: { bindings: [SR, JR] } };
+    return new Response(JSON.stringify(body), { status: 200 });
+  });
+
+  it("keeps father and son apart by suffix and year, also when served from the cache", async () => {
+    const db = createDb(":memory:");
+    const f = fetchBoth();
+    const sr = await lookupPlayer("Ken Griffey Sr.", { sport: "baseball", year: 1989, db, fetchImpl: asFetch(f) });
+    expect(sr?.wikidataId).toBe("Q10");
+    const jr = await lookupPlayer("Ken Griffey Jr.", { sport: "baseball", year: 1989, db, fetchImpl: asFetch(f) });
+    expect(jr?.wikidataId).toBe("Q11");
+    const old = await lookupPlayer("Ken Griffey", { sport: "baseball", year: 1977, db, fetchImpl: asFetch(f) });
+    expect(old?.wikidataId).toBe("Q10");
+    const late = await lookupPlayer("Ken Griffey", { sport: "baseball", year: 1995, db, fetchImpl: asFetch(f) });
+    expect(late?.wikidataId).toBe("Q11");
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Hall of Fame", () => {
+  it("does not count a college hall of fame", async () => {
+    const db = createDb(":memory:");
+    const collegeOnly = { ...BIG_HURT, awards: cell("College Football Hall of Fame|Auburn Tigers Hall of Fame") };
+    const facts = await lookupPlayer("Frank Thomas", { sport: "baseball", db, fetchImpl: asFetch(fakeFetch([collegeOnly], ["Q1"])) });
+    expect(facts?.hallOfFame).toBe(false);
+    const coach = await lookupPlayer("Frank Thomas", { sport: "football", db, fetchImpl: asFetch(fakeFetch([COACH], ["Q2"])) });
+    expect(coach?.hallOfFame).toBe(false);
+  });
+});
+
+describe("rate limits", () => {
+  it("stops looking up for as long as Retry-After asks after a 429", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetWikidataPause();
+    const limited = vi.fn(async () => new Response("slow down", { status: 429, headers: { "Retry-After": "120" } }));
+    expect(await lookupPlayer("Frank Thomas", { db: createDb(":memory:"), fetchImpl: asFetch(limited) })).toBeNull();
+    expect(limited).toHaveBeenCalledTimes(1);
+    const ok = fakeFetch([BIG_HURT], ["Q1"]);
+    const db = createDb(":memory:");
+    expect(await lookupPlayer("Frank Thomas", { db, fetchImpl: asFetch(ok) })).toBeNull();
+    expect(ok).not.toHaveBeenCalled();
+    expect(db.select().from(playerFacts).all()).toHaveLength(0);
+    resetWikidataPause();
+    expect(await lookupPlayer("Frank Thomas", { db, fetchImpl: asFetch(ok) })).toMatchObject({ wikidataId: "Q1" });
+    warn.mockRestore();
   });
 });

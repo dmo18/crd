@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { PhotoPicker } from "@/components/capture/PhotoPicker";
 import { ItemRow } from "@/components/items/ItemRow";
 import { RapidScan } from "@/components/items/RapidScan";
 import { Button, Card, INPUT_CLASS, LinkButton, Notice } from "@/components/ui";
 import type { ScanMode } from "@/db/schema";
 import type { ScanView } from "@/lib/scans/view";
+import { scanTimedOut, waitingText } from "./scan-queue";
 
 type Rules = Record<ScanMode, { min: number; max: number }>;
 type Choice = ScanMode | "rapid";
@@ -30,13 +31,12 @@ const WAITING: Record<ScanMode, string> = {
 };
 
 const POLL_MS = 1500;
-const GIVE_UP_MS = 3 * 60 * 1000;
 
 type Phase =
   | { name: "form"; error?: string }
   | { name: "sending" }
   | { name: "waiting"; scanId: number }
-  | { name: "result"; scan: ScanView };
+  | { name: "result"; scan: ScanView; retryError?: string };
 
 export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: LocationOption[] }) {
   const [choice, setChoice] = useState<Choice>("single");
@@ -49,6 +49,8 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
   const [hint, setHint] = useState("");
   const [phase, setPhase] = useState<Phase>({ name: "form" });
   const [waitedMode, setWaitedMode] = useState<ScanMode>("single");
+  /** The latest progress from the server while waiting, for the place in line. */
+  const [latest, setLatest] = useState<ScanView | null>(null);
 
   const single = mode === "single";
   const ready = single ? front.length >= rules.single.min : source.length >= rules[mode].min;
@@ -84,6 +86,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
 
   async function submit() {
     setPhase({ name: "sending" });
+    setLatest(null);
     setWaitedMode(mode);
     const body = new FormData();
     body.set("mode", mode);
@@ -108,24 +111,41 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
     }
   }
 
+  /** Runs the same failed scan again on the server, with the photos it already has. */
+  async function retryOnServer(scan: ScanView) {
+    try {
+      const res = await fetch(`/api/scans/${scan.id}/retry`, { method: "POST" });
+      if (res.ok) {
+        setLatest(null);
+        setPhase({ name: "waiting", scanId: scan.id });
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setPhase({ name: "result", scan, retryError: data.error ?? "Could not try again. Please try later." });
+    } catch {
+      setPhase({ name: "result", scan, retryError: "Could not reach the server. Check your connection and try again." });
+    }
+  }
+
   const scanId = phase.name === "waiting" ? phase.scanId : null;
-  const started = useRef(0);
   useEffect(() => {
     if (scanId === null) return;
     let stopped = false;
-    started.current = Date.now();
     const timer = setInterval(async () => {
-      if (Date.now() - started.current > GIVE_UP_MS) {
-        stopped = true;
-        clearInterval(timer);
-        setPhase({ name: "form", error: "This is taking longer than expected. Your scan may still finish: check View inventory in a minute." });
-        return;
-      }
       try {
         const res = await fetch(`/api/scans/${scanId}`, { cache: "no-store" });
         if (stopped || !res.ok) return;
         const scan = (await res.json()) as ScanView;
         if (stopped) return;
+        setLatest(scan);
+        // The server reads one scan at a time, so waiting in line never times
+        // out. Only a scan it has been reading for over 6 minutes is given up on.
+        if (scanTimedOut(scan)) {
+          stopped = true;
+          clearInterval(timer);
+          setPhase({ name: "form", error: "This is taking longer than expected. Your scan may still finish: check View inventory in a few minutes." });
+          return;
+        }
         if (scan.status === "done" || scan.status === "failed") {
           stopped = true;
           clearInterval(timer);
@@ -154,7 +174,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
       <Card className="flex flex-col items-center gap-3 py-10 text-center">
         <div aria-hidden="true" className="size-10 animate-spin rounded-full border-4 border-border border-t-accent" />
         <p aria-live="polite" role="status" className="text-lg font-semibold">
-          {phase.name === "sending" ? "Sending your photos..." : WAITING[waitedMode]}
+          {phase.name === "sending" ? "Sending your photos..." : (waitingText(latest) ?? WAITING[waitedMode])}
         </p>
         <p className="text-sm text-muted">This usually takes under a minute. You can leave this screen on.</p>
       </Card>
@@ -167,8 +187,9 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
       <div className="flex flex-col gap-4">
         {scan.status === "failed" ? (
           <>
-            <Notice tone="danger"><span role="alert">{scan.error ?? "The scan did not work. Please try again."}</span></Notice>
-            <Button onClick={() => setPhase({ name: "form" })}>Try again</Button>
+            <Notice tone="danger"><span role="alert">{phase.retryError ?? scan.error ?? "The scan did not work. Please try again."}</span></Notice>
+            <Button onClick={() => void retryOnServer(scan)}>Try again</Button>
+            <Button variant="secondary" onClick={() => setPhase({ name: "form" })}>Change the photos</Button>
           </>
         ) : scan.items.length === 0 ? (
           <>

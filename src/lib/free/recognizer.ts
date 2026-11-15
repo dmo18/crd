@@ -10,8 +10,8 @@ import {
   type RecognizedItemInput,
   type Recognizer,
 } from "@/lib/recognition/types";
-import { findCardBoxes } from "./find-cards";
-import { findKeyCard, keyCardsFor, type KeyCard } from "./key-cards";
+import { cardTilt, findCardBoxes } from "./find-cards";
+import { keyCardsFor, matchKeyCard, normalizeBrand, normalizeName, type KeyCard } from "./key-cards";
 import { getTextReader, type OcrResult, type ReadOptions, type TextReader } from "./ocr";
 import { parseCardText, parseProductText, type ParsedCard } from "./parse";
 import { lookupPlayer, type PlayerFacts } from "./wikidata";
@@ -28,13 +28,22 @@ import { lookupPlayer, type PlayerFacts } from "./wikidata";
 export type FreeDeps = {
   reader?: TextReader;
   findBoxes?: (image: Buffer) => Promise<Box[]>;
+  /** Degrees a cropped card is turned from upright, clockwise positive. */
+  tilt?: (image: Buffer) => Promise<number>;
   lookup?: (name: string, opts: { sport?: Sport | null; year?: number | null }) => Promise<PlayerFacts | null>;
 };
 
 const MAX_CARDS_PER_PHOTO = 30;
 const MAX_LOOKUPS_PER_CARD = 2;
+/** Cards turned less than this are read as they are. */
+const MIN_STRAIGHTEN_DEG = 5;
 const FREE_NOTE = "Read with free text recognition. Check the details, then add a value from sold listings.";
 const UNREAD_NOTE = "Could not read the printed text clearly. Fill in the details by hand, or try a sharper photo without glare.";
+const ADD_BACK_NOTE = "Add a photo of the back; the year and number are usually there.";
+const KEY_CONFIDENCE = 0.9;
+/** Below the review line (REVIEW_THRESHOLD), so the owner checks it. */
+const CHECK_CONFIDENCE = 0.7;
+const MAX_WITHOUT_KEY = 0.8;
 
 function clamp01(n: number) {
   return Math.min(1, Math.max(0, n));
@@ -53,16 +62,29 @@ function formatKeyCard(k: KeyCard): string {
   return `${k.year} ${k.setName} #${k.cardNumber} ${k.player}${flags ? ` (${flags})` : ""}`;
 }
 
+/**
+ * The no name on front error is ruled out when the player's name was read on the front.
+ * Other errors (a reversed photo, a word on a bat knob) cannot be told from text.
+ */
+function ruledOutOnFront(error: KeyCard, card: KeyCard, front: OcrResult | null): boolean {
+  if (!/no name/i.test(error.variation ?? "")) return false;
+  const text = normalizeName(front?.text ?? "");
+  const name = normalizeName(card.player);
+  return name.length > 0 && ` ${text} `.includes(` ${name} `);
+}
+
 export class FreeRecognizer implements Recognizer {
   readonly name = "free";
   private readonly reader: TextReader;
   private readonly findBoxes: (image: Buffer) => Promise<Box[]>;
   private readonly lookup: NonNullable<FreeDeps["lookup"]>;
+  private readonly tilt: NonNullable<FreeDeps["tilt"]>;
 
   constructor(deps: FreeDeps = {}) {
     this.reader = deps.reader ?? getTextReader();
     this.findBoxes = deps.findBoxes ?? findCardBoxes;
     this.lookup = deps.lookup ?? ((name, opts) => lookupPlayer(name, opts));
+    this.tilt = deps.tilt ?? cardTilt;
   }
 
   async recognize(request: RecognitionRequest): Promise<RecognizedItem[]> {
@@ -108,7 +130,7 @@ export class FreeRecognizer implements Recognizer {
       for (const box of boxes) {
         let text: OcrResult | null = null;
         try {
-          text = await this.read(await cropPhoto(photo, box));
+          text = await this.read(await this.straighten(await cropPhoto(photo, box)));
         } catch {
           text = null;
         }
@@ -118,11 +140,22 @@ export class FreeRecognizer implements Recognizer {
     return out;
   }
 
-  private async findPlayer(parsed: ParsedCard): Promise<PlayerFacts | null> {
+  /** Turns a tilted card crop upright so the text runs straight. */
+  private async straighten(crop: Buffer): Promise<Buffer> {
+    try {
+      const tilt = await this.tilt(crop);
+      if (!Number.isFinite(tilt) || Math.abs(tilt) < MIN_STRAIGHTEN_DEG) return crop;
+      return await sharp(crop).rotate(-tilt, { background: "#ffffff" }).jpeg({ quality: 90 }).toBuffer();
+    } catch {
+      return crop;
+    }
+  }
+
+  private async findPlayer(parsed: ParsedCard): Promise<{ facts: PlayerFacts; read: string } | null> {
     for (const name of parsed.playerCandidates.slice(0, MAX_LOOKUPS_PER_CARD)) {
       try {
         const facts = await this.lookup(name, { sport: parsed.sport, year: parsed.year });
-        if (facts) return facts;
+        if (facts) return { facts, read: name };
       } catch {
         // Wikidata is a bonus. A failed lookup never fails a scan.
       }
@@ -138,34 +171,47 @@ export class FreeRecognizer implements Recognizer {
     const parsed = parseCardText(front, back);
     const readAnything = parsed.year != null || parsed.brand != null || parsed.cardNumber != null || parsed.playerCandidates.length > 0;
     if (!readAnything) {
-      return recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes: UNREAD_NOTE });
+      const notes = back ? UNREAD_NOTE : `${UNREAD_NOTE} ${ADD_BACK_NOTE}`;
+      return recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes });
     }
 
-    // 1. The built-in key card list: an exact match is strong evidence.
-    let key: KeyCard | null = findKeyCard({ year: parsed.year, brand: parsed.brand, cardNumber: parsed.cardNumber, sport: parsed.sport });
-    for (const name of parsed.playerCandidates) {
-      if (key) break;
-      key = findKeyCard({ year: parsed.year, brand: parsed.brand, player: name, sport: parsed.sport });
-    }
+    // 1. The built-in key card list. A match counts only when what was read agrees with it.
+    const match = matchKeyCard({
+      year: parsed.year,
+      brand: parsed.brand,
+      setName: parsed.setName,
+      cardNumber: parsed.cardNumber,
+      players: parsed.playerCandidates,
+      sport: parsed.sport,
+    });
+    const key: KeyCard | null = match?.how === "confirmed" ? match.card : null;
 
     // 2. Wikidata, to confirm the player and fill in the sport.
-    const facts = key ? null : await this.findPlayer(parsed);
+    const found = key ? null : await this.findPlayer(parsed);
+    const facts = found?.facts ?? null;
 
     const notes = [...parsed.evidence];
+    // Values read from the card always win; the list and Wikidata only fill gaps.
+    const readPlayer = found?.read ?? parsed.playerCandidates[0] ?? null;
+    let player = readPlayer;
+    if (key) player = key.player;
+    else if (facts && readPlayer && normalizeName(facts.name) === normalizeName(readPlayer)) player = facts.name;
+    const setIsJustBrand = !parsed.setName || (parsed.brand != null && normalizeBrand(parsed.setName) === normalizeBrand(parsed.brand));
+
     const item: RecognizedItemInput = {
       kind: "card",
       confidence: 0,
       ...where,
-      sport: key?.sport ?? parsed.sport ?? facts?.sports[0] ?? null,
-      year: key?.year ?? parsed.year,
-      brand: key?.brand ?? parsed.brand,
-      setName: key?.setName ?? parsed.setName,
-      cardNumber: key?.cardNumber ?? parsed.cardNumber,
-      player: key?.player ?? facts?.name ?? parsed.playerCandidates[0] ?? null,
+      sport: parsed.sport ?? key?.sport ?? facts?.sports[0] ?? null,
+      year: parsed.year,
+      brand: parsed.brand,
+      setName: key && setIsJustBrand ? key.setName : parsed.setName,
+      cardNumber: key ? key.cardNumber : parsed.cardNumber,
+      player,
       team: parsed.team,
-      variation: key?.variation ?? null,
+      variation: null,
       isRookie: key?.isRookie ?? false,
-      isError: key?.isError ?? false,
+      isError: false,
       serialNumber: parsed.serialNumber,
       grader: parsed.grader,
       grade: parsed.grade,
@@ -175,9 +221,25 @@ export class FreeRecognizer implements Recognizer {
       estimate: null,
     };
 
+    // A listed error or variation is never assumed: most copies are the plain card.
+    let errorCheck = match?.how === "confirmed" ? match.errorCheck : null;
+    if (errorCheck && key && ruledOutOnFront(errorCheck, key, front)) errorCheck = null;
+    if (key && errorCheck) {
+      notes.push(`Check whether this is the error version: ${errorCheck.variation ?? "error"}. ${errorCheck.note}`);
+      if (errorCheck === key) {
+        // The list entry describes the error itself, so its rarity is not this copy's.
+        item.rarityTier = null;
+        item.rarityNotes = null;
+      }
+    }
+
     if (key) {
       notes.push("Matched a card on the built-in list of key cards.");
-    } else if (facts) {
+    } else if (match) {
+      const what = match.card.cardNumber && !parsed.cardNumber ? "The card number was not read" : "The player name was not read";
+      notes.push(`Possible match: ${formatKeyCard(match.card)}. ${what}, so check it.`);
+    }
+    if (!key && facts) {
       notes.push(`Player confirmed on Wikidata: ${facts.name}${facts.description ? `, ${facts.description}` : ""}.`);
       if (facts.hallOfFame) item.rarityNotes = "Hall of Fame player. Cards of Hall of Famers usually sell for more.";
       const year = item.year;
@@ -186,22 +248,32 @@ export class FreeRecognizer implements Recognizer {
         item.rarityNotes = item.rarityNotes ? `${item.rarityNotes} ${hint}` : hint;
       }
     }
+
+    const textConfidence = Math.max(front?.confidence ?? 0, back?.confidence ?? 0);
+    const weak = textConfidence < 0.5 || item.year == null || item.cardNumber == null;
+    if (!back && weak) notes.push(ADD_BACK_NOTE);
     notes.push(FREE_NOTE);
     item.notes = notes.join(" ").slice(0, 600);
 
     // Confidence comes from how much was read and confirmed, then is held
     // back when the text itself was hard to read.
-    // Without a key card or a Wikidata match the best possible is 0.7, so it
-    // waits in Review for a quick check.
-    let confidence = key ? 0.9 : 0.05;
-    if (!key) {
+    let confidence: number;
+    if (key) {
+      confidence = KEY_CONFIDENCE;
+      if (errorCheck) confidence = Math.min(confidence, CHECK_CONFIDENCE);
+    } else {
+      confidence = 0.05;
       if (item.year != null) confidence += 0.2;
       if (item.brand) confidence += 0.2;
       if (item.cardNumber) confidence += 0.15;
       if (item.player) confidence += 0.1;
       if (facts) confidence += 0.15;
+      // Without a key card the best is 0.8, and only with year, brand and number read:
+      // Wikidata knowing the player does not say which card this is.
+      confidence = Math.min(confidence, MAX_WITHOUT_KEY);
+      if (!(item.year != null && item.brand && item.cardNumber)) confidence = Math.min(confidence, CHECK_CONFIDENCE);
+      if (match) confidence = Math.min(confidence, CHECK_CONFIDENCE);
     }
-    const textConfidence = Math.max(front?.confidence ?? 0, back?.confidence ?? 0);
     if (textConfidence < 0.5) confidence = Math.min(confidence, 0.6);
     item.confidence = Math.min(0.95, confidence);
     return recognizedItemSchema.parse(item);

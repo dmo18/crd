@@ -4,9 +4,27 @@ import type { ScanView } from "@/lib/scans/view";
 export const MAX_QUEUE = 100;
 /** Photos uploading at the same time. */
 export const MAX_PARALLEL = 2;
-/** How long a scan may stay unfinished before the page stops waiting. */
-export const GIVE_UP_MS = 5 * 60 * 1000;
-export const TIMEOUT_MESSAGE = "This is taking too long. Check Review or Inventory later.";
+/**
+ * How long after the server STARTED reading a scan the page stops waiting.
+ * The server reads one scan at a time and gives each up to 5 minutes, so a
+ * scan waiting in line is never timed out, however long the line is.
+ */
+export const GIVE_UP_AFTER_START_MS = 6 * 60 * 1000;
+export const TIMEOUT_MESSAGE = "This is taking too long. It may still finish: check Review or Inventory later.";
+
+/** True when the server has been reading this scan for longer than the page waits. Uses the server's clock only. */
+export function scanTimedOut(scan: Pick<ScanView, "status" | "startedAt" | "serverTime"> | null): boolean {
+  if (!scan || scan.status !== "processing" || scan.startedAt === null) return false;
+  return scan.serverTime - scan.startedAt > GIVE_UP_AFTER_START_MS;
+}
+
+/** A short line about where a scan is, for the waiting screen and the queue list. */
+export function waitingText(scan: Pick<ScanView, "status" | "queuePosition"> | null): string | null {
+  if (!scan || scan.status !== "queued" || scan.queuePosition === null) return null;
+  if (scan.queuePosition <= 1) return "Next in line.";
+  const ahead = scan.queuePosition - 1;
+  return ahead === 1 ? "Waiting in line: 1 scan ahead of this one." : `Waiting in line: ${ahead} scans ahead of this one.`;
+}
 
 export type QueueStatus = "waiting" | "sending" | "reading" | "done" | "failed";
 
@@ -33,6 +51,8 @@ export type QueueAction =
   | { type: "update"; scan: ScanView }
   | { type: "failed"; key: number; message: string }
   | { type: "retry"; key: number }
+  | { type: "requeued"; key: number; scan: ScanView | null }
+  | { type: "retryError"; key: number; message: string }
   | { type: "timeout"; key: number };
 
 export const emptyQueue: QueueState = { entries: [] };
@@ -72,19 +92,43 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       if (scan.status === "failed") {
         return patch(state, target.key, (e) => ({ ...e, status: "failed", scan, error: scan.error ?? "The scan did not work. Please try again." }));
       }
-      return state;
+      // Still queued or being read: keep the latest view for the timer and the place in line.
+      return patch(state, target.key, (e) => ({ ...e, scan }));
     }
     case "failed":
       return patch(state, action.key, (e) =>
         e.status === "sending" || e.status === "reading" ? { ...e, status: "failed", error: action.message } : e,
       );
     case "retry":
+      // Upload again: only for photos the server never accepted.
       return patch(state, action.key, (e) =>
-        e.status === "failed" ? { ...e, status: "waiting", error: null, scan: null, scanId: null, uploadedAt: null } : e,
+        e.status === "failed" && e.scanId === null ? { ...e, status: "waiting", error: null, scan: null, uploadedAt: null } : e,
       );
+    case "requeued":
+      // The server runs the same scan again with the photos it already has.
+      return patch(state, action.key, (e) =>
+        e.status === "failed" && e.scanId !== null ? { ...e, status: "reading", error: null, scan: action.scan } : e,
+      );
+    case "retryError":
+      return patch(state, action.key, (e) => (e.status === "failed" ? { ...e, error: action.message } : e));
     case "timeout":
       return patch(state, action.key, (e) => (e.status === "reading" ? { ...e, status: "failed", error: TIMEOUT_MESSAGE } : e));
   }
+}
+
+export type RetryKind = "upload" | "server" | null;
+
+/**
+ * How a failed entry can be retried. A photo the server never accepted is
+ * uploaded again. A scan the server accepted is retried on the server, and
+ * only when the server itself says it failed; otherwise (for example the
+ * page stopped waiting) Retry stays hidden, because uploading again would
+ * create a duplicate.
+ */
+export function retryKind(e: Pick<QueueEntry, "status" | "scanId" | "scan" | "previewUrl">): RetryKind {
+  if (e.status !== "failed") return null;
+  if (e.scanId === null) return e.previewUrl !== null ? "upload" : null;
+  return e.scan?.status === "failed" ? "server" : null;
 }
 
 /** Keys to start uploading now: oldest waiting first, never more than maxParallel in flight. */

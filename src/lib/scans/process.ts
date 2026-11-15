@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, valuations, type ImageRow, type ValueSource } from "@/db/schema";
 import { cropStored, ImageError, readStored, type StoredImage } from "@/lib/images/store";
@@ -8,7 +8,7 @@ import { recordSnapshot } from "@/lib/valuation/snapshots";
 import { RecognitionError, type RecognitionPhoto, type RecognizedItem, type Recognizer } from "@/lib/recognition/types";
 
 const GENERIC_FAILURE = "Something went wrong with this scan. Try again.";
-/** A scan still "processing" after this long was interrupted by a restart. */
+/** A scan still "processing" this long after it started was interrupted by a restart. */
 const STUCK_AFTER_MS = 5 * 60 * 1000;
 
 /** Longest time recognition may take for one scan. */
@@ -49,7 +49,7 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
   const now = deps.now ?? (() => new Date());
 
   // Claim the scan. If it is not queued (already running or finished) do nothing.
-  const scan = db.update(scans).set({ status: "processing" })
+  const scan = db.update(scans).set({ status: "processing", startedAt: now() })
     .where(and(eq(scans.id, scanId), eq(scans.status, "queued"))).returning().get();
   if (!scan) return;
 
@@ -134,6 +134,34 @@ export function enqueueScan(scanId: number, deps: ProcessDeps = {}): void {
   q.tail = q.tail.then(() => processScan(scanId, deps)).catch(() => undefined).finally(() => { q.pending.delete(scanId); });
 }
 
+/**
+ * Scan ids in this server's queue, in the order they will run. The first one
+ * is being processed (or about to be).
+ */
+export function queueOrder(): number[] {
+  return [...queue().pending];
+}
+
+export type RetryResult = { ok: true } | { ok: false; status: 404 | 409 | 410; error: string };
+
+/**
+ * Puts a failed scan back in the queue with the photos it already has, so a
+ * retry never uploads a second copy. Call enqueueScan after it succeeds.
+ */
+export function retryScan(scanId: number, db: Db = getDb()): RetryResult {
+  return db.transaction((tx): RetryResult => {
+    const scan = tx.select({ status: scans.status }).from(scans).where(eq(scans.id, scanId)).get();
+    if (!scan) return { ok: false, status: 404, error: "Scan not found." };
+    if (scan.status !== "failed") return { ok: false, status: 409, error: "This scan is still going or already finished." };
+    const photo = tx.select({ id: images.id }).from(images)
+      .where(and(eq(images.scanId, scanId), inArray(images.role, ["front", "back", "source"]), isNull(images.itemId))).get();
+    if (!photo) return { ok: false, status: 410, error: "The photos for this scan are gone. Take them again." };
+    tx.update(scans).set({ status: "queued", error: null, startedAt: null, finishedAt: null })
+      .where(and(eq(scans.id, scanId), eq(scans.status, "failed"))).run();
+    return { ok: true };
+  }, { behavior: "immediate" });
+}
+
 /** Resolves when everything queued so far has finished. Used by tests. */
 export function queueIdle(): Promise<void> {
   return queue().tail;
@@ -149,10 +177,10 @@ export function recoverScans(deps: ProcessDeps = {}): void {
   const q = queue();
   const stuckBefore = new Date(now.getTime() - STUCK_AFTER_MS);
   const stuck = db.select({ id: scans.id }).from(scans)
-    .where(and(eq(scans.status, "processing"), lt(scans.createdAt, stuckBefore))).all()
+    .where(and(eq(scans.status, "processing"), lt(sql`coalesce(${scans.startedAt}, ${scans.createdAt})`, stuckBefore.getTime()))).all()
     .filter((s) => !q.pending.has(s.id));
   if (stuck.length) {
-    db.update(scans).set({ status: "queued" }).where(inArray(scans.id, stuck.map((s) => s.id))).run();
+    db.update(scans).set({ status: "queued", startedAt: null }).where(inArray(scans.id, stuck.map((s) => s.id))).run();
   }
   const waiting = db.select({ id: scans.id }).from(scans).where(eq(scans.status, "queued")).orderBy(asc(scans.id)).all();
   for (const s of waiting) enqueueScan(s.id, deps);

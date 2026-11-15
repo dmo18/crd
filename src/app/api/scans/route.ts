@@ -3,7 +3,7 @@ import { SCAN_MODES } from "@/db/schema";
 import { guardApi } from "@/lib/auth/guard";
 import { MAX_PHOTOS_PER_SCAN, MAX_UPLOAD_BYTES } from "@/lib/images/store";
 import { createScan, ScanInputError, type ScanPhotoInput, type ScanPhotoRole } from "@/lib/scans/create";
-import { enqueueScan, recoverScans } from "@/lib/scans/process";
+import { enqueueScan, queueOrder, recoverScans } from "@/lib/scans/process";
 import { recentScans } from "@/lib/scans/view";
 
 const fieldsSchema = z.object({
@@ -68,5 +68,5 @@ export async function GET(request: Request) {
   const denied = await guardApi(request);
   if (denied) return denied;
   recoverScans();
-  return Response.json({ scans: recentScans(20) }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({ scans: recentScans(20, undefined, queueOrder()) }, { headers: { "Cache-Control": "no-store" } });
 }

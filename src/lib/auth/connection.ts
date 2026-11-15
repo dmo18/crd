@@ -54,3 +54,16 @@ export function connectionReport(headers: Headers, settings: { hops: number; app
     visitHost: visitHost ? visitHost.slice(0, MAX_SHOWN) : null,
   };
 }
+
+export const UNKNOWN_ADDRESS_WARNING =
+  "Sign-in limits cannot tell visitors apart: TRUST_PROXY_HOPS is 0 and CLIENT_IP_HEADER is not set, so every visitor counts as the same address (unknown). " +
+  "A stranger making wrong guesses can then pause sign-in for new phones and computers (ones that signed in before still get in). " +
+  "Set CLIENT_IP_HEADER or TRUST_PROXY_HOPS to match your hosting; the More page Connection check shows what the server sees.";
+
+/**
+ * True when the settings make every visitor's address "unknown" in production:
+ * no header is trusted at all. Development is left alone (localhost is fine).
+ */
+export function addressAlwaysUnknown(settings: { nodeEnv: string; hops: number; clientIpHeader?: string }): boolean {
+  return settings.nodeEnv === "production" && settings.hops === 0 && !settings.clientIpHeader;
+}

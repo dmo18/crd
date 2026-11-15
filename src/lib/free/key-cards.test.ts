@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RARITY_TIERS, SPORTS } from "@/db/schema";
-import { findKeyCard, KEY_CARDS, keyCardsFor, normalizeBrand, normalizeCardNumber, normalizeName } from "./key-cards";
+import { findKeyCard, KEY_CARDS, keyCardsFor, matchKeyCard, normalizeBrand, normalizeCardNumber, normalizeName, type KeyCardRead } from "./key-cards";
 
 describe("key card list", () => {
   it("has no repeated cards", () => {
@@ -63,10 +63,28 @@ describe("findKeyCard", () => {
     expect(byName?.cardNumber).toBe("1");
   });
 
-  it("finds the 1986 Fleer Jordan", () => {
+  it("RULE CHANGE: 1986 Fleer basketball cards are rookies by collector convention, with a note about Star", () => {
     const k = findKeyCard({ year: 1986, brand: "FLEER", cardNumber: "57", sport: "basketball" });
     expect(k?.player).toBe("Michael Jordan");
     expect(k?.isRookie).toBe(true);
+    expect(k?.note).toMatch(/earlier Star Company card exists/);
+    for (const c of KEY_CARDS.filter((x) => x.sport === "basketball" && x.year === 1986 && x.brand === "Fleer" && x.setName === "Fleer")) {
+      expect(c.isRookie).toBe(true);
+    }
+  });
+
+  it("has the corrected and added card numbers", () => {
+    expect(findKeyCard({ year: 1988, brand: "Fleer", cardNumber: "43", sport: "basketball" })?.player).toBe("Dennis Rodman");
+    expect(findKeyCard({ year: 1983, brand: "Topps", cardNumber: "83" })?.player).toBe("Ryne Sandberg");
+    expect(findKeyCard({ year: 1983, brand: "Fleer", cardNumber: "507" })?.player).toBe("Ryne Sandberg");
+    expect(findKeyCard({ year: 1983, brand: "Donruss", cardNumber: "277" })?.player).toBe("Ryne Sandberg");
+    expect(findKeyCard({ year: 1993, brand: "Topps", cardNumber: "98" })?.player).toBe("Derek Jeter");
+    expect(findKeyCard({ year: 1993, brand: "Upper Deck", cardNumber: "449" })?.player).toBe("Derek Jeter");
+    expect(findKeyCard({ year: 1994, brand: "Upper Deck", setName: "SP", cardNumber: "15" })?.player).toBe("Alex Rodriguez");
+    expect(findKeyCard({ year: 1992, brand: "Bowman", cardNumber: "302" })?.player).toBe("Mariano Rivera");
+    expect(findKeyCard({ year: 1984, brand: "Fleer", cardNumber: "U-43" })?.player).toBe("Dwight Gooden");
+    expect(findKeyCard({ year: 1988, brand: "O-Pee-Chee", cardNumber: "66" })?.player).toBe("Brett Hull");
+    expect(findKeyCard({ year: 1986, brand: "Donruss", setName: "Donruss Rookies", cardNumber: "22" })?.player).toBe("Jose Canseco");
   });
 
   it("returns the plain Frank Thomas for 1990 Topps 414 and lists the no name error too", () => {
@@ -89,9 +107,9 @@ describe("findKeyCard", () => {
     expect(findKeyCard({ year: 1984, brand: "Fleer", cardNumber: "U27" })?.player).toBe("Roger Clemens");
   });
 
-  it("falls back to the player when the number is not listed", () => {
-    const k = findKeyCard({ year: 1984, brand: "Donruss", cardNumber: "999", player: "Don Mattingly" });
-    expect(k?.cardNumber).toBe("248");
+  it("does not fall back to the player when a different number was read", () => {
+    expect(findKeyCard({ year: 1984, brand: "Donruss", cardNumber: "999", player: "Don Mattingly" })).toBeNull();
+    expect(findKeyCard({ year: 1984, brand: "Donruss", player: "Don Mattingly" })?.cardNumber).toBe("248");
   });
 
   it("returns null when nothing matches", () => {
@@ -150,5 +168,45 @@ describe("keyCardsFor", () => {
 
   it("uses a single year when no end year is given", () => {
     expect(keyCardsFor({ year: 1989 }).every((k) => k.year === 1989)).toBe(true);
+  });
+});
+
+describe("matchKeyCard", () => {
+  const read = (r: Partial<KeyCardRead>): KeyCardRead => ({ year: null, brand: null, cardNumber: null, players: [], sport: null, ...r });
+
+  it("confirms only when the number and the player agree", () => {
+    const m = matchKeyCard(read({ year: 1989, brand: "Upper Deck", cardNumber: "1", players: ["Ken Griffey Jr."] }));
+    expect(m).toMatchObject({ how: "confirmed", card: { player: "Ken Griffey Jr." } });
+    expect(matchKeyCard(read({ year: 1989, brand: "Upper Deck", cardNumber: "1", players: ["Gregg Olson"] }))).toBeNull();
+    expect(matchKeyCard(read({ year: 1980, brand: "Topps", cardNumber: "140", players: ["Rich Gale"] }))).toBeNull();
+  });
+
+  it("only suggests a card when one of the number or the player is missing", () => {
+    expect(matchKeyCard(read({ year: 1986, brand: "Fleer", cardNumber: "57" }))?.how).toBe("possible");
+    expect(matchKeyCard(read({ year: 1984, brand: "Topps", players: ["Don Mattingly"] }))?.how).toBe("possible");
+  });
+
+  it("refuses a name match when a different number was read", () => {
+    expect(matchKeyCard(read({ year: 1985, brand: "Topps", cardNumber: "3", players: ["Dwight Gooden"] }))).toBeNull();
+  });
+
+  it("refuses a card of another sport", () => {
+    expect(matchKeyCard(read({ year: 1980, brand: "Topps", cardNumber: "140", sport: "baseball" }))).toBeNull();
+    expect(matchKeyCard(read({ year: 1980, brand: "Topps", cardNumber: "140", sport: "hockey" }))?.card.player).toBe("Ray Bourque");
+  });
+
+  it("points at the listed error version without picking it", () => {
+    const thomas = matchKeyCard(read({ year: 1990, brand: "Topps", cardNumber: "414", players: ["Frank Thomas"] }));
+    expect(thomas?.card.isError).toBe(false);
+    expect(thomas?.errorCheck?.variation).toBe("No name on front");
+    const ripken = matchKeyCard(read({ year: 1989, brand: "Fleer", cardNumber: "616", players: ["Bill Ripken"] }));
+    expect(ripken?.errorCheck).toBe(ripken?.card);
+    const griffey = matchKeyCard(read({ year: 1989, brand: "Upper Deck", cardNumber: "1", players: ["Ken Griffey Jr."] }));
+    expect(griffey?.errorCheck).toBeNull();
+  });
+
+  it("uses a set name only when it says more than the brand", () => {
+    expect(matchKeyCard(read({ year: 1993, brand: "Upper Deck", setName: "Upper Deck", cardNumber: "279", players: ["Derek Jeter"] }))?.card.setName).toBe("SP");
+    expect(matchKeyCard(read({ year: 1993, brand: "Upper Deck", setName: "Upper Deck Minor League", cardNumber: "279", players: ["Derek Jeter"] }))).toBeNull();
   });
 });

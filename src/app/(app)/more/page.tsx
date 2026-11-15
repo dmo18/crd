@@ -1,5 +1,6 @@
 import { ChangePassword } from "@/components/more/ChangePassword";
 import { ConnectionCheck } from "@/components/more/ConnectionCheck";
+import { SignOutOthers } from "@/components/more/SignOutOthers";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { Card, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { recognitionMode } from "@/lib/env";
@@ -52,6 +53,8 @@ export default async function MorePage() {
       </Card>
 
       <ChangePassword />
+
+      <SignOutOthers />
 
       <ConnectionCheck />
 

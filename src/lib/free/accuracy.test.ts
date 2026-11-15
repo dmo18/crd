@@ -162,16 +162,16 @@ const CASES: Case[] = [
     },
   },
   {
-    name: "1990 Topps #414 Frank Thomas is confirmed and the no name error is mentioned",
+    name: "1990 Topps #414 Frank Thomas from the back only: matched, and the no name error is left to the owner",
     back: [
       ["N0. 4l4", 0.04, 0.05, 0.2, 0.04, 0.6],
       ["FRANK THOMAS", 0.08, 0.3, 0.5, 0.04, 0.85],
       ["© 1990 THE TOPPS COMPANY, INC.", 0.95, 0.1, 0.8, 0.02, 0.8],
     ],
     check: (i) => {
-      expect(i).toMatchObject({ player: "Frank Thomas", cardNumber: "414", isRookie: true, isError: false });
-      expect(i.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
-      expect(i.notes).toMatch(/No name on front/);
+      expect(i).toMatchObject({ player: "Frank Thomas", cardNumber: "414", isRookie: true, isError: false, rarityTier: "key" });
+      expect(i.confidence).toBeLessThan(REVIEW_THRESHOLD);
+      expect(i.notes).toMatch(/Check whether this is the error version: No name on front/);
     },
   },
   {
@@ -302,8 +302,9 @@ const CASES: Case[] = [
       ["© 1986 FLEER CORP.", 0.95, 0.1, 0.8, 0.02, 0.7],
     ],
     check: (i) => {
-      expect(i).toMatchObject({ player: "Michael Jordan", isRookie: false, rarityTier: "grail" });
-      expect(i.rarityNotes).toMatch(/earlier Star Company rookie exists/);
+      // Collectors count the 1986 Fleer card as Jordan's rookie card.
+      expect(i).toMatchObject({ player: "Michael Jordan", isRookie: true, rarityTier: "grail" });
+      expect(i.rarityNotes).toMatch(/earlier Star Company card exists/);
     },
   },
   {

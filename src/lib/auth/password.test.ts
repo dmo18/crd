@@ -5,7 +5,7 @@ import { ownerSettings } from "@/db/schema";
 import { resetEnvCache } from "@/lib/env";
 import { sessionIsCurrent } from "./guard";
 import {
-  BCRYPT_COST, changeOwnerPassword, checkOwnerPassword, createOwnerPassword, currentSessionVersion, hashNewPassword,
+  BCRYPT_COST, bumpSessionVersion, changeOwnerPassword, checkOwnerPassword, createOwnerPassword, currentSessionVersion, hashNewPassword,
   newPasswordProblem, passwordSource, setupAvailable, setupCodeMatches, verifyPassword,
 } from "./password";
 
@@ -134,5 +134,29 @@ describe("new passwords", () => {
     const hash = await hashNewPassword("a-long-new-password-1");
     expect(hash).toMatch(/^\$2[aby]\$12\$/);
     expect(await bcrypt.compare("a-long-new-password-1", hash)).toBe(true);
+  });
+});
+
+describe("sign out all other devices", () => {
+  it("works with the password in the server settings, kept in the database", async () => {
+    const db = createDb(":memory:");
+    expect(currentSessionVersion(db)).toBe(0);
+    expect(bumpSessionVersion(0, db)).toBe(1);
+    expect(currentSessionVersion(db)).toBe(1);
+    expect(await checkOwnerPassword("test-password", db)).toBe(1);
+    expect(sessionIsCurrent({ owner: true, version: 0 }, currentSessionVersion(db))).toBe(false);
+    // A stale version changes nothing.
+    expect(bumpSessionVersion(0, db)).toBeNull();
+    expect(bumpSessionVersion(1, db)).toBe(2);
+    expect(currentSessionVersion(db)).toBe(2);
+  });
+  it("works with the password saved in the database and keeps the password", async () => {
+    withEnv({ OWNER_PASSWORD_HASH_B64: undefined });
+    const db = createDb(":memory:");
+    expect(bumpSessionVersion(1, db)).toBeNull();
+    createOwnerPassword(fastHash("first-password-123456"), db);
+    expect(bumpSessionVersion(1, db)).toBe(2);
+    expect(await checkOwnerPassword("first-password-123456", db)).toBe(2);
+    expect(bumpSessionVersion(1, db)).toBeNull();
   });
 });

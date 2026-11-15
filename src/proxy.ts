@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { SESSION_COOKIE, sessionCookieLooksValid } from "@/lib/auth/seal";
 import { env } from "@/lib/env";
 
 const HOST_PATTERN = /^(?:[a-z0-9.-]{1,253}|\[[0-9a-f:.]{2,45}\])(?::\d{1,5})?$/i;
@@ -31,21 +32,75 @@ export function loginUrl(request: { url: string; headers: Headers }, settings: R
   return new URL("/login", request.url);
 }
 
-// Fast, optimistic check only: is there a session cookie at all?
-// The real check (unsealing the cookie) happens in requireOwner and guardApi.
-export function proxy(request: NextRequest) {
-  if (request.cookies.has("crd_session")) return NextResponse.next();
-  if (request.nextUrl.pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "Please sign in." }, { status: 401 });
-  }
+/** Pages anyone may open: sign-in, first-run setup (it shows itself only while no password exists) and the health check. */
+export function isPublicPath(pathname: string): boolean {
+  return /^\/(?:login|setup|api\/health)(?:\/|$)/.test(pathname);
+}
+
+/**
+ * The page's Content Security Policy. Scripts run only with this request's
+ * nonce (Next.js adds it to its own scripts while rendering) or when loaded
+ * by such a script. Styles keep 'unsafe-inline': React style attributes
+ * cannot carry a nonce, and the risk from styles is small.
+ */
+export function contentSecurityPolicy(nonce: string, isDev: boolean): string {
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ""}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' blob: data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+function newNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes));
+}
+
+/**
+ * Runs before every page and API request.
+ *
+ * 1. Turns away anyone without a genuine owner session before the request
+ *    body is read, so strangers cannot make the server hold large uploads.
+ *    The cookie is unsealed and its signature checked here (the proxy runs in
+ *    Node.js, so iron-session works); the session version is still checked
+ *    against the database by requireOwner and guardApi.
+ * 2. Sets a fresh CSP nonce for every page.
+ */
+export async function proxy(request: NextRequest) {
   const e = env();
-  return NextResponse.redirect(loginUrl(request, { appOrigin: e.APP_ORIGIN, nodeEnv: e.NODE_ENV }));
+  const nonce = newNonce();
+  const csp = contentSecurityPolicy(nonce, e.NODE_ENV === "development");
+
+  if (!isPublicPath(request.nextUrl.pathname)) {
+    const signedIn = await sessionCookieLooksValid(request.cookies.get(SESSION_COOKIE)?.value, e.SESSION_SECRET);
+    if (!signedIn) {
+      const denied = request.nextUrl.pathname.startsWith("/api/")
+        ? NextResponse.json({ error: "Please sign in." }, { status: 401 })
+        : NextResponse.redirect(loginUrl(request, { appOrigin: e.APP_ORIGIN, nodeEnv: e.NODE_ENV }));
+      denied.headers.set("Content-Security-Policy", csp);
+      return denied;
+    }
+  }
+
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set("Content-Security-Policy", csp);
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set("Content-Security-Policy", csp);
+  return response;
 }
 
 export const config = {
   matcher: [
-    // Everything except the sign-in page, first-run setup (it shows itself only
-    // while no password exists), the public health check and static files.
-    "/((?!login|setup|api/health|_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|icons/).*)",
+    // Everything except static files. Sign-in, setup and the health check
+    // pass through for the CSP header only (see isPublicPath).
+    "/((?!_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|icons/).*)",
   ],
 };

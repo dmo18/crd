@@ -238,7 +238,7 @@ export const authState = sqliteTable("auth_state", {
 export const playerFacts = sqliteTable("player_facts", {
   /** Lowercased name with spaces collapsed, plus the sport when known, e.g. "frank thomas|baseball". */
   key: text("key").primaryKey(),
-  /** JSON of PlayerFacts, or null when nothing was found (so misses are cached too). */
+  /** JSON array of candidate PlayerFacts, re-ranked by card year on each use; null when nothing was found (misses are cached too). */
   facts: text("facts"),
   fetchedAt: ts("fetched_at").notNull(),
 });

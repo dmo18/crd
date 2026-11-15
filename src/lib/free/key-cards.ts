@@ -19,8 +19,10 @@ import type { RarityTier, Sport } from "@/db/schema";
  *   of the season).
  *
  * Card numbers are written as printed: "98T" for Topps Traded, "U-27" for Fleer Update.
- * isRookie is false when an earlier true rookie card exists, for example a Star
- * Company basketball card or a USFL football card.
+ * isRookie follows collector convention: 1986 Fleer basketball counts as the
+ * rookie card even though Star Company cards came first. It is false when an
+ * earlier card that collectors treat as the rookie exists, for example a USFL
+ * football card or the 1985 Topps Olympic McGwire.
  * Left out for now because the card number was not certain: the 1980 Topps
  * basketball Bird, Erving and Magic panel.
  */
@@ -164,18 +166,18 @@ export const KEY_CARDS: readonly KeyCard[] = [
 
   // Basketball
   card(K, 1984, "Star", "Star", "101", "Michael Jordan", "key", "First Jordan card, sold only in team bags."),
-  card(K, 1986, "Fleer", "Fleer", "57", "Michael Jordan", "grail", "The best known basketball card of the era. First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer Stickers", "8", "Michael Jordan", "key", "Sticker found one per 1986 Fleer pack. First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "7", "Charles Barkley", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "82", "Hakeem Olajuwon", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "32", "Patrick Ewing", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "68", "Karl Malone", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "26", "Clyde Drexler", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "121", "Dominique Wilkins", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "109", "Isiah Thomas", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "131", "James Worthy", "star", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "27", "Joe Dumars", "star", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
-  card(K, 1986, "Fleer", "Fleer", "77", "Chris Mullin", "star", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "57", "Michael Jordan", "grail", "The best known basketball card of the era. Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer Stickers", "8", "Michael Jordan", "key", "Sticker found one per 1986 Fleer pack. An insert, not a rookie card.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "7", "Charles Barkley", "key", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "82", "Hakeem Olajuwon", "key", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "32", "Patrick Ewing", "key", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "68", "Karl Malone", "key", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "26", "Clyde Drexler", "key", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "121", "Dominique Wilkins", "key", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "109", "Isiah Thomas", "key", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "131", "James Worthy", "star", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "27", "Joe Dumars", "star", "Rookie card as collectors count it; an earlier Star Company card exists."),
+  card(K, 1986, "Fleer", "Fleer", "77", "Chris Mullin", "star", "Rookie card as collectors count it; an earlier Star Company card exists."),
   card(K, 1987, "Fleer", "Fleer", "59", "Michael Jordan", "key", "Second year Fleer card of Jordan.", { rookie: false }),
   card(K, 1988, "Fleer", "Fleer", "20", "Scottie Pippen", "key", "Rookie card from the 1988 Fleer set."),
   card(K, 1988, "Fleer", "Fleer", "57", "Reggie Miller", "star", "Rookie card from the 1988 Fleer set."),

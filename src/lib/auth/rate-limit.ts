@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import { and, count, desc, eq, gte, lt } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { loginAttempts, type AttemptKind } from "@/db/schema";
 
@@ -14,9 +14,19 @@ export const MAX_FAILS_PER_IP = 5;
 export const LONG_WINDOW_MS = 24 * HOUR;
 export const LONG_LOCK_MS = 24 * HOUR;
 export const MAX_FAILS_PER_IP_LONG = 10;
-/** Everyone together: this many failures in 15 minutes pause sign-in for all. */
+/**
+ * Everyone together: this many failures in 15 minutes pause sign-in for all.
+ * Each network counts for at most MAX_FAILS_PER_IP of them, where an IPv6
+ * network is a whole /48 (one person can easily hold many /64s) and an IPv4
+ * address is its own network. A browser holding a trusted-device cookie is
+ * never paused by this.
+ */
 export const GLOBAL_WINDOW_MS = 15 * MINUTE;
 export const MAX_FAILS_GLOBAL = 300;
+/** A trusted device (signed in before) gets only its own, roomier limit. */
+export const DEVICE_WINDOW_MS = 15 * MINUTE;
+export const DEVICE_LOCK_MS = 15 * MINUTE;
+export const MAX_FAILS_PER_DEVICE = 10;
 /** Rows older than this are deleted now and then. */
 export const KEEP_ATTEMPTS_MS = 30 * 24 * HOUR;
 export const PRUNE_EVERY = 100;
@@ -102,14 +112,23 @@ export function clientIp(headers: Headers, hops: number, headerName?: string): s
   return limitKey(pick);
 }
 
-export type Lock = "short" | "long" | "global";
+/**
+ * The wider network a limit key belongs to, for the shared (global) count:
+ * an IPv6 /64 key becomes its /48, anything else stays as it is.
+ */
+export function networkKey(ip: string): string {
+  const m = /^([0-9a-f]{1,4}):([0-9a-f]{1,4}):([0-9a-f]{1,4}):[0-9a-f]{1,4}::\/64$/.exec(ip);
+  return m ? `${m[1]}:${m[2]}:${m[3]}::/48` : ip;
+}
+
+export type Lock = "short" | "long" | "global" | "device";
 
 /** Failures from one address, newest first, at most `limit`, since `since`. */
 function recentFailures(db: Db, ip: string, since: Date, limit: number): Date[] {
   return db
     .select({ at: loginAttempts.createdAt })
     .from(loginAttempts)
-    .where(and(eq(loginAttempts.ip, ip), eq(loginAttempts.success, false), gte(loginAttempts.createdAt, since)))
+    .where(and(eq(loginAttempts.ip, ip), isNull(loginAttempts.deviceId), eq(loginAttempts.success, false), gte(loginAttempts.createdAt, since)))
     .orderBy(desc(loginAttempts.createdAt), desc(loginAttempts.id))
     .limit(limit)
     .all()
@@ -133,12 +152,39 @@ export function currentLock(ip: string, db: Db = getDb(), now: Date = new Date()
   const longFails = recentFailures(db, ip, new Date(now.getTime() - LONG_WINDOW_MS - LONG_LOCK_MS), MAX_FAILS_PER_IP_LONG);
   if (lockedBy(longFails, MAX_FAILS_PER_IP_LONG, LONG_WINDOW_MS, LONG_LOCK_MS, now)) return "long";
   if (lockedBy(longFails, MAX_FAILS_PER_IP, SHORT_WINDOW_MS, SHORT_LOCK_MS, now)) return "short";
-  const [all] = db
-    .select({ n: count() })
+  return globalFailures(db, now) >= MAX_FAILS_GLOBAL ? "global" : null;
+}
+
+/** Recent failures from visitors without a trusted device, each network capped at MAX_FAILS_PER_IP. */
+export function globalFailures(db: Db = getDb(), now: Date = new Date()): number {
+  const net = sql<string>`coalesce(${loginAttempts.net}, ${loginAttempts.ip})`;
+  const perNet = db
+    .select({ n: count().as("n") })
     .from(loginAttempts)
-    .where(and(eq(loginAttempts.success, false), gte(loginAttempts.createdAt, new Date(now.getTime() - GLOBAL_WINDOW_MS))))
-    .all();
-  return (all?.n ?? 0) >= MAX_FAILS_GLOBAL ? "global" : null;
+    .where(and(
+      eq(loginAttempts.success, false), isNull(loginAttempts.deviceId),
+      gte(loginAttempts.createdAt, new Date(now.getTime() - GLOBAL_WINDOW_MS)),
+    ))
+    .groupBy(net)
+    .as("per_net");
+  const row = db.select({ total: sql<number>`coalesce(sum(min(${perNet.n}, ${MAX_FAILS_PER_IP})), 0)` }).from(perNet).get();
+  return Number(row?.total ?? 0);
+}
+
+/** The lock for a trusted device: only its own failures count. */
+export function deviceLock(deviceId: string, db: Db = getDb(), now: Date = new Date()): Lock | null {
+  const fails = db
+    .select({ at: loginAttempts.createdAt })
+    .from(loginAttempts)
+    .where(and(
+      eq(loginAttempts.deviceId, deviceId), eq(loginAttempts.success, false),
+      gte(loginAttempts.createdAt, new Date(now.getTime() - DEVICE_WINDOW_MS - DEVICE_LOCK_MS)),
+    ))
+    .orderBy(desc(loginAttempts.createdAt), desc(loginAttempts.id))
+    .limit(MAX_FAILS_PER_DEVICE)
+    .all()
+    .map((r) => r.at);
+  return lockedBy(fails, MAX_FAILS_PER_DEVICE, DEVICE_WINDOW_MS, DEVICE_LOCK_MS, now) ? "device" : null;
 }
 
 /** True when this address, or everyone together, has failed too often recently. */
@@ -148,8 +194,10 @@ export function isRateLimited(ip: string, db: Db = getDb(), now: Date = new Date
 
 export function recordAttempt(
   ip: string, success: boolean, db: Db = getDb(), now: Date = new Date(), kind: AttemptKind = "login",
+  deviceId: string | null = null,
 ): number {
-  return db.insert(loginAttempts).values({ ip, success, kind, createdAt: now }).returning({ id: loginAttempts.id }).get().id;
+  return db.insert(loginAttempts).values({ ip, net: networkKey(ip), deviceId, success, kind, createdAt: now })
+    .returning({ id: loginAttempts.id }).get().id;
 }
 
 /** Deletes sign-in records older than 30 days. Returns how many were removed. */
@@ -170,21 +218,43 @@ export type BeginResult = { ok: true; id: number } | { ok: false; lock: Lock };
  */
 export function beginAttempt(
   ip: string, db: Db = getDb(), now: Date = new Date(), kind: AttemptKind = "login",
+  deviceId: string | null = null,
 ): BeginResult {
   counter.__crdAttemptCalls = ((counter.__crdAttemptCalls ?? 0) + 1) % PRUNE_EVERY;
   const prune = counter.__crdAttemptCalls === 1;
   return db.transaction((tx): BeginResult => {
     const t = tx as unknown as Db;
     if (prune) pruneLoginAttempts(t, now);
-    const lock = currentLock(ip, t, now);
+    // A trusted device skips the per-address and shared limits that strangers
+    // can trigger, and has only its own.
+    const lock = deviceId ? deviceLock(deviceId, t, now) : currentLock(ip, t, now);
     if (lock) return { ok: false, lock };
-    return { ok: true, id: recordAttempt(ip, false, t, now, kind) };
+    return { ok: true, id: recordAttempt(ip, false, t, now, kind, deviceId) };
   }, { behavior: "immediate" });
 }
 
 /** For tests only: makes the next beginAttempt call prune. */
 export function resetPruneCounter(): void {
   counter.__crdAttemptCalls = 0;
+}
+
+/**
+ * Marks a booked attempt as a success and clears the earlier failures of the
+ * same address (and of the same trusted device), so the owner's own typos do
+ * not linger. Failures under "unknown" are kept: that key is shared by every
+ * visitor whose address could not be read.
+ */
+export function succeedAttempt(id: number, db: Db = getDb()): void {
+  db.transaction((tx) => {
+    const row = tx.select({ ip: loginAttempts.ip, deviceId: loginAttempts.deviceId }).from(loginAttempts).where(eq(loginAttempts.id, id)).get();
+    if (!row) return;
+    tx.update(loginAttempts).set({ success: true }).where(eq(loginAttempts.id, id)).run();
+    const same = [];
+    if (row.ip !== "unknown") same.push(and(eq(loginAttempts.ip, row.ip), isNull(loginAttempts.deviceId)));
+    if (row.deviceId) same.push(eq(loginAttempts.deviceId, row.deviceId));
+    if (same.length === 0) return;
+    tx.delete(loginAttempts).where(and(eq(loginAttempts.success, false), ne(loginAttempts.id, id), or(...same))).run();
+  }, { behavior: "immediate" });
 }
 
 /** Marks a booked attempt as a successful sign-in. */

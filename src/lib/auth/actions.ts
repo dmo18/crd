@@ -1,7 +1,7 @@
 "use server";
 
 import bcrypt from "bcryptjs";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getDb } from "@/db";
@@ -9,15 +9,17 @@ import type { AttemptKind } from "@/db/schema";
 import { env } from "@/lib/env";
 import { isOwner } from "./guard";
 import {
-  changeOwnerPassword, checkOwnerPassword, createOwnerPassword, hashNewPassword, MAX_PASSWORD_LENGTH,
-  newPasswordProblem, passwordSource, setupAvailable, setupCodeMatches,
+  bumpSessionVersion, changeOwnerPassword, checkOwnerPassword, createOwnerPassword, currentSessionVersion, hashNewPassword,
+  MAX_PASSWORD_LENGTH, newPasswordProblem, passwordSource, setupAvailable, setupCodeMatches,
 } from "./password";
-import { beginAttempt, clientIp, markAttemptSucceeded, type BeginResult } from "./rate-limit";
+import { beginAttempt, clientIp, succeedAttempt, type BeginResult } from "./rate-limit";
+import { DEVICE_COOKIE, DEVICE_MAX_AGE, newDeviceId, readDevice, sealDevice } from "./seal";
 import { getSession } from "./session";
 
 export type LoginState = { error: string | null };
 export type SetupState = { error: string | null };
 export type ChangePasswordState = { error: string | null; done: boolean };
+export type SignOutOthersState = { error: string | null; done: boolean };
 
 const WRONG_PASSWORD = "Wrong password. Try again.";
 const NO_PASSWORD_YET = "Finish setup first. No password has been set yet.";
@@ -30,10 +32,43 @@ function tooMany(attempt: Extract<BeginResult, { ok: false }>): string {
   return attempt.lock === "long" ? TOO_MANY_LONG : TOO_MANY;
 }
 
-/** Checks the limits and books a failed attempt for this visitor before any secret is checked. */
+/** The id in this browser's trusted-device cookie, when it is valid for the current password. */
+async function trustedDevice(): Promise<string | null> {
+  const raw = (await cookies()).get(DEVICE_COOKIE)?.value;
+  if (!raw) return null;
+  return readDevice(raw, env().SESSION_SECRET, currentSessionVersion());
+}
+
+/**
+ * Checks the limits and books a failed attempt for this visitor before any
+ * secret is checked. A browser that signed in before (trusted-device cookie)
+ * has only its own limit, so strangers cannot lock the owner out.
+ */
 async function book(kind: AttemptKind): Promise<BeginResult> {
   const ip = clientIp(await headers(), env().TRUST_PROXY_HOPS, env().CLIENT_IP_HEADER);
-  return beginAttempt(ip, getDb(), new Date(), kind);
+  return beginAttempt(ip, getDb(), new Date(), kind, await trustedDevice());
+}
+
+/** Gives this browser a trusted-device cookie for 180 days, bound to `version`. Keeps its id when it had one. */
+async function trustThisDevice(version: number): Promise<void> {
+  const jar = await cookies();
+  const raw = jar.get(DEVICE_COOKIE)?.value;
+  // Reuse the id even from a cookie of an older version, so the per-device limit follows the browser.
+  const known = raw ? await readAnyDevice(raw) : null;
+  jar.set(DEVICE_COOKIE, await sealDevice(known ?? newDeviceId(), version, env().SESSION_SECRET), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: env().NODE_ENV === "production",
+    maxAge: DEVICE_MAX_AGE,
+    path: "/",
+  });
+}
+
+async function readAnyDevice(raw: string): Promise<string | null> {
+  const version = currentSessionVersion();
+  if (version === null) return null;
+  // Try the current version and the one before it (a version raised just now).
+  return (await readDevice(raw, env().SESSION_SECRET, version)) ?? (await readDevice(raw, env().SESSION_SECRET, version - 1));
 }
 
 async function signIn(version: number): Promise<void> {
@@ -42,6 +77,7 @@ async function signIn(version: number): Promise<void> {
   session.since = Date.now();
   session.version = version;
   await session.save();
+  await trustThisDevice(version);
 }
 
 const text = z.string().max(MAX_PASSWORD_LENGTH);
@@ -54,11 +90,12 @@ export async function login(_prev: LoginState, formData: FormData): Promise<Logi
 
   const version = await checkOwnerPassword(formData.get("password"));
   if (version === null) return { error: WRONG_PASSWORD };
-  markAttemptSucceeded(attempt.id);
+  succeedAttempt(attempt.id);
   await signIn(version);
   redirect("/");
 }
 
+/** Signs out this browser. Its trusted-device cookie stays, so it is still recognized next time. */
 export async function logout(): Promise<void> {
   const session = await getSession();
   session.destroy();
@@ -86,7 +123,7 @@ export async function setupOwner(_prev: SetupState, formData: FormData): Promise
   const hash = await hashNewPassword(parsed.data.password);
   const version = createOwnerPassword(hash);
   if (version === null) return { error: SETUP_DONE };
-  markAttemptSucceeded(attempt.id);
+  succeedAttempt(attempt.id);
   await signIn(version);
   redirect("/");
 }
@@ -115,7 +152,23 @@ export async function changePassword(_prev: ChangePasswordState, formData: FormD
 
   const version = changeOwnerPassword(source.version, await hashNewPassword(parsed.data.password));
   if (version === null) return { error: "The password was changed somewhere else. Sign in again and retry.", done: false };
-  markAttemptSucceeded(attempt.id);
+  succeedAttempt(attempt.id);
+  await signIn(version);
+  return { error: null, done: true };
+}
+
+/**
+ * Owner only. Signs out every other phone and computer and forgets them as
+ * trusted devices, without changing the password. Works whether the password
+ * is kept in the database or in OWNER_PASSWORD_HASH_B64. This device stays
+ * signed in.
+ */
+export async function signOutOtherDevices(): Promise<SignOutOthersState> {
+  if (!(await isOwner())) return { error: "Please sign in again.", done: false };
+  const current = currentSessionVersion();
+  if (current === null) return { error: "Please sign in again.", done: false };
+  const version = bumpSessionVersion(current);
+  if (version === null) return { error: "Something changed at the same time. Try again.", done: false };
   await signIn(version);
   return { error: null, done: true };
 }

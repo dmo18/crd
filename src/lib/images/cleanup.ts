@@ -69,12 +69,12 @@ export function maybeCleanupPhotos(deps: { db?: Db; now?: Date; marker?: string;
   const marker = deps.marker ?? markerFile();
   const run = (async () => {
     try {
-      const saved = Number((await fs.readFile(marker, "utf8").catch(() => "")).trim());
+      const saved = Number((await fs.readFile(/*turbopackIgnore: true*/ marker, "utf8").catch(() => "")).trim());
       if (Number.isFinite(saved) && saved > 0 && now.getTime() - saved < CLEANUP_EVERY_MS) {
         state.lastRun = saved;
         return 0;
       }
-      await fs.writeFile(marker, String(now.getTime()));
+      await fs.writeFile(/*turbopackIgnore: true*/ marker, String(now.getTime()));
       const removed = await removeOrphanPhotos(deps.db ?? getDb(), deps.dir ?? uploadsDir(), now);
       if (removed > 0) console.info(`photo cleanup removed ${removed} unused files`);
       return removed;
