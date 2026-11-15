@@ -8,6 +8,17 @@ const schema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().optional(),
   RECOGNITION_MODE: z.enum(["auto", "free", "sample", "anthropic"]).default("auto"),
+  /** Public address of the app, e.g. https://cards.example.com (no trailing slash). */
+  APP_ORIGIN: z
+    .url({ protocol: /^https?$/ })
+    .refine((v) => URL.canParse(v) && new URL(v).origin === v, "APP_ORIGIN must be only the address, like https://cards.example.com, with no slash at the end")
+    .optional(),
+  /** How many proxies in front of the app add to X-Forwarded-For (0 to 5). */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+}).superRefine((v, ctx) => {
+  if (v.NODE_ENV === "production" && v.APP_ORIGIN && !v.APP_ORIGIN.startsWith("https://")) {
+    ctx.addIssue({ code: "custom", path: ["APP_ORIGIN"], message: "APP_ORIGIN must start with https:// in production" });
+  }
 });
 
 export type Env = z.infer<typeof schema>;
@@ -18,8 +29,9 @@ let cached: Env | undefined;
 export function env(): Env {
   if (cached) return cached;
   const raw = { ...process.env };
-  if (raw.ANTHROPIC_API_KEY === "") delete raw.ANTHROPIC_API_KEY;
-  if (raw.ANTHROPIC_MODEL === "") delete raw.ANTHROPIC_MODEL;
+  for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "APP_ORIGIN", "TRUST_PROXY_HOPS"]) {
+    if (raw[name]?.trim() === "") delete raw[name];
+  }
   const parsed = schema.safeParse(raw);
   if (!parsed.success) {
     const problems = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
@@ -43,4 +55,9 @@ export function recognitionMode(): "free" | "sample" | "anthropic" {
   if (e.RECOGNITION_MODE === "sample") return "sample";
   if (e.RECOGNITION_MODE === "anthropic") return "anthropic";
   return "free";
+}
+
+/** Host (with port, if any) of APP_ORIGIN, lowercased, or null when unset. */
+export function appOriginHost(e: Pick<Env, "APP_ORIGIN"> = env()): string | null {
+  return e.APP_ORIGIN ? new URL(e.APP_ORIGIN).host.toLowerCase() : null;
 }
