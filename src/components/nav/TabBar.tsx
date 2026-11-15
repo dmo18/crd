@@ -22,7 +22,7 @@ function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(href + "/");
 }
 
-export function TabBar() {
+export function TabBar({ reviewCount = 0 }: { reviewCount?: number }) {
   const pathname = usePathname();
   return (
     <nav
@@ -32,6 +32,7 @@ export function TabBar() {
       <ul className="mx-auto flex max-w-xl items-stretch justify-around px-1">
         {TABS.map((tab) => {
           const active = isActive(pathname, tab.href);
+          const waiting = tab.href === "/review" ? reviewCount : 0;
           return (
             <li key={tab.href} className="flex flex-1 justify-center">
               <Link
@@ -43,8 +44,16 @@ export function TabBar() {
                     : `flex min-h-14 min-w-14 flex-col items-center justify-center gap-0.5 px-2 text-xs font-medium ${active ? "text-accent" : "text-muted"}`
                 }
               >
-                {tab.icon}
+                <span className="relative">
+                  {tab.icon}
+                  {waiting > 0 ? (
+                    <span aria-hidden="true" className="absolute -top-1.5 left-3.5 min-w-5 rounded-full bg-accent px-1 text-center text-[11px] leading-5 font-bold text-accent-text">
+                      {waiting > 99 ? "99+" : waiting}
+                    </span>
+                  ) : null}
+                </span>
                 <span>{tab.label}</span>
+                {waiting > 0 ? <span className="sr-only">, {waiting > 99 ? "more than 99" : waiting} waiting</span> : null}
               </Link>
             </li>
           );

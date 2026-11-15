@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
+import { DuplicateNotice } from "@/components/items/DuplicateNotice";
 import { DeleteItemButton } from "@/components/items/DeleteItemButton";
 import { ItemBadges } from "@/components/items/ItemRow";
 import { ItemForm } from "@/components/items/ItemForm";
@@ -67,6 +68,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
           {location ? ` · Stored in ${location.name}` : ""}
         </p>
       </header>
+
+      <DuplicateNotice itemId={item.id} />
 
       {item.status === "needs_review" ? (
         <div className="flex flex-col gap-3">
