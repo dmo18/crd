@@ -54,7 +54,7 @@ if have ufw; then
         warn "These firewall rules allow more than web traffic from anywhere:"
         while IFS= read -r line; do note "$line"; done <<<"$open_rules"
     fi
-    if ufw status 2>/dev/null | grep -E '^22(/tcp)?[[:space:]]' | grep -q 'DENY IN'; then
+    if ufw status 2>/dev/null | grep -qE '^22(/tcp)? on [^ ]+ +DENY'; then
         pass "SSH (22) is refused on the internet network card"
     else
         warn "No rule refusing SSH on the internet network card"
@@ -108,7 +108,7 @@ fi
 # ---------------------------------------------------------------------------
 section "Listening ports (programs waiting for connections)"
 if have ss; then
-    while read -r proto _ _ local_addr _ process; do
+    while read -r proto _ _ _ local_addr _ process; do
         name="$(sed -n 's/.*(("\([^"]*\)".*/\1/p' <<<"$process")"
         case "$local_addr" in
             127.* | \[::1\]:* | \[::ffff:127.*) where="this server only" ;;
@@ -171,7 +171,7 @@ section "fail2ban"
 if systemctl is-active --quiet fail2ban.service 2>/dev/null; then
     pass "fail2ban is running"
     if f2b="$(fail2ban-client status sshd 2>/dev/null)"; then
-        banned="$(awk -F': *' '/Currently banned/ { print $2 }' <<<"$f2b")"
+        banned="$(awk -F':' '/Currently banned/ { gsub(/[[:space:]]/, "", $2); print $2 }' <<<"$f2b")"
         pass "SSH protection active (addresses banned right now: ${banned:-0})"
     else
         warn "fail2ban runs but the SSH protection (sshd jail) is not active"
@@ -209,14 +209,14 @@ section "Coolify"
 if have docker && docker info >/dev/null 2>&1; then
     pass "Docker is running"
     for c in coolify coolify-db coolify-redis; do
-        state="$(docker inspect -f '{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}}' "$c" 2>/dev/null || true)"
+        state="$(docker container inspect -f '{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}}' "$c" 2>/dev/null || true)"
         case "$state" in
             "running" | "running (healthy)") pass "$c is running" ;;
             "") fail "$c container not found" ;;
-            *) fail "$c is $state" ;;
+            *) fail "$c has a problem: $state (see: sudo docker logs $c)" ;;
         esac
     done
-    state="$(docker inspect -f '{{.State.Status}}' coolify-proxy 2>/dev/null || true)"
+    state="$(docker container inspect -f '{{.State.Status}}' coolify-proxy 2>/dev/null || true)"
     if [ "$state" = "running" ]; then
         pass "coolify-proxy (Traefik, serves your websites) is running"
     else

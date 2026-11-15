@@ -24,7 +24,14 @@ const schema = z.object({
   // Hosting panels may hand over the address with a path or a trailing
   // slash; keep only the origin (scheme, host and port).
   APP_ORIGIN: z
-    .preprocess((v) => (typeof v === "string" && URL.canParse(v.trim()) ? new URL(v.trim()).origin : v), z.string())
+    .preprocess((v) => {
+      if (typeof v !== "string" || !URL.canParse(v.trim())) return v;
+      const url = new URL(v.trim());
+      // Coolify writes the app's internal port (3000) into its generated
+      // address; visitors never use it, so it is dropped for https.
+      if (url.protocol === "https:" && url.port === "3000") url.port = "";
+      return url.origin;
+    }, z.string())
     .pipe(z.url({ protocol: /^https?$/ }))
     .refine((v) => URL.canParse(v) && new URL(v).origin === v, "APP_ORIGIN must be only the address, like https://cards.example.com, with no slash at the end")
     .optional(),

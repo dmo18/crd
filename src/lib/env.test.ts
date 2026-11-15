@@ -96,7 +96,7 @@ describe("APP_ORIGIN from a hosting panel", () => {
   it("keeps only the origin when a trailing slash or path is included", async () => {
     const { env, resetEnvCache } = await import("./env");
     const before = process.env.APP_ORIGIN;
-    for (const [given, expected] of [["https://cards.example.com/", "https://cards.example.com"], ["https://cards.example.com/x/y", "https://cards.example.com"], [" https://cards.example.com ", "https://cards.example.com"]]) {
+    for (const [given, expected] of [["https://cards.example.com/", "https://cards.example.com"], ["https://cards.example.com/x/y", "https://cards.example.com"], [" https://cards.example.com ", "https://cards.example.com"], ["https://cards.example.com:3000", "https://cards.example.com"], ["https://cards.example.com:8443/", "https://cards.example.com:8443"]]) {
       process.env.APP_ORIGIN = given;
       resetEnvCache();
       expect(env().APP_ORIGIN).toBe(expected);

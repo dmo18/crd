@@ -223,9 +223,10 @@ detect_network() {
     [ -n "$PUBLIC_IP" ] || PUBLIC_IP="<server-ip>"
 }
 
+# Installed means the coolify container exists. A half-finished earlier attempt
+# (settings file but no container) is completed by running the installer again.
 coolify_installed() {
-    [ -f "$COOLIFY_ENV" ] && return 0
-    command -v docker >/dev/null 2>&1 && docker inspect coolify >/dev/null 2>&1
+    command -v docker >/dev/null 2>&1 && docker container inspect coolify >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
@@ -793,6 +794,18 @@ install_coolify() {
     if [ "$DRY_RUN" = true ]; then
         ADMIN_PASSWORD="(generated on the real run)"
         info "[dry-run] write $FIRST_LOGIN_FILE (mode 0600) with the generated password"
+    elif [ -s "$FIRST_LOGIN_FILE" ] && [ -f "$COOLIFY_ENV" ]; then
+        # An earlier attempt stopped part way. Coolify's installer keeps the
+        # account details already in its settings file, so reuse the same ones.
+        ADMIN_PASSWORD="$(sed -n 's/^Password: *//p' "$FIRST_LOGIN_FILE" | head -n 1)"
+        local saved_email
+        saved_email="$(sed -n 's/^Email: *//p' "$FIRST_LOGIN_FILE" | head -n 1)"
+        if [ -n "$saved_email" ] && [ "$saved_email" != "$ADMIN_EMAIL" ]; then
+            warn "Using the email from the earlier attempt: $saved_email"
+            ADMIN_EMAIL="$saved_email"
+        fi
+        [ -n "$ADMIN_PASSWORD" ] || die "Could not read the saved password in $FIRST_LOGIN_FILE."
+        info "Continuing an earlier, unfinished Coolify install with the same login"
     else
         ADMIN_PASSWORD="$(gen_password)"
         (
@@ -844,7 +857,7 @@ open_setup_window() {
         SETUP_WINDOW_OPENED=true
         return 0
     fi
-    if ! docker inspect coolify >/dev/null 2>&1; then
+    if ! docker container inspect coolify >/dev/null 2>&1; then
         warn "Coolify is not running, so no setup window was opened."
         return 0
     fi
@@ -899,8 +912,11 @@ EOF
      (Also saved in $FIRST_LOGIN_FILE, readable only by root:
       sudo cat $FIRST_LOGIN_FILE)
 EOF
+        elif [ -s "$FIRST_LOGIN_FILE" ]; then
+            echo "  3. Log in with the email and password saved in $FIRST_LOGIN_FILE:"
+            echo "       sudo cat $FIRST_LOGIN_FILE"
         else
-            echo "  3. Log in with the account you created earlier."
+            echo "  3. Log in with the Coolify account you already have."
         fi
         cat <<EOF
   4. Follow Coolify's welcome steps and choose "This Machine" (localhost) as the server.
