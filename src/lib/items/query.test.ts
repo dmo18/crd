@@ -127,3 +127,12 @@ describe("totals and paging", () => {
     expect(listItems(parse({}), db)).toMatchObject({ rows: [], total: 0, totalUnits: 0, totalValueCents: 0, page: 1, pageCount: 1 });
   });
 });
+
+describe("value=none filter", () => {
+  it("keeps only items with no manual or estimated value", () => {
+    seed();
+    expect(parse({ value: "none" }).value).toBe("none");
+    expect(parse({ value: "x" }).value).toBeUndefined();
+    expect(titles({ value: "none", sort: "title" }).sort()).toEqual(["Alpha", "Brady Topps", "Zed"]);
+  });
+});

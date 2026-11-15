@@ -188,6 +188,15 @@ export const loginAttempts = sqliteTable("login_attempts", {
   createdAt: ts("created_at").notNull().default(now),
 }, (t) => [index("login_attempts_ip_idx").on(t.ip, t.createdAt)]);
 
+/** Facts about players from Wikidata (free, no key), cached so each name is looked up once. */
+export const playerFacts = sqliteTable("player_facts", {
+  /** Lowercased name with spaces collapsed, plus the sport when known, e.g. "frank thomas|baseball". */
+  key: text("key").primaryKey(),
+  /** JSON of PlayerFacts, or null when nothing was found (so misses are cached too). */
+  facts: text("facts"),
+  fetchedAt: ts("fetched_at").notNull(),
+});
+
 export type Item = typeof items.$inferSelect;
 export type NewItem = typeof items.$inferInsert;
 export type Scan = typeof scans.$inferSelect;

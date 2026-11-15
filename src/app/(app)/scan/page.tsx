@@ -13,7 +13,7 @@ export default async function ScanPage() {
   const options = getDb().select({ id: locations.id, name: locations.name }).from(locations).orderBy(asc(locations.name)).all();
   return (
     <>
-      <PageHeader title="Scan" subtitle="Photograph what you have and the AI will identify and value it." />
+      <PageHeader title="Scan" subtitle="The app reads the card and files it. Add values from sold listings." />
       <ScanFlow rules={PHOTO_RULES} locations={options} />
     </>
   );

@@ -6,8 +6,7 @@ export function SoldLinks({ item }: { item: Item }) {
   const links = soldListingLinks(item);
   if (links.length === 0) return null;
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="text-lg font-semibold">Check real sold prices</h2>
+    <div className="flex flex-col gap-2">
       <ul className="flex flex-col gap-2">
         {links.map((link) => (
           <li key={link.label}>
@@ -22,7 +21,7 @@ export function SoldLinks({ item }: { item: Item }) {
           </li>
         ))}
       </ul>
-      <p className="text-xs text-muted">These open other websites. Sold prices are the best guide to what a card is really worth.</p>
-    </section>
+      <p className="text-xs text-muted">These open other websites. Recent sold prices are the best guide to what a card is really worth.</p>
+    </div>
   );
 }

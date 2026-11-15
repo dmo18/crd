@@ -2,6 +2,7 @@ import { asc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { GradingAdvice } from "@/components/items/GradingAdvice";
 import { SoldLinks } from "@/components/items/SoldLinks";
+import { QuickValue } from "@/components/items/QuickValue";
 import { ValueTools } from "@/components/items/ValueTools";
 import { DuplicateNotice } from "@/components/items/DuplicateNotice";
 import { DeleteItemButton } from "@/components/items/DeleteItemButton";
@@ -13,7 +14,9 @@ import { images, items, locations } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction } from "@/lib/items/actions";
 import { confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
+import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
+import { recognitionMode } from "@/lib/env";
 import { effectiveValueCents, formatCents } from "@/lib/money";
 
 export const metadata = { title: "Item" };
@@ -35,6 +38,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     : db.select().from(locations).where(eq(locations.id, item.locationId)).get();
 
   const value = effectiveValueCents(item);
+  const mode = recognitionMode();
+  const hasLinks = soldListingLinks(item).length > 0;
   const source = item.manualValueCents != null ? "manual" : item.valueSource;
   const hasRange = item.estLowCents != null && item.estHighCents != null;
   const pulls = parsePullList(item.pullList);
@@ -89,15 +94,31 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
       <Card className="flex flex-col gap-1">
         <h2 className="text-sm font-semibold text-muted">Value</h2>
         <p className="text-3xl font-bold">{formatCents(value)}</p>
-        {hasRange ? <p className="text-sm">Range: {formatCents(item.estLowCents)} to {formatCents(item.estHighCents)}</p> : null}
+        {value == null ? <p className="text-sm">Use Find the value below.</p> : null}
+        {value != null && hasRange ? <p className="text-sm">Range: {formatCents(item.estLowCents)} to {formatCents(item.estHighCents)}</p> : null}
         {source ? <p className="text-sm text-muted">Source: {VALUE_SOURCE_LABELS[source]}</p> : null}
         {item.valueBasis ? <p className="text-sm">{item.valueBasis}</p> : null}
         <p className="pt-1 text-xs text-muted">Estimates are a guide, not an appraisal.</p>
-        <ValueTools itemId={item.id} />
+        {mode === "free" ? null : <ValueTools itemId={item.id} />}
       </Card>
 
       <GradingAdvice item={item} />
-      <SoldLinks item={item} />
+      <Card className="flex flex-col gap-3">
+        <h2 className="text-lg font-semibold">Find the value</h2>
+        {hasLinks ? (
+          <>
+            <ol className="list-none text-sm text-muted">
+              <li>1. Tap a sold listings link.</li>
+              <li>2. Look at recent sold prices for the same card in similar condition.</li>
+              <li>3. Type a typical price here.</li>
+            </ol>
+            <SoldLinks item={item} />
+            <QuickValue itemId={item.id} />
+          </>
+        ) : (
+          <QuickValue itemId={item.id} help="Enter what you think the whole lot is worth." />
+        )}
+      </Card>
 
       {item.kind === "sealed" ? <Notice tone="accent">Keep it sealed. Sealed product is usually worth more unopened.</Notice> : null}
 
