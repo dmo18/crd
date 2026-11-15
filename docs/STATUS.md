@@ -21,6 +21,19 @@
 - Not verified: everything on a real Hyper-V machine (auditd rules load,
   Cloudflare browser SSH certificates, Access path bypass for webhooks,
   live tunnel, Telegram/Discord delivery, AVIF display on phones).
+- Final security review: no critical or high. Fixed: the agent can no
+  longer mute or imitate system alerts (own labelled agent-send command
+  and budget; agent and grant alerts are never held back; held-back alerts
+  no longer count as sent), restore-files only into a root-owned restore
+  area, snapshot volume paths validated, a warning when the newest backup
+  looks too old, grants cannot answer restart questions, better secret
+  removal in help reports, the webhook route anchored. Accepted with
+  advice in the guide: protecting backups from a taken-over server needs
+  snapshots or add-only access on the backup server itself; the setup
+  downloads the current main branch (no release tag yet). The backup end
+  to end suite was not re-run after the restore path change (direct rule
+  check done); auditd only logs the agent's own-account commands, its
+  sudo commands are in the sudo session recordings.
 - Known issue: one full test run failed once while three builders ran heavy
   tests in parallel; not reproduced in 8 later runs. Likely a timing
   sensitive test under load; not yet pinned down.

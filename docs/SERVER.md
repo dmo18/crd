@@ -79,7 +79,7 @@ these **in this order**:
 
 | # | Subdomain | Path | Type | URL | Protect with Access |
 |---|---|---|---|---|---|
-| 0 | `admin` | `^/webhooks/source/github/events` | HTTP | `127.0.0.1:8000` | no |
+| 0 | `admin` | `^/webhooks/source/github/events(/manual)?$` | HTTP | `127.0.0.1:8000` | no |
 | 1 | `admin` | `^/app/` | HTTP | `127.0.0.1:6001` | Server dashboard |
 | 2 | `admin` | `^/terminal/ws` | HTTP | `127.0.0.1:6002` | Server dashboard |
 | 3 | `admin` | (empty) | HTTP | `127.0.0.1:8000` | Server dashboard |
@@ -132,6 +132,12 @@ restored.** Then run `sudo server-backup run` once and check
 `sudo server-backup status` says it worked.
 Backups run nightly at about 02:30, keep 7 daily, 4 weekly and 12 monthly
 copies, and are checked for damage weekly.
+
+Protect the backups from the server itself: if the server were ever taken
+over, it could delete its own backups. On your backup server, turn on its
+own snapshots or versioning (most NAS and hosting panels have it), or give
+the backup account permission to add files but not delete them. Restores
+also warn you if the newest backup looks older than it should.
 
 ## 9. Secure the Coolify dashboard
 1. Open `https://admin.yourdomain.com`, pass the Cloudflare sign-in, sign

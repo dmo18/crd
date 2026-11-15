@@ -2677,7 +2677,7 @@ Cmnd_Alias OPS_AGENT_LIST = /usr/bin/docker ps, /usr/bin/docker ps -a, \\
     /usr/sbin/ufw status, /usr/sbin/ufw status verbose, /usr/sbin/ufw status numbered, \\
     /usr/bin/fail2ban-client status, /usr/bin/fail2ban-client status sshd, \\
     $GUARD_BIN status
-Cmnd_Alias OPS_AGENT_TELL = $ALERT_BIN send *, \\
+Cmnd_Alias OPS_AGENT_TELL = $ALERT_BIN agent-send *, \\
     $NOTE_BIN *
 
 $AGENT_USER ALL=(root) NOPASSWD: OPS_AGENT_CHECK, OPS_AGENT_BACKUP, OPS_AGENT_LOGS, OPS_AGENT_LIST, OPS_AGENT_TELL
@@ -2939,8 +2939,14 @@ def file_secrets():
 
 SECRET_WORDS = (r"password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|"
                 r"private[_-]?key|client[_-]?secret|credential|auth[_-]?key|session[_-]?key|"
-                r"app[_-]?key|signature|webhook[_-]?url")
+                r"app[_-]?key|signature|webhook[_-]?url|setup[_-]?code")
 PATTERNS = [
+    # Space separated forms: --password X, -pX, token X, REDIS_PASSWORD X
+    (re.compile(r"(?i)(--?(?:password|passwd|pass|token|secret|api-?key|key)\s+)(?!\[REDACTED)(\S+)"), r"\1" + "[REDACTED]"),
+    (re.compile(r"(?<![\w-])(-p)(?!\[REDACTED)(\S{4,})"), r"\1" + "[REDACTED]"),
+    (re.compile(r"(?i)\b([A-Z0-9_]*(?:PASSWORD|TOKEN|SECRET|PASSPHRASE)[A-Z0-9_]*)(\s+)(?!\[REDACTED)(\S+)"), r"\1\2" + "[REDACTED]"),
+    # Quoted values with spaces after a secret word
+    (re.compile(r"(?i)\b([A-Za-z0-9_.-]*(?:password|passphrase|secret|token)[A-Za-z0-9_.-]*\s*[:=]\s*)([\"'])(.*?)\2"), r"\1\2" + "[REDACTED]" + r"\2"),
     (re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)", re.S),
      "[REDACTED PRIVATE KEY]"),
     (re.compile(r"(?i)\b(authorization|proxy-authorization)(\s*[:=]\s*)(bearer|basic|token|bot)?\s*(?!\[REDACTED)[^\s\"',;]+"),
@@ -3210,19 +3216,22 @@ record_sent() {
 
 valid_key() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$ ]]; }
 
-# Deliver one alert (already cleaned). Exit codes: 0 sent or held back on
-# purpose, 1 delivery failed, 3 alerts are not set up.
+# Deliver one alert (already cleaned). Exit codes: 0 sent, 1 delivery failed,
+# 3 alerts are not set up, 4 held back on purpose (cooldown or hourly limit).
+# Alerts about the AI agent (its sudo use and approved commands) are never
+# held back, so nothing can be used to silence them.
 deliver() {
-    local key="$1" sev="$2" title="$3" body="$4" n
-    if in_cooldown "$key"; then
+    local key="$1" sev="$2" title="$3" body="$4" n always=false
+    case "$key" in agent-sudo | agent-sudo-* | grant-*) always=true ;; esac
+    if [ "$always" = false ] && in_cooldown "$key"; then
         say "Not sent: the same alert ($key) was already sent in the last 6 hours."
-        return 0
+        return 4
     fi
     n="$(sent_last_hour)"
-    if [ "$n" -ge "$MAX_PER_HOUR" ]; then
+    if [ "$always" = false ] && [ "$n" -ge "$MAX_PER_HOUR" ]; then
         log "held back ($n alerts in the last hour): $sev: $title" warning
         say "Not sent: already $n alerts in the last hour (limit $MAX_PER_HOUR)."
-        return 0
+        return 4
     fi
     if ! read_config; then
         log "not sent (alerts are not set up; run: sudo server-alert setup): $sev: $title" warning
@@ -3263,7 +3272,40 @@ cmd_send() {
     fi
     valid_key "$key" || die "The key may only have letters, digits, dot, dash and underscore"
     state_init
-    deliver "$key" "$sev" "$title" "$body"
+    local rc=0
+    deliver "$key" "$sev" "$title" "$body" || rc=$?
+    [ "$rc" -eq 4 ] && return 0
+    return "$rc"
+}
+
+# Messages from the AI agent: always labelled, their own small hourly budget,
+# their own keys, and never counted against (or able to delay) system alerts.
+AGENT_MAX_PER_HOUR=4
+cmd_agent_send() {
+    [ $# -eq 3 ] || die 'Usage: server-alert agent-send <info|warning|critical> "<title>" "<message>"'
+    local sev="$1" title body key n now
+    case "$sev" in info | warning | critical) ;; *) die "Severity must be info, warning or critical" ;; esac
+    title="[from the AI agent] $(clean_text "$2" | tr '\n' ' ')"
+    body="$(clean_text "$3")"
+    [ "${#title}" -le 230 ] || die "The title must be at most 200 characters"
+    [ "${#body}" -le 3000 ] || die "The message must be at most 3000 characters"
+    state_init
+    now="$(date +%s)"
+    n=0
+    [ -f "$STATE/agent-sent.log" ] && n="$(awk -v c="$((now - 3600))" '$1 > c' "$STATE/agent-sent.log" | grep -c . || true)"
+    [ "$n" -lt "$AGENT_MAX_PER_HOUR" ] || die "The AI agent already sent $n messages in the last hour (limit $AGENT_MAX_PER_HOUR)."
+    key="agentmsg-$(printf '%s|%s' "$sev" "$title" | sha256sum | cut -c1-16)"
+    in_cooldown "$key" && { say "Not sent: the same message was sent in the last 6 hours."; return 0; }
+    read_config || die "Alerts are not set up yet."
+    if post_message "$(format_message "$sev" "$title" "$body")"; then
+        mark_sent "$key"
+        printf '%s\n' "$now" >>"$STATE/agent-sent.log"
+        log "agent message sent to $PROVIDER: $sev: $title"
+        say "Sent to $PROVIDER."
+        return 0
+    fi
+    log "agent message failed: $sev: $title" err
+    return 1
 }
 
 # ---------------------------------------------------------------- setup
@@ -3698,6 +3740,7 @@ case "${1:-}" in
     watch) cmd_watch ;;
     digest) shift; cmd_digest "${1:-}" ;;
     send) need_root send; shift; cmd_send "$@" ;;
+    agent-send) need_root agent-send; shift; cmd_agent_send "$@" ;;
     -h | --help | help | "") sed -n '2,/^set -euo/p' "$0" | sed -e '/^set -euo/d' -e 's/^# \{0,1\}//' ;;
     *) echo "Unknown command: $1 (try: server-alert --help)" >&2; exit 2 ;;
 esac
@@ -4217,7 +4260,9 @@ parse_command() {
     case "${words[0]##*/}" in
         server-update)
             case "${words[*]:1}" in
-                "" | "--yes") CMD=(/usr/local/sbin/server-update "${words[@]:1}") ;;
+                # Only --yes: it never restarts the server, so the agent cannot
+                # answer a restart question on the owner's behalf.
+                "--yes") CMD=(/usr/local/sbin/server-update --yes) ;;
                 *) return 1 ;;
             esac ;;
         server-backup)
@@ -4267,7 +4312,7 @@ remove_grant() {
 
 cmd_grant() {
     local text="$1" dur="$2" minutes id expires stage rule answer
-    parse_command "$text" || die "This command cannot be granted: \"$text\". Allowed: server-update, server-update --yes, server-backup restore-files ..., systemctl restart <service>, reboot. Everything else you run yourself."
+    parse_command "$text" || die "This command cannot be granted: \"$text\". Allowed: server-update --yes, server-backup restore-files ..., systemctl restart <service>, reboot. Everything else you run yourself."
     minutes="$(to_minutes "$dur")" || die "The time must be like 15m, 30m or 2h (at most 4h)."
     id="$(date +%Y%m%d%H%M%S)$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
     expires=$(( $(date +%s) + minutes * 60 ))

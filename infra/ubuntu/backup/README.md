@@ -93,7 +93,7 @@ This never touches the live server. Files come back into a separate folder.
 sudo server-backup restore-files                      asks what to restore, from the newest backup
 sudo server-backup restore-files --volume abc123_cardvault-data
 sudo server-backup restore-files --snapshot 1a2b3c4d /data/coolify/proxy
-sudo server-backup restore-files --target /root/restored /etc/cloudflared
+sudo server-backup restore-files --target /var/lib/server-backup/restores/tunnel /etc/cloudflared
 ```
 
 The files appear under `/var/lib/server-backup/restored-<date>/` (or your

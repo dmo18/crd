@@ -64,7 +64,7 @@ may be made, an alert sent and a note written.
 | `sudo docker-port-guard status` | Container port block rules |
 | `sudo server-lynis show` | Last security audit score and warnings |
 | `sudo server-alert status` | Whether alerts are set up, the last alert |
-| `sudo server-alert send <info\|warning\|critical> "<title>" "<message>"` | Message the owner's phone |
+| `sudo server-alert agent-send <info\|warning\|critical> "<title>" "<message>"` | Message the owner's phone |
 | `sudo server-note "<what you did>"` | Adds a line to `/var/log/ops-agent-notes.log` |
 
 Anything else with sudo is refused. You are not in the `docker` group and
@@ -179,7 +179,7 @@ Run `sudo server-check`, find the matching WARN or FAIL, and explain it.
 ## Escalating to the owner
 
 - Urgent (site down, backup failing, disk above 95 percent, anything that
-  looks like an attack): `sudo server-alert send critical "<title>" "<what, since when, what you suggest>"`.
+  looks like an attack): `sudo server-alert agent-send critical "<title>" "<what, since when, what you suggest>"`.
 - Otherwise tell the owner in the conversation.
 - When you are unsure: say so, show the evidence, and suggest that the owner
   runs `sudo server-support` and pastes the file to Claude for a second look.

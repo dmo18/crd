@@ -264,13 +264,14 @@ main() {
     in_ "$A" 'rm -rf /tmp/full'
 
     say_step "restore-files on A"
-    in_ "$A" 'server-backup restore-files --volume otherapp-data --target /root/got' >"$LOG_DIR/$MODE-rf.log" 2>&1 && ok "restore-files --volume" || bad "restore-files --volume"
-    expect "restore-files: file content back" in_ "$A" 'grep -q "hello from otherapp" /root/got/var/lib/docker/volumes/otherapp-data/_data/sub/hello.txt'
-    expect "restore-files: owner and mode kept" in_ "$A" '[[ $(stat -c "%u %a" /root/got/var/lib/docker/volumes/otherapp-data/_data/sub) == "70 750" ]]'
-    in_ "$A" 'server-backup restore-files --target /root/got2 /etc/cloudflared' >>"$LOG_DIR/$MODE-rf.log" 2>&1 && ok "restore-files PATH" || bad "restore-files PATH"
-    expect "restore-files: token file back" in_ "$A" 'grep -q SERVER-A /root/got2/etc/cloudflared/tunnel-token'
-    expect "restore-files refuses a non-empty target" bash -c "! docker exec $A server-backup restore-files --target /root/got /etc/cloudflared"
+    in_ "$A" 'server-backup restore-files --volume otherapp-data --target /var/lib/server-backup/restores/got' >"$LOG_DIR/$MODE-rf.log" 2>&1 && ok "restore-files --volume" || bad "restore-files --volume"
+    expect "restore-files: file content back" in_ "$A" 'grep -q "hello from otherapp" /var/lib/server-backup/restores/got/var/lib/docker/volumes/otherapp-data/_data/sub/hello.txt'
+    expect "restore-files: owner and mode kept" in_ "$A" '[[ $(stat -c "%u %a" /var/lib/server-backup/restores/got/var/lib/docker/volumes/otherapp-data/_data/sub) == "70 750" ]]'
+    in_ "$A" 'server-backup restore-files --target /var/lib/server-backup/restores/got2 /etc/cloudflared' >>"$LOG_DIR/$MODE-rf.log" 2>&1 && ok "restore-files PATH" || bad "restore-files PATH"
+    expect "restore-files: token file back" in_ "$A" 'grep -q SERVER-A /var/lib/server-backup/restores/got2/etc/cloudflared/tunnel-token'
+    expect "restore-files refuses a non-empty target" bash -c "! docker exec $A server-backup restore-files --target /var/lib/server-backup/restores/got /etc/cloudflared"
     expect "restore-files refuses /" bash -c "! docker exec $A server-backup restore-files --target / /etc/cloudflared"
+    expect "restore-files refuses folders outside its restore area" bash -c "! docker exec $A server-backup restore-files --target /root/elsewhere /etc/cloudflared"
 
     checksums_a >"$LOG_DIR/$MODE-photos-a.txt"
     in_ "$A" "docker exec -i coolify-db psql -U coolify -d coolify -tAc 'select count(*), md5(string_agg(fqdn, chr(44) order by id)) from applications'" >"$LOG_DIR/$MODE-db-a.txt"

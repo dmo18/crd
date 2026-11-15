@@ -1070,6 +1070,13 @@ pick_snapshot() {
     else
         id="$(jq -r 'sort_by(.time) | last | .id // empty' <<<"$js")"
         [[ -n $id ]] || die "$E_FAIL" "There are no backups in this backup store."
+        local newest age_days
+        newest="$(jq -r 'sort_by(.time) | last | .time' <<<"$js")"
+        age_days=$(( ($(date +%s) - $(date -d "$newest" +%s)) / 86400 ))
+        if (( age_days > 2 )); then
+            say "WARNING: the newest backup in the store is $age_days days old. Backups run nightly, so newer ones"
+            say "may have been deleted on the backup server. Check before restoring, or pick one with --snapshot."
+        fi
     fi
     printf '%s' "$id"
 }
@@ -1090,6 +1097,12 @@ move_aside() { # move_aside PATH PRE_DIR
 check_target() {
     local t=$1
     [[ $t == /* ]] || die "$E_USAGE" "The target folder must be a full path starting with /."
+    # Only below root's own restore area, with no links on the way, so nobody
+    # can swap the folder for a link to somewhere else during the restore.
+    [[ $t =~ ^/var/lib/server-backup/restores/[A-Za-z0-9._-]+$ ]] ||
+        die "$E_USAGE" "Restore into a new folder under /var/lib/server-backup/restores/, for example /var/lib/server-backup/restores/my-files."
+    install -d -m 0700 -o root -g root /var/lib/server-backup /var/lib/server-backup/restores
+    [[ ! -L $t ]] || die "$E_USAGE" "$t is a link. Pick a new folder name."
     case "$(readlink -m "$t")" in
         / | /etc | /data | /data/coolify | /var | /var/lib | /var/lib/docker* | /usr* | /bin | /sbin | /boot* | /root | /home)
             die "$E_USAGE" "Restoring straight into $t could overwrite live files. Pick a new, empty folder." ;;
@@ -1143,7 +1156,7 @@ cmd_restore_files() {
         [[ $p == /* ]] || die "$E_USAGE" "Paths must start with / (for example /data/coolify/proxy)."
     done
     stamp="$(date '+%Y%m%d-%H%M%S')"
-    [[ -n $target ]] || target="$STATE_DIR/restored-$stamp"
+    [[ -n $target ]] || target="/var/lib/server-backup/restores/restored-$stamp"
     check_target "$target"
     if ((DRY_RUN)); then
         say "Dry run. These would be restored into $target:"
@@ -1439,6 +1452,8 @@ cmd_restore_dr() {
         else
             rmdir -- "$bmp" 2>/dev/null || true
         fi
+        [[ $amp =~ ^/var/lib/docker/volumes/[A-Za-z0-9._-]+/_data$ && $bmp =~ ^/var/lib/docker/volumes/[A-Za-z0-9._-]+/_data$ ]] ||
+            die "$E_FAIL" "The backup lists an unexpected volume path ($amp). Stopping before anything else is changed."
         mv -- "$rtmp$amp" "$bmp"
     done < <(cat "$rs/volumes.tsv" 2>/dev/null || true)
 
