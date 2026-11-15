@@ -665,6 +665,13 @@ configure_ssh() {
 Match Address 127.0.0.1,::1
     PasswordAuthentication yes
     KbdInteractiveAuthentication no'
+        # Only the person who ran this setup may use it, so nothing else on
+        # this server (for example an app on the host network) can try other
+        # accounts through 127.0.0.1.
+        if [[ ${SUDO_USER:-} =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && [ "$SUDO_USER" != root ]; then
+            loopback_passwords="$loopback_passwords
+    AllowUsers $SUDO_USER root"
+        fi
     fi
     {
         cat <<'EOF'
@@ -1228,6 +1235,10 @@ LockPersonality=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# cloudflared runs as root (systemd credentials for a non-root user did not
+# work in testing), so hide the sockets that would turn a cloudflared break-in
+# into control of the whole server. "-" ignores paths that do not exist.
+InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd -/run/docker -/var/lib/docker -/data/coolify
 
 [Install]
 WantedBy=multi-user.target
@@ -1535,7 +1546,7 @@ main() {
     if [ "$MODE" = cloudflare ]; then
         install_cloudflared
     elif [ -f "$CF_UNIT" ]; then
-        warn "cloudflared is still set up from Cloudflare mode. To remove it: sudo systemctl disable --now cloudflared"
+        warn "cloudflared is still running from Cloudflare mode. Remove it (sudo systemctl disable --now cloudflared) and remove CLIENT_IP_HEADER from your apps in Coolify: with 80/443 open, anyone could fake that header."
     fi
     install_coolify
     open_setup_window

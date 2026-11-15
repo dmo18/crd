@@ -1,5 +1,35 @@
 # Status
 
+## Milestone 7: Cloudflare Tunnel, private by default, self updating
+- Owner choices: Cloudflare (DNS already there), main site stays elsewhere,
+  one subdomain per app, new apps private until marked public, Cloudflare
+  set up by hand (no API token on the server), everything kept on the
+  latest released versions.
+- Server: `bootstrap.sh --cloudflare`: cloudflared from Cloudflare's signed
+  repository, token in a root-only file, no inbound ports at all, browser
+  SSH through the tunnel (password only from loopback and only for the
+  owner's user), cloudflared walled off from Docker's controls.
+- Updates: unattended upgrades for Ubuntu security and updates, Docker and
+  cloudflared (reboot at 04:30 only if needed); Coolify auto update;
+  GitHub Dependabot weekly update PRs with CI (lint, types, tests, build,
+  container health) on every PR; Coolify webhook deploys merged updates.
+- Card Vault: CLIENT_IP_HEADER=cf-connecting-ip behind the tunnel, IPv6
+  limits per /64, http APP_ORIGIN upgraded to https.
+- Verified: Cloudflare mode run in a systemd Ubuntu container (signed
+  repo, token secrecy, nothing reachable from outside, sshd rules, mode
+  switching, update origins), sshd owner-only rule, unit file check, 306
+  tests, build without local settings (as CI runs it).
+- Not verified: a live tunnel, Cloudflare Access rules, browser SSH, the
+  Coolify dashboard through the tunnel, a real Docker engine upgrade, and
+  cloudflared running under the new path restrictions (outside programs
+  cannot be downloaded and run in this sandbox).
+- Security review: no critical or high. Fixed: cloudflared cannot reach
+  Docker's socket, loopback SSH limited to the owner, separate dashboard
+  and SSH Access apps with tunnel token checking, CI actions pinned by
+  commit. Accepted: Docker major versions update automatically (the port
+  guard fails closed if Docker ever changes its firewall backend).
+
+
 ## Milestone 6: own Ubuntu app server with Coolify (ready for the owner)
 - Cloudways dropped (needs a terminal the owner does not want). Owner's
   Hyper-V host: Ubuntu 24.04 VM with its own public IP and no network

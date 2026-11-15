@@ -71,16 +71,26 @@ records like `www` keep winning over the `*` record.
 
 ## 6. Add the sign-in rules (Cloudflare Access)
 **Zero Trust**, **Access**, **Applications**, **Add an application**,
-**Self-hosted**. Create these three:
+**Self-hosted**. Create these four:
 
 1. **All apps (private)**: domain `*.yourdomain.com`. Policy: Action
    **Allow**, Include **Emails**: your email. This is the private by
    default rule.
-2. **Browser SSH**: domain `ssh.yourdomain.com`, same Allow policy. Under
-   **Browser rendering**, choose **SSH**.
-3. **Public apps**: domain: each subdomain from step 4 (for example
+2. **Server dashboard**: domain `admin.yourdomain.com`, same Allow policy,
+   **Session duration 24 hours**.
+3. **Browser SSH**: domain `ssh.yourdomain.com`, same Allow policy,
+   session 24 hours. Under **Browser rendering**, choose **SSH**.
+4. **Public apps**: domain: each subdomain from step 4 (for example
    `www.yourdomain.com`), plus `cards.yourdomain.com`. Policy: Action
-   **Bypass**, Include **Everyone**.
+   **Bypass**, Include **Everyone**. **Never** add `admin`, `ssh` or `*`
+   here.
+
+Then lock the admin routes to these rules: back on the tunnel's **Public
+Hostname** tab, edit rows 1 to 3 and choose **Server dashboard** under
+**Additional application settings**, **Access**, **Protect with Access**
+(turns on token checking); edit row 4 the same way with **Browser SSH**.
+The tunnel then refuses any admin or SSH request that did not pass the
+sign-in, even if a rule above is changed by mistake.
 
 A specific subdomain rule wins over the `*` rule, so anything in Public
 apps opens without a sign-in. **To make any app public later: add its
