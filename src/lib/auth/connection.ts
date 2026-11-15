@@ -35,7 +35,10 @@ export function connectionReport(headers: Headers, settings: { hops: number; app
   if (settings.appOrigin) {
     const want = new URL(settings.appOrigin);
     const sameHost = visitHost !== null && want.host.toLowerCase() === visitHost;
-    const sameProto = visitProto === null || `${visitProto}:` === want.protocol;
+    // Behind Cloudflare and Traefik the last hop is plain http even though
+    // visitors use https, so only https visits to an http address count as
+    // a mismatch.
+    const sameProto = visitProto === null || `${visitProto}:` === want.protocol || (visitProto === "http" && want.protocol === "https:");
     appOrigin = sameHost && sameProto ? "matches" : "differs";
   }
   return {
