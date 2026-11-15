@@ -1,5 +1,29 @@
 # Status
 
+## Milestone 5: go live on Cloudways (ready for the owner)
+- Runs as a separate Cloudways app on the owner's existing Flexible server,
+  public https link, owner password. Guide: docs/GO-LIVE.md.
+- Scripts in scripts/server: install (Node 22 via nvm, checksum checked),
+  update (backup first, automatic rollback if the new version fails),
+  rollback, start, stop, keep-alive every minute, nightly backup (14 kept),
+  restore. Public health check at /api/health shows only ok or not.
+- Public link hardening: APP_ORIGIN, visitor address from the second
+  X-Forwarded-For entry from the right (Nginx then Apache), lockouts of 15
+  minutes and 24 hours per address, global pause at 300 failures, owner-only
+  Connection check on the More page.
+- Rehearsed here end to end against a stand-in for Cloudways Nginx and
+  Apache: real installer on a clean home folder, sign in, scan, save,
+  photos, connection check (spoofed address ignored), update, rollback,
+  crash recovery, broken update refused with nothing changed.
+- Not verified: the real Cloudways server (mod_proxy must be enabled by
+  support, memory on the shared server, cron access for the master user).
+- Security review: no critical or high. Fixed: nvm checksum, failed build
+  never goes live, .htaccess permissions, cron jobs preserved, backup link
+  check, exact process match, passphrase spaces. Accepted: anyone can pause
+  sign-in for 15 minutes with 300 wrong tries; updates trust the GitHub
+  account (owner turns on 2FA and branch protection, see the guide).
+
+
 ## Milestone 4: free card reading, no keys (done)
 - Owner rule: never require API keys; free preferred.
 - Cards are read on the server with Tesseract (offline, bundled English

@@ -22,7 +22,8 @@ if [ -z "$cmdline" ]; then
   rm -f "$CV_PID_FILE"
   exit 0
 fi
-if [[ "$cmdline" != *"next start -p $PORT"* ]]; then
+# Next renames its process to "next-server"; the launcher shows the start command.
+if [[ "$cmdline" != next-server* && "$cmdline" != *"next start -p $PORT"* ]]; then
   log "Process $pid is not Card Vault. Leaving it alone and removing the stale pid file."
   rm -f "$CV_PID_FILE"
   exit 0

@@ -6,6 +6,14 @@ server, not per app). Time: about 30 minutes, mostly waiting.
 
 You need: your Cloudways login, and access to your domain's DNS settings.
 
+## 0. Protect your GitHub account (5 minutes, important)
+Your server installs and updates Card Vault from your GitHub repository, so
+whoever controls that account controls the app.
+1. GitHub, **Settings**, **Password and authentication**: turn on
+   **two-factor authentication**.
+2. The `crd` repository, **Settings**, **Branches**: add a rule for `main`
+   that requires a pull request before merging.
+
 ## 1. Check the server has room
 Cloudways, **Servers**, your server, **Monitoring**.
 - 2 GB of memory or more: good.
