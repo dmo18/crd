@@ -143,6 +143,15 @@ if have iptables && iptables -w -S PORT-GUARD >/dev/null 2>&1; then
 else
     fail "The port guard rules are missing. Fix: sudo systemctl restart docker-port-guard"
 fi
+if [ -x /usr/local/sbin/docker-port-guard ]; then
+    if guard_cfg="$(/usr/local/sbin/docker-port-guard check-config 2>&1)"; then
+        pass "Port guard settings file is fine"
+    else
+        warn "The port guard settings file has a mistake, so safe settings are used (no extra ports):"
+        note "${guard_cfg#docker-port-guard: }"
+        note "Fix /etc/default/docker-port-guard, then: sudo docker-port-guard apply"
+    fi
+fi
 if systemctl is-enabled --quiet docker-port-guard.service 2>/dev/null; then
     pass "Port guard starts automatically at boot"
 else
@@ -191,24 +200,61 @@ if have sshd; then
     else
         val() { awk -v k="$1" '$1 == k { print $2; exit }' <<<"$sshd_out"; }
         if [ "$(val passwordauthentication)" = "no" ]; then pass "Password login over SSH is off"; else fail "Password login over SSH is ON"; fi
+        match_val() { sshd -T -C "addr=$1,user=$2,host=localhost,laddr=127.0.0.1,lport=22" 2>/dev/null | awk -v k="$3" '$1 == k { print $2; exit }'; }
+        owner="${SUDO_USER:-}"
+        [ -n "$owner" ] && [ "$owner" != root ] || owner="check"
+        pw_any=""
+        for a in 127.0.0.1 ::1 203.0.113.9; do
+            for u in "$owner" root; do
+                if [ "$(match_val "$a" "$u" passwordauthentication)" != no ] || [ "$(match_val "$a" "$u" kbdinteractiveauthentication)" != no ]; then
+                    pw_any="$pw_any $u@$a"
+                fi
+            done
+        done
+        if [ -z "$pw_any" ]; then
+            pass "No password login from anywhere, not even from this server itself (tunnel)"
+        else
+            fail "Password login is allowed for:$pw_any. Fix: run bootstrap.sh again"
+        fi
         if [ "$MODE" = cloudflare ]; then
-            # Password login only for connections from this server (Cloudflare's
-            # browser SSH terminal arrives through the tunnel from 127.0.0.1 or ::1).
-            match_val() { sshd -T -C "addr=$1,user=$2,host=localhost,laddr=127.0.0.1,lport=22" 2>/dev/null | awk -v k="$3" '$1 == k { print $2; exit }'; }
-            if [ "$(match_val 127.0.0.1 check passwordauthentication)" = yes ] && [ "$(match_val ::1 check passwordauthentication)" = yes ]; then
-                pass "Password login allowed for the browser SSH terminal through the tunnel"
+            # Browser SSH: Cloudflare short-lived certificates, mapped to the
+            # owner's account in /etc/ssh/principals/<user>.
+            if [ "$(match_val 127.0.0.1 "$owner" trustedusercakeys)" = /etc/ssh/ca.pub ]; then
+                pass "SSH accepts certificates signed by the Cloudflare SSH CA (/etc/ssh/ca.pub)"
             else
-                warn "Password login through the tunnel is off: Cloudflare's browser SSH terminal can then only use a key"
+                fail "SSH is not set up for Cloudflare certificates. Fix: run bootstrap.sh again with --cloudflare"
             fi
-            if [ "$(match_val 203.0.113.9 check passwordauthentication)" = no ]; then
-                pass "Password login refused for any other address"
+            if [ -s /etc/ssh/ca.pub ] && ca_fp="$(ssh-keygen -l -f /etc/ssh/ca.pub 2>/dev/null)"; then
+                pass "Cloudflare SSH CA key is saved ($(awk '{print $2; exit}' <<<"$ca_fp"))"
+                ca_type="$(awk '{print $1; exit}' /etc/ssh/ca.pub)"
+                case "$ca_type" in ssh-rsa) ca_sig="rsa-sha2-512"; ca_cert="rsa-sha2-512-cert-v01@openssh.com" ;; *) ca_sig="$ca_type"; ca_cert="$ca_type-cert-v01@openssh.com" ;; esac
+                if tr ',' '\n' <<<"$(val casignaturealgorithms)" | grep -qxF -- "$ca_sig" &&
+                    tr ',' '\n' <<<"$(val pubkeyacceptedalgorithms)" | grep -qxF -- "$ca_cert"; then
+                    pass "SSH accepts this CA's certificate type ($ca_cert)"
+                else
+                    fail "SSH does not accept $ca_cert certificates (check PubkeyAcceptedAlgorithms / CASignatureAlgorithms)"
+                fi
             else
-                fail "Password login is allowed from other addresses"
+                warn "No Cloudflare SSH CA key yet, so browser SSH cannot log in. Add it: sudo server-ssh-ca set"
             fi
-            case "$(match_val 127.0.0.1 root permitrootlogin)" in
-                without-password | prohibit-password | no) pass "Root may not log in with a password, even through the tunnel" ;;
-                *) fail "Root may log in with a password through the tunnel" ;;
-            esac
+            if [ "$(match_val 127.0.0.1 "$owner" authorizedprincipalsfile)" = "/etc/ssh/principals/%u" ]; then
+                pass "Certificates must name an allowed person (/etc/ssh/principals/<user>)"
+            else
+                fail "Any Cloudflare certificate name could log in (AuthorizedPrincipalsFile not set). Fix: run bootstrap.sh again with --cloudflare"
+            fi
+            found=""
+            for f in /etc/ssh/principals/*; do
+                [ -f "$f" ] || continue
+                found="$found $(basename "$f") <- $(grep -v '^[[:space:]]*\(#\|$\)' "$f" | tr '\n' ' ')"
+            done
+            if [ -n "$found" ]; then
+                note "Browser SSH logins (Ubuntu user <- Cloudflare email before the @):$found"
+            else
+                warn "No account accepts Cloudflare certificates (/etc/ssh/principals is empty)"
+            fi
+            if [ -e /etc/ssh/principals/root ]; then
+                fail "root accepts Cloudflare certificates (/etc/ssh/principals/root). Remove that file."
+            fi
         fi
         if [ "$(val kbdinteractiveauthentication)" = "no" ]; then pass "Keyboard-interactive login is off"; else fail "Keyboard-interactive login is ON"; fi
         case "$(val permitrootlogin)" in
@@ -276,30 +322,51 @@ if [ "$MODE" = cloudflare ]; then
         warn "cloudflared is not installed from Cloudflare's package repository"
     fi
     if apt-config dump 2>/dev/null | grep -q 'origin=cloudflared'; then
-        pass "cloudflared updates are installed automatically"
+        warn "cloudflared still updates by itself (old setting). Fix: run bootstrap.sh again with --cloudflare"
     else
-        warn "cloudflared is not part of the automatic updates"
+        pass "cloudflared updates only when you run: sudo server-update"
+    fi
+    prot="$(systemctl show -p ProtectProc --value cloudflared.service 2>/dev/null || true)"
+    inacc="$(systemctl show -p InaccessiblePaths --value cloudflared.service 2>/dev/null || true)"
+    if [ "$prot" = invisible ] && [[ $inacc == *"/etc/shadow"* ]] && [[ $inacc == *"/run/docker.sock"* ]]; then
+        pass "cloudflared is locked down (cannot see other programs, Docker or password hashes)"
+    else
+        warn "cloudflared's lockdown settings are older. Fix: run bootstrap.sh again with --cloudflare"
     fi
 fi
 
 # ---------------------------------------------------------------------------
-section "Automatic updates"
+section "Updates"
+# Owner rule: only Ubuntu security patches install by themselves; everything
+# else waits for "sudo server-update".
 if systemctl is-enabled --quiet unattended-upgrades.service 2>/dev/null; then
-    pass "Automatic updates service is on"
+    pass "Automatic security updates service is on"
 else
-    fail "Automatic updates service is off"
+    fail "Automatic security updates service is off. Fix: sudo systemctl enable --now unattended-upgrades"
 fi
 apt_dump="$(apt-config dump 2>/dev/null)"
 if grep -q '^APT::Periodic::Unattended-Upgrade "1";' <<<"$apt_dump"; then
-    pass "Updates install daily"
+    pass "Security patches install daily"
 else
-    fail "Daily automatic updates are not switched on"
+    fail "Daily automatic security patches are not switched on. Fix: run bootstrap.sh again"
+fi
+if grep -q '^APT::Periodic::Update-Package-Lists "1";' <<<"$apt_dump"; then
+    pass "Package lists refresh daily"
+else
+    warn "Package lists do not refresh daily, so waiting updates are not seen"
+fi
+origins="$(grep -E '^Unattended-Upgrade::(Allowed-Origins|Origins-Pattern):: ' <<<"$apt_dump" || true)"
+# shellcheck disable=SC2016 # unattended-upgrades variables, not shell
+if [ "$origins" = 'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security";' ]; then
+    pass "Only Ubuntu security patches install by themselves"
+else
+    warn "Automatic updates install more than Ubuntu security patches. Fix: run bootstrap.sh again"
+    while IFS= read -r line; do [ -n "$line" ] && note "$line"; done <<<"$origins"
 fi
 if grep -q '^Unattended-Upgrade::Automatic-Reboot "true";' <<<"$apt_dump"; then
-    rt="$(sed -n 's/^Unattended-Upgrade::Automatic-Reboot-Time "\(.*\)";/\1/p' <<<"$apt_dump")"
-    pass "Restart after updates when needed, at ${rt:-the default time}"
+    warn "The server may restart by itself after updates. Fix: run bootstrap.sh again"
 else
-    warn "No automatic restart after updates that need one"
+    pass "The server never restarts by itself"
 fi
 for timer in apt-daily.timer apt-daily-upgrade.timer; do
     if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
@@ -308,29 +375,49 @@ for timer in apt-daily.timer apt-daily-upgrade.timer; do
         fail "$timer is off. Fix: sudo systemctl enable --now $timer"
     fi
 done
-for origin in '-security' '-updates' 'origin=Docker,label=Docker CE'; do
-    if grep -qF -- "$origin" <<<"$(apt-config dump 2>/dev/null | grep -E '^Unattended-Upgrade::(Allowed-Origins|Origins-Pattern)')"; then
-        pass "Automatic updates include: $origin"
-    else
-        warn "Automatic updates do not include: $origin (run bootstrap.sh again)"
-    fi
-done
+if [ -x /usr/local/sbin/server-update ]; then
+    pass "server-update is installed (for all other updates)"
+else
+    warn "server-update is missing. Fix: run bootstrap.sh again"
+fi
+if [ -f /etc/apt/preferences.d/docker-major-pin ]; then
+    pin_v="$(sed -n 's/^Pin: version \(.*\)\.\*$/\1/p' /etc/apt/preferences.d/docker-major-pin | head -n 1)"
+    pass "Docker stays on major version ${pin_v#*:} unless you choose otherwise (server-update --allow-docker-major)"
+elif dpkg-query -W -f '${db:Status-Abbrev}' docker-ce 2>/dev/null | grep -q '^ii'; then
+    warn "Docker's major version is not pinned. Fix: sudo server-update pin"
+fi
 uu_log="/var/log/unattended-upgrades/unattended-upgrades.log"
 if [ -s "$uu_log" ]; then
     last_run="$(grep -m1 -o '^[0-9-]* [0-9:]*' <(tac "$uu_log" | grep 'Starting unattended upgrades script') 2>/dev/null || true)"
-    note "Last automatic update run: ${last_run:-not found in $uu_log}"
+    note "Last automatic security update run: ${last_run:-not found in $uu_log}"
 else
     last_run=""
-    warn "Automatic updates have not run yet (no $uu_log)"
+    warn "Automatic security updates have not run yet (no $uu_log)"
 fi
-upgradable="$(apt list --upgradable 2>/dev/null | grep -v '^Listing' || true)"
-pending="$(grep -c . <<<"$upgradable" || true)"
-[ -z "$upgradable" ] && pending=0
-sec_pkgs="$(grep -- '-security' <<<"$upgradable" | cut -d/ -f1 | tr '\n' ' ' || true)"
-note "Updates waiting: $pending (security: $(wc -w <<<"$sec_pkgs" | tr -d ' '))"
-# A security update older than 3 days is one the daily run should have installed:
-# it is in a run's "to upgrade" or "kept back" list from more than 3 days ago, or
-# automatic updates have not run for 3 days.
+# What is waiting, grouped like server-update shows it.
+plan="$(apt-get -s -o Debug::NoLocking=1 full-upgrade 2>/dev/null | awk '
+    /^Inst / {
+        name = $2; rest = $0
+        if (name ~ /^docker-/ || name == "containerd.io") g = "docker"
+        else if (name == "cloudflared") g = "cloudflared"
+        else if (rest ~ /-security/) g = "security"
+        else if (rest ~ /Ubuntu:/) g = "ubuntu"
+        else g = "other"
+        print g "\t" name
+    }')"
+count() { awk -F'\t' -v g="$1" '$1 == g' <<<"$plan" | grep -c . || true; }
+n_sec="$(count security)"; n_ubu="$(count ubuntu)"; n_dock="$(count docker)"; n_cf="$(count cloudflared)"; n_oth="$(count other)"
+n_all=$((n_sec + n_ubu + n_dock + n_cf + n_oth))
+other_txt=""
+[ "$n_oth" -eq 0 ] || other_txt=", other: $n_oth"
+note "Updates waiting: $n_all (security: $n_sec, Ubuntu: $n_ubu, Docker: $n_dock, cloudflared: $n_cf$other_txt)"
+if [ "$n_all" -gt 0 ]; then
+    note "Run sudo server-update when convenient (it backs up first and asks before a restart)."
+fi
+# Security patches install by themselves, so one waiting for more than 3 days
+# means something is wrong: it is in a run's "to upgrade" or "kept back" list
+# from more than 3 days ago, or the automatic runs stopped 3 days ago.
+sec_pkgs="$(awk -F'\t' '$1 == "security" { print $2 }' <<<"$plan" | tr '\n' ' ')"
 if [ -n "${sec_pkgs// /}" ]; then
     cutoff="$(date -d '3 days ago' '+%Y-%m-%d %H:%M:%S')"
     old=""
@@ -339,7 +426,7 @@ if [ -n "${sec_pkgs// /}" ]; then
         if [ -n "$first" ] && [[ $first < $cutoff ]]; then old="$old $pkg"; fi
     done
     if [ -n "$old" ]; then
-        warn "Security updates waiting for more than 3 days:$old. See: sudo cat $uu_log"
+        warn "Security updates waiting for more than 3 days (they should install by themselves):$old. See: sudo cat $uu_log, or install now: sudo server-update"
     elif [ -z "$last_run" ] || [[ $last_run < $cutoff ]]; then
         warn "Security updates are waiting and automatic updates have not run for 3 days: $sec_pkgs"
     else
@@ -356,13 +443,18 @@ for pkg in docker-ce cloudflared; do
         if [ "$pkg" = cloudflared ] && [ "$MODE" != cloudflare ]; then continue; fi
         note "$pkg: not installed"
     elif [ "$inst" = "$cand" ]; then
-        pass "$pkg $inst is the newest version"
+        note "$pkg $inst is the newest version allowed"
     else
-        note "$pkg: installed $inst, newest $cand (installs with the next daily run)"
+        note "$pkg: installed $inst, newest allowed $cand (sudo server-update)"
     fi
 done
 if [ -f /var/run/reboot-required ]; then
-    warn "A restart is waiting (it will happen at the planned time, 04:30)"
+    rb_days=$(( ($(date +%s) - $(stat -c %Y /var/run/reboot-required)) / 86400 ))
+    if [ "$rb_days" -gt 7 ]; then
+        warn "A restart has been needed for $rb_days days. Restart at a quiet time: sudo reboot"
+    else
+        note "A restart is needed (for $rb_days days). Restart at a quiet time: sudo reboot"
+    fi
 else
     pass "No restart needed"
 fi

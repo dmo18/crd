@@ -1,0 +1,1544 @@
+#!/usr/bin/env bash
+#
+# server-backup: encrypted backups of this whole server (Coolify, its database,
+# every app's Docker volume, Cloudflare Tunnel token, SSH settings) to your own
+# SFTP or FTP server, and full disaster recovery onto a brand new server.
+#
+# Usage (as root):
+#   server-backup setup                 choose where backups go, create the backup store
+#   server-backup run [--dry-run]       make a backup now (the timer does this every night)
+#   server-backup check [--quick]       verify the backup store (the timer does this weekly)
+#   server-backup list                  show the backups that exist
+#   server-backup status                one screen summary
+#   server-backup restore-files [--snapshot ID] [--target DIR] [--volume NAME] [PATH...]
+#   server-backup restore-dr [--snapshot ID] [--dry-run]
+#
+# Backups are made with restic (encrypted, deduplicated) and sent with rclone,
+# both from Ubuntu's own packages. The restic password is shown once during
+# setup and is never stored inside the backups it unlocks.
+#
+# Exit codes: 0 ok, 1 failed, 2 wrong usage, 3 not set up yet,
+#             75 another backup or restore is running (try again later).
+
+set -euo pipefail
+umask 077
+export LC_ALL=C.UTF-8
+
+readonly VERSION="1.0.0"
+readonly REAL_CONF_DIR="/etc/server-backup"
+readonly STATE_DIR="/var/lib/server-backup"
+readonly STAGING="$STATE_DIR/staging"
+readonly STATUS_FILE="$STATE_DIR/last-status"
+readonly LOCK_FILE="/run/server-backup.lock"
+readonly CACHE_DIR="/var/cache/server-backup"
+readonly COOLIFY_DIR="/data/coolify"
+readonly COOLIFY_ENV="$COOLIFY_DIR/source/.env"
+readonly REMOTE="backupdest"
+readonly TAG="server-backup"
+readonly UNIT_DIR="/etc/systemd/system"
+readonly BIN_PATH="/usr/local/sbin/server-backup"
+# Paths outside /data/coolify and Docker volumes that are backed up when present.
+readonly ETC_PATHS=(/etc/cloudflared /etc/server-backup /etc/default/docker-port-guard
+    /etc/ssh/sshd_config.d /etc/ssh/ca.pub /etc/ssh/principals)
+# Inside /data/coolify: metrics and monitoring data that rebuild by themselves.
+readonly COOLIFY_EXCLUDES=("$COOLIFY_DIR/sentinel" "$COOLIFY_DIR/metrics")
+# Retention: how many backups are kept.
+readonly KEEP_DAILY=7 KEEP_WEEKLY=4 KEEP_MONTHLY=12
+
+readonly E_FAIL=1 E_USAGE=2 E_NOTSETUP=3 E_BUSY=75
+
+# Configuration file locations. They point at /etc/server-backup, except during
+# restore-dr, where a temporary folder is used until the restore is confirmed.
+CONF_DIR="$REAL_CONF_DIR"
+set_conf_dir() {
+    CONF_DIR="$1"
+    CONF_FILE="$CONF_DIR/config"
+    PASS_FILE="$CONF_DIR/restic-password"
+    RCLONE_CONF="$CONF_DIR/rclone.conf"
+    KNOWN_HOSTS="$CONF_DIR/known_hosts"
+    SSH_KEY="$CONF_DIR/ssh-key"
+    HOOKS_DIR="$CONF_DIR/hooks.d"
+}
+set_conf_dir "$REAL_CONF_DIR"
+
+declare -A CFG=()
+DRY_RUN=0
+WORK=""
+ERRF=""
+HOOK_FAILED=""
+
+# ---------------------------------------------------------------- messages
+
+say() { printf '%s\n' "$*"; }
+step() { printf '\n==> %s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
+die() {
+    local code=$1
+    shift
+    printf 'ERROR: %s\n' "$*" >&2
+    exit "$code"
+}
+
+cleanup() {
+    [[ -n $WORK && -d $WORK ]] && rm -rf -- "$WORK"
+    return 0
+}
+
+# A private scratch folder for this run (error output, temporary settings).
+init_work() {
+    [[ -n $WORK ]] && return 0
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/server-backup.XXXXXX")"
+    chmod 700 "$WORK"
+    ERRF="$WORK/err"
+    : >"$ERRF"
+    trap cleanup EXIT
+}
+
+need_root() {
+    [[ $EUID -eq 0 ]] || die "$E_USAGE" "Please run this as root, for example: sudo server-backup $*"
+}
+
+human() { numfmt --to=iec-i --suffix=B "${1:-0}" 2>/dev/null || printf '%s bytes' "${1:-0}"; }
+
+one_line() { tr '\n\r\t' '   ' | sed -e 's/  */ /g' -e 's/^ //' -e 's/ $//' | cut -c1-400; }
+
+# ---------------------------------------------------------------- prompts
+
+# All prompts go to stderr so that output can be logged. Input is read from
+# the terminal (or from standard input when it is not a terminal, for testing).
+ask() {
+    local __var=$1 q=$2 def=${3-} ans=""
+    [[ -n $def ]] && q+=" [$def]"
+    printf '%s: ' "$q" >&2
+    IFS= read -r ans || die "$E_USAGE" "No answer was given."
+    [[ -z $ans ]] && ans=$def
+    printf -v "$__var" '%s' "$ans"
+}
+
+ask_secret() {
+    local __var=$1 q=$2 ans=""
+    printf '%s (typing is hidden): ' "$q" >&2
+    if [[ -t 0 ]]; then
+        IFS= read -r -s ans || die "$E_USAGE" "No answer was given."
+        printf '\n' >&2
+    else
+        IFS= read -r ans || die "$E_USAGE" "No answer was given."
+        printf '\n' >&2
+    fi
+    printf -v "$__var" '%s' "$ans"
+}
+
+ask_yes_no() { # ask_yes_no "Question" default(y|n)
+    local q=$1 def=$2 ans=""
+    while :; do
+        if [[ $def == y ]]; then ask ans "$q (y/n)" y; else ask ans "$q (y/n)" n; fi
+        case "${ans,,}" in
+            y | yes) return 0 ;;
+            n | no) return 1 ;;
+        esac
+        say "Please answer y or n." >&2
+    done
+}
+
+ask_valid() { # ask_valid VAR "Question" default regex "what is allowed"
+    local __var=$1 q=$2 def=$3 re=$4 hint=$5 val=""
+    while :; do
+        ask val "$q" "$def"
+        if [[ $val =~ $re && $val != *..* ]]; then
+            printf -v "$__var" '%s' "$val"
+            return 0
+        fi
+        say "That does not look right. Allowed: $hint" >&2
+    done
+}
+
+# ---------------------------------------------------------------- config
+
+load_config() {
+    [[ -f $CONF_FILE ]] || die "$E_NOTSETUP" "Backups are not set up on this server yet. Run: sudo server-backup setup"
+    local k v
+    CFG=()
+    while IFS='=' read -r k v; do
+        [[ $k =~ ^[A-Z0-9_]+$ ]] || continue
+        CFG[$k]=$v
+    done <"$CONF_FILE"
+    [[ -n ${CFG[DEST_TYPE]:-} && -n ${CFG[DEST_PATH]:-} ]] || die "$E_NOTSETUP" "The settings in $CONF_FILE are incomplete. Run: sudo server-backup setup"
+}
+
+write_config() {
+    local tmp k
+    mkdir -p "$CONF_DIR"
+    chmod 700 "$CONF_DIR"
+    tmp="$(mktemp "$CONF_DIR/.config.XXXXXX")"
+    {
+        printf '# server-backup settings. Written by "server-backup setup". No passwords in here.\n'
+        for k in DEST_TYPE DEST_HOST DEST_PORT DEST_USER DEST_PATH SFTP_AUTH FTP_CERT_CHECK FTP_CERT_SHA256 BACKUP_HOST CREATED; do
+            printf '%s=%s\n' "$k" "${CFG[$k]:-}"
+        done
+    } >"$tmp"
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$CONF_FILE"
+}
+
+dest_label() {
+    printf '%s://%s@%s:%s/%s' "${CFG[DEST_TYPE]}" "${CFG[DEST_USER]:-}" "${CFG[DEST_HOST]:-}" "${CFG[DEST_PORT]:-}" "${CFG[DEST_PATH]}"
+}
+
+# Values read from KEY=VALUE files such as Coolify's .env, without running them.
+env_get() { # env_get KEY FILE
+    local line val=""
+    [[ -f $2 ]] || return 0
+    line="$(grep -E "^[[:space:]]*$1=" "$2" | tail -n 1 || true)"
+    val="${line#*=}"
+    val="${val%\"}"
+    val="${val#\"}"
+    val="${val%\'}"
+    val="${val#\'}"
+    printf '%s' "$val"
+}
+
+restic_env() { # restic_env [password file]
+    export RESTIC_REPOSITORY="rclone:${REMOTE}:${CFG[DEST_PATH]}"
+    export RESTIC_PASSWORD_FILE="${1:-$PASS_FILE}"
+    export RCLONE_CONFIG="$RCLONE_CONF"
+    export RESTIC_CACHE_DIR="$CACHE_DIR"
+    unset RESTIC_PASSWORD RESTIC_PASSWORD_COMMAND
+    mkdir -p "$CACHE_DIR"
+    chmod 700 "$CACHE_DIR"
+}
+
+# Run restic; its error output is collected in $ERRF so it can be explained.
+R() {
+    : >"$ERRF"
+    restic -o rclone.timeout=2m "$@" 2>"$ERRF"
+}
+
+# Turns restic and rclone error output into a plain sentence.
+explain_error() {
+    local f=${1:-$ERRF} t=""
+    [[ -n $f && -f $f ]] && t="$(cat "$f")"
+    case "$t" in
+        *"wrong password"*) say "The backup password (restic password) is wrong. Use the exact password that was shown during setup." ;;
+        *"Login incorrect"* | *"530 "* | *"unable to authenticate"* | *"permission denied (publickey"* | *"Permission denied"*)
+            say "The backup server refused the login. Check the user name and password (or key) for your SFTP or FTP server." ;;
+        *"knownhosts: key mismatch"* | *"key is unknown"* | *"host key mismatch"*)
+            say "The backup server's identity (host key) has changed. This can mean the server was reinstalled, or that someone is in between. Check with your server, then run setup again." ;;
+        *"certificate"* | *"x509"*) say "The backup server's TLS certificate could not be verified. Run setup again to check and accept it." ;;
+        *"no such host"* | *"Name or service not known"* | *"server misbehaving"*) say "The backup server's name could not be found. Check the address and this server's internet connection." ;;
+        *"connection refused"*) say "The backup server refused the connection. Check the address and port, and that the server is switched on." ;;
+        *"i/o timeout"* | *"timed out"* | *"timeout"*) say "The backup server did not answer in time. Check the address, port and internet connection." ;;
+        *"no space left"* | *"Disk quota"* | *"552 "* | *"452 "*) say "There is no space left (on the backup server or on this server)." ;;
+        *"unable to open config file"* | *"Is there a repository"*) say "There is no backup store at the configured location. Check the remote folder, or run setup." ;;
+        *"already locked"*) say "The backup store is locked by another backup that is still running (or crashed). It is unlocked automatically after a while." ;;
+        *) say "The backup tool reported a problem. Details are shown above." ;;
+    esac
+}
+
+show_error_details() {
+    [[ -n $ERRF && -s $ERRF ]] || return 0
+    say "Details from the backup tool:" >&2
+    grep -v -E '^\s*$' "$ERRF" | tail -n 8 | sed 's/^/  /' >&2 || true
+}
+
+# ---------------------------------------------------------------- status file
+
+# /var/lib/server-backup/last-status holds KEY=VALUE lines for check.sh:
+#   time epoch success snapshot size_bytes size added_bytes duration_seconds error warning
+#   check_time check_epoch check_success check_error
+status_update() {
+    local kv k v tmp
+    declare -A cur=()
+    mkdir -p "$STATE_DIR"
+    chmod 755 "$STATE_DIR"
+    if [[ -f $STATUS_FILE ]]; then
+        while IFS='=' read -r k v; do
+            [[ $k =~ ^[a-z_]+$ ]] && cur[$k]=$v
+        done <"$STATUS_FILE"
+    fi
+    for kv in "$@"; do
+        k=${kv%%=*}
+        v=${kv#*=}
+        cur[$k]="$(printf '%s' "$v" | one_line)"
+    done
+    tmp="$(mktemp "$STATE_DIR/.last-status.XXXXXX")"
+    for k in $(printf '%s\n' "${!cur[@]}" | sort); do
+        printf '%s=%s\n' "$k" "${cur[$k]}"
+    done >"$tmp"
+    chmod 644 "$tmp"
+    mv -f "$tmp" "$STATUS_FILE"
+}
+
+# ---------------------------------------------------------------- lock
+
+take_lock() {
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        die "$E_BUSY" "Another backup, check or restore is running right now. Please try again later."
+    fi
+}
+
+# ---------------------------------------------------------------- packages
+
+ensure_tools() {
+    local -a missing=()
+    command -v restic >/dev/null 2>&1 || missing+=(restic)
+    command -v rclone >/dev/null 2>&1 || missing+=(rclone)
+    command -v jq >/dev/null 2>&1 || missing+=(jq)
+    command -v ssh-keyscan >/dev/null 2>&1 || missing+=(openssh-client)
+    command -v openssl >/dev/null 2>&1 || missing+=(openssl)
+    ((${#missing[@]} == 0)) && return 0
+    step "Installing Ubuntu packages: ${missing[*]}"
+    export DEBIAN_FRONTEND=noninteractive
+    if ! apt-get install -y --no-install-recommends "${missing[@]}" </dev/null; then
+        if ! { apt-get update </dev/null && apt-get install -y --no-install-recommends "${missing[@]}" </dev/null; }; then
+            die "$E_FAIL" "Could not install ${missing[*]}. Check the internet connection and try again."
+        fi
+    fi
+}
+
+require_tools() {
+    local t
+    for t in restic rclone jq; do
+        command -v "$t" >/dev/null 2>&1 || die "$E_NOTSETUP" "The program '$t' is missing. Run: sudo server-backup setup"
+    done
+}
+
+# ---------------------------------------------------------------- destination
+
+readonly RE_HOST='^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$'
+readonly RE_PORT='^[0-9]{1,5}$'
+readonly RE_USER='^[A-Za-z0-9._@+-]+$'
+readonly RE_PATH='^[A-Za-z0-9._/+-]+$'
+
+obscure() { printf '%s' "$1" | rclone obscure -; }
+
+# Reads the server's SSH host key and asks the owner to confirm it.
+sftp_host_key() {
+    local host=$1 port=$2 tmp
+    tmp="$(mktemp "$CONF_DIR/.known_hosts.XXXXXX")"
+    if ! ssh-keyscan -T 15 -p "$port" -t ed25519,ecdsa,rsa "$host" >"$tmp" 2>/dev/null </dev/null || [[ ! -s $tmp ]]; then
+        rm -f "$tmp"
+        die "$E_FAIL" "Could not reach an SSH/SFTP server at $host port $port. Check the address and port, and that the server is on."
+    fi
+    say "" >&2
+    say "The backup server identifies itself with these fingerprints:" >&2
+    ssh-keygen -l -f "$tmp" </dev/null | awk '{print "  " $4 "  " $2}' >&2
+    say "If you can, compare them with the ones your SFTP server or provider shows." >&2
+    if ! ask_yes_no "Is this the right server? Save these fingerprints" y; then
+        rm -f "$tmp"
+        die "$E_FAIL" "Stopped. Nothing was saved."
+    fi
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$KNOWN_HOSTS"
+}
+
+ftps_cert_sha256() { # prints the SHA-256 fingerprint of the FTP server's certificate
+    local host=$1 port=$2
+    timeout 20 openssl s_client -starttls ftp -connect "$host:$port" -servername "$host" </dev/null 2>/dev/null |
+        openssl x509 -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//'
+}
+
+# Builds rclone.conf in $CONF_DIR from CFG and the given secret(s).
+write_rclone_conf() { # write_rclone_conf secret [key passphrase]
+    local secret=${1-} keypass=${2-} tmp
+    tmp="$(mktemp "$CONF_DIR/.rclone.XXXXXX")"
+    {
+        printf '[%s]\n' "$REMOTE"
+        case "${CFG[DEST_TYPE]}" in
+            sftp)
+                printf 'type = sftp\nhost = %s\nport = %s\nuser = %s\n' "${CFG[DEST_HOST]}" "${CFG[DEST_PORT]}" "${CFG[DEST_USER]}"
+                if [[ ${CFG[SFTP_AUTH]} == key ]]; then
+                    printf 'key_file = %s\n' "$SSH_KEY"
+                    [[ -n $keypass ]] && printf 'key_file_pass = %s\n' "$(obscure "$keypass")"
+                else
+                    printf 'pass = %s\n' "$(obscure "$secret")"
+                fi
+                printf 'known_hosts_file = %s\nshell_type = none\ndisable_hashcheck = true\n' "$KNOWN_HOSTS"
+                ;;
+            ftps | ftp)
+                printf 'type = ftp\nhost = %s\nport = %s\nuser = %s\npass = %s\n' "${CFG[DEST_HOST]}" "${CFG[DEST_PORT]}" "${CFG[DEST_USER]}" "$(obscure "$secret")"
+                if [[ ${CFG[DEST_TYPE]} == ftps ]]; then
+                    printf 'explicit_tls = true\n'
+                    [[ ${CFG[FTP_CERT_CHECK]:-} == pinned ]] && printf 'no_check_certificate = true\n'
+                fi
+                ;;
+        esac
+    } >"$tmp"
+    chmod 600 "$tmp"
+    mv -f "$tmp" "$RCLONE_CONF"
+}
+
+rclone_try() { # rclone_try: can we log in and use the remote folder?
+    : >"$ERRF"
+    RCLONE_CONFIG="$RCLONE_CONF" timeout 120 rclone --contimeout 20s --timeout 60s --low-level-retries 2 --retries 1 \
+        mkdir "$REMOTE:${CFG[DEST_PATH]}" </dev/null 2>"$ERRF" &&
+        RCLONE_CONFIG="$RCLONE_CONF" timeout 120 rclone --contimeout 20s --timeout 60s --low-level-retries 2 --retries 1 \
+            lsf "$REMOTE:${CFG[DEST_PATH]}" </dev/null >/dev/null 2>>"$ERRF"
+}
+
+# For FTPS with a certificate that is not publicly trusted: before every use,
+# the certificate must still have the fingerprint the owner accepted.
+check_pinned_cert() {
+    [[ ${CFG[DEST_TYPE]} == ftps && ${CFG[FTP_CERT_CHECK]:-} == pinned ]] || return 0
+    local now
+    now="$(ftps_cert_sha256 "${CFG[DEST_HOST]}" "${CFG[DEST_PORT]}")"
+    if [[ -z $now ]]; then
+        say "Could not read the FTPS server's certificate at ${CFG[DEST_HOST]}:${CFG[DEST_PORT]}." >&2
+        return 1
+    fi
+    if [[ $now != "${CFG[FTP_CERT_SHA256]}" ]]; then
+        say "The FTPS server's certificate has changed (expected ${CFG[FTP_CERT_SHA256]}, got $now). If you renewed it, run setup again." >&2
+        return 1
+    fi
+}
+
+# Asks for the destination and writes config, rclone.conf and keys into $CONF_DIR.
+prompt_destination() {
+    local kind="" secret="" keypass="" key="" ans="" defport
+    mkdir -p "$CONF_DIR"
+    chmod 700 "$CONF_DIR"
+    CFG=()
+    say "" >&2
+    say "Where should the backups go?" >&2
+    say "  1) SFTP  (recommended: everything travels encrypted)" >&2
+    say "  2) FTPS  (FTP with TLS encryption)" >&2
+    say "  3) FTP   (plain FTP: your FTP password travels unencrypted)" >&2
+    while :; do
+        ask ans "Type 1, 2 or 3" 1
+        case "$ans" in
+            1 | sftp) kind=sftp && break ;;
+            2 | ftps) kind=ftps && break ;;
+            3 | ftp) kind=ftp && break ;;
+        esac
+    done
+    if [[ $kind == ftp ]]; then
+        say "" >&2
+        say "WARNING: with plain FTP, your FTP user name and password travel over the" >&2
+        say "internet unencrypted, so someone on the way could read them and log in to" >&2
+        say "your FTP server. The backup data itself is still encrypted by this tool." >&2
+        say "Use SFTP or FTPS if your server offers it." >&2
+        ask ans "Type YES (capital letters) to use plain FTP anyway"
+        [[ $ans == YES ]] || die "$E_FAIL" "Stopped. Nothing was saved."
+    fi
+    CFG[DEST_TYPE]=$kind
+    if [[ $kind == sftp ]]; then defport=22; else defport=21; fi
+    ask_valid "CFG[DEST_HOST]" "Server address (name or IP)" "" "$RE_HOST" "letters, digits, dots, dashes"
+    ask_valid "CFG[DEST_PORT]" "Port" "$defport" "$RE_PORT" "a number"
+    ((10#${CFG[DEST_PORT]} >= 1 && 10#${CFG[DEST_PORT]} <= 65535)) || die "$E_USAGE" "The port must be between 1 and 65535."
+    ask_valid "CFG[DEST_USER]" "User name" "" "$RE_USER" "letters, digits and . _ @ + -"
+    ask_valid "CFG[DEST_PATH]" "Folder on that server for the backups" "server-backup" "$RE_PATH" "letters, digits and . _ / + - (no spaces)"
+
+    if [[ $kind == sftp ]]; then
+        say "How do you log in to the SFTP server?" >&2
+        say "  1) with a private key file (recommended)" >&2
+        say "  2) with a password" >&2
+        ask ans "Type 1 or 2" 1
+        if [[ $ans == 1 ]]; then
+            CFG[SFTP_AUTH]=key
+            ask key "Full path of the private key file on this server" "/root/.ssh/id_ed25519"
+            [[ -f $key && -r $key ]] || die "$E_USAGE" "There is no readable file at $key."
+            if [[ $(readlink -f "$key") != "$(readlink -f "$SSH_KEY" 2>/dev/null || true)" ]]; then
+                install -m 600 "$key" "$SSH_KEY"
+            fi
+            if ! ssh-keygen -y -P '' -f "$SSH_KEY" >/dev/null 2>&1 </dev/null; then
+                ask_secret keypass "This key has a passphrase. Type it"
+            fi
+        else
+            CFG[SFTP_AUTH]=password
+            ask_secret secret "Password for ${CFG[DEST_USER]}"
+            [[ -n $secret ]] || die "$E_USAGE" "The password cannot be empty."
+        fi
+        sftp_host_key "${CFG[DEST_HOST]}" "${CFG[DEST_PORT]}"
+    else
+        ask_secret secret "FTP password for ${CFG[DEST_USER]}"
+        [[ -n $secret ]] || die "$E_USAGE" "The password cannot be empty."
+        CFG[FTP_CERT_CHECK]=none
+    fi
+    write_rclone_conf "$secret" "$keypass"
+
+    step "Testing the connection to ${CFG[DEST_HOST]}"
+    if [[ $kind == ftps ]]; then
+        CFG[FTP_CERT_CHECK]=system
+        if ! rclone_try; then
+            if grep -q -E 'x509|certificate|tls:' "$ERRF"; then
+                local fp
+                fp="$(ftps_cert_sha256 "${CFG[DEST_HOST]}" "${CFG[DEST_PORT]}")"
+                [[ -n $fp ]] || die "$E_FAIL" "Could not read the FTPS server's certificate."
+                say "" >&2
+                say "The FTPS server uses a certificate that is not issued by a public authority" >&2
+                say "(normal for home and NAS servers). Its fingerprint is:" >&2
+                say "  SHA256 $fp" >&2
+                say "If you accept it, every backup checks that the server still shows exactly" >&2
+                say "this certificate, and stops if it changes." >&2
+                ask ans "Type YES to accept this certificate"
+                [[ $ans == YES ]] || die "$E_FAIL" "Stopped. Nothing was saved."
+                CFG[FTP_CERT_CHECK]=pinned
+                CFG[FTP_CERT_SHA256]=$fp
+                write_rclone_conf "$secret"
+            else
+                explain_error >&2
+                show_error_details
+                die "$E_FAIL" "Could not log in to the backup server."
+            fi
+        fi
+    fi
+    if ! rclone_try; then
+        explain_error >&2
+        show_error_details
+        die "$E_FAIL" "Could not log in to the backup server or use the folder ${CFG[DEST_PATH]}."
+    fi
+    say "Connection works."
+}
+
+# ---------------------------------------------------------------- systemd
+
+install_timers() {
+    if [[ ! -d /run/systemd/system ]]; then
+        warn "systemd is not running here, so no timers were installed."
+        return 0
+    fi
+    local bin
+    bin="$(readlink -f "${BASH_SOURCE[0]}")"
+    [[ $bin == "$BIN_PATH" ]] || warn "This script is not installed at $BIN_PATH; the timers call $bin."
+    umask 022
+    cat >"$UNIT_DIR/server-backup.service" <<EOF
+[Unit]
+Description=Server backup (server-backup run)
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=$bin run
+Nice=10
+IOSchedulingClass=idle
+EOF
+    cat >"$UNIT_DIR/server-backup.timer" <<'EOF'
+[Unit]
+Description=Daily server backup at 02:30
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    cat >"$UNIT_DIR/server-backup-check.service" <<EOF
+[Unit]
+Description=Weekly check of the server backups (server-backup check)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$bin check
+Nice=10
+IOSchedulingClass=idle
+EOF
+    cat >"$UNIT_DIR/server-backup-check.timer" <<'EOF'
+[Unit]
+Description=Weekly check of the server backups
+
+[Timer]
+OnCalendar=Sun *-*-* 05:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    umask 077
+    systemctl daemon-reload
+    systemctl enable --now server-backup.timer server-backup-check.timer >/dev/null 2>&1 ||
+        die "$E_FAIL" "Could not switch on the backup timers."
+    say "Timers on: backup every night at 02:30 (up to 30 minutes later), check every Sunday."
+}
+
+# ---------------------------------------------------------------- hooks
+
+# Shipped hook: Card Vault's own consistent SQLite copy, made inside its container.
+write_cardvault_hook() {
+    mkdir -p "$HOOKS_DIR"
+    chmod 700 "$HOOKS_DIR"
+    cat >"$HOOKS_DIR/10-cardvault" <<'HOOK'
+#!/usr/bin/env bash
+# server-backup hook: Card Vault makes a consistent copy of its SQLite database
+# (and its photos) inside its own volume, under /data/backups, using its own
+# script. The volume is backed up right after, so the copy is in the backup.
+# A container counts as Card Vault when its name, image or a label (Coolify
+# and Docker Compose labels included) contains "cardvault" or "card-vault".
+set -euo pipefail
+command -v docker >/dev/null 2>&1 || { echo "Docker is not installed; no Card Vault to back up."; exit 0; }
+found=0
+failed=0
+while IFS=$'\t' read -r id name; do
+    [[ -n $id ]] || continue
+    found=$((found + 1))
+    echo "Card Vault: making a database copy in container $name"
+    if ! timeout 900 docker exec "$id" sh scripts/container/backup.sh </dev/null; then
+        echo "Card Vault: the in-container backup failed in $name" >&2
+        failed=$((failed + 1))
+    fi
+done < <(docker ps --no-trunc --format '{{.ID}}{{"\t"}}{{.Names}}{{"\t"}}{{.Image}}{{"\t"}}{{.Labels}}' |
+    grep -i -E 'card[-_]?vault' | cut -f1,2 || true)
+if ((found == 0)); then
+    echo "Card Vault: no running Card Vault container found, nothing to do."
+fi
+exit $((failed > 0 ? 1 : 0))
+HOOK
+    chmod 700 "$HOOKS_DIR/10-cardvault"
+}
+
+# Runs every executable in hooks.d. Names of failed hooks go to HOOK_FAILED.
+run_hooks() {
+    local h rc
+    HOOK_FAILED=""
+    [[ -d $HOOKS_DIR ]] || return 0
+    for h in "$HOOKS_DIR"/*; do
+        [[ -f $h && -x $h ]] || continue
+        case "$h" in *~ | *.dpkg-* | *.disabled | *.bak) continue ;; esac
+        say "Hook: $(basename "$h")"
+        rc=0
+        SERVER_BACKUP_STAGING="$STAGING/hooks" timeout 3600 "$h" </dev/null 2>&1 | sed 's/^/  /' || rc=${PIPESTATUS[0]}
+        if ((rc != 0)); then
+            warn "Hook $(basename "$h") failed (exit code $rc)."
+            HOOK_FAILED+="$(basename "$h") "
+        fi
+    done
+    HOOK_FAILED="${HOOK_FAILED% }"
+}
+
+# ---------------------------------------------------------------- docker helpers
+
+have_docker() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
+
+# The folder that holds coolify-db's live PostgreSQL files (not backed up raw).
+coolify_db_source() {
+    docker container inspect coolify-db --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true
+}
+coolify_db_volume() {
+    docker container inspect coolify-db --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' 2>/dev/null || true
+}
+
+# Named, local volumes to back up: "name<TAB>mountpoint" lines.
+list_volumes() {
+    local skip v mp drv
+    skip="$(coolify_db_volume)"
+    [[ -n $skip ]] || skip="coolify-db"
+    docker volume ls -q | while IFS= read -r v; do
+        [[ $v == "$skip" ]] && continue
+        [[ $v =~ ^[0-9a-f]{64}$ ]] && continue # anonymous volume
+        drv="$(docker volume inspect -f '{{.Driver}}' "$v" 2>/dev/null || true)"
+        [[ $drv == local ]] || continue
+        mp="$(docker volume inspect -f '{{.Mountpoint}}' "$v")"
+        [[ -d $mp ]] && printf '%s\t%s\n' "$v" "$mp"
+    done
+}
+
+coolify_version() {
+    local img
+    img="$(docker container inspect coolify --format '{{.Config.Image}}' 2>/dev/null || true)"
+    if [[ -n $img ]]; then printf '%s' "${img##*:}"; else printf 'not installed'; fi
+}
+
+dump_coolify_db() {
+    if ! docker container inspect coolify-db >/dev/null 2>&1; then
+        say "No Coolify database container (coolify-db) on this server; skipping its dump."
+        return 0
+    fi
+    local user
+    user="$(env_get DB_USERNAME "$COOLIFY_ENV")"
+    [[ -n $user ]] || user=coolify
+    say "Saving Coolify's database (user $user)"
+    docker exec coolify-db pg_dumpall -U "$user" >"$STAGING/coolify-db.sql.part" 2>"$ERRF" </dev/null || return 1
+    printf '%s\n' "$user" >"$STAGING/coolify-db.user"
+    mv -f "$STAGING/coolify-db.sql.part" "$STAGING/coolify-db.sql"
+    say "  $(human "$(stat -c %s "$STAGING/coolify-db.sql")") saved"
+}
+
+write_manifest() { # write_manifest volumes.tsv
+    local vols=$1 name mp bytes total=0
+    : >"$STAGING/volumes.tsv"
+    while IFS=$'\t' read -r name mp; do
+        [[ -n $name ]] || continue
+        bytes="$(du -sb "$mp" 2>/dev/null | cut -f1 || echo 0)"
+        total=$((total + ${bytes:-0}))
+        printf '%s\t%s\t%s\n' "$name" "$mp" "${bytes:-0}" >>"$STAGING/volumes.tsv"
+    done <"$vols"
+    if have_docker; then
+        if [[ -s $STAGING/volumes.tsv ]]; then
+            cut -f1 "$STAGING/volumes.tsv" | xargs docker volume inspect >"$STAGING/volumes.json" 2>/dev/null || echo '[]' >"$STAGING/volumes.json"
+        else
+            echo '[]' >"$STAGING/volumes.json"
+        fi
+        docker ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' >"$STAGING/docker-ps.txt" 2>&1 || true
+    fi
+    {
+        printf 'server-backup manifest\n'
+        printf 'Made:            %s\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+        printf 'Server name:     %s\n' "$(hostname)"
+        printf 'Backup name:     %s\n' "${CFG[BACKUP_HOST]}"
+        printf 'Tool version:    %s\n' "$VERSION"
+        if have_docker; then
+            printf 'Coolify version: %s\n' "$(coolify_version)"
+        fi
+        printf 'Coolify database dump: %s\n' "$([[ -f $STAGING/coolify-db.sql ]] && echo yes || echo no)"
+        printf '\nDocker volumes (name, size):\n'
+        while IFS=$'\t' read -r name mp bytes; do
+            printf '  %-50s %s\n' "$name" "$(human "$bytes")"
+        done <"$STAGING/volumes.tsv"
+        printf '  Total: %s\n' "$(human "$total")"
+        if [[ -f $STAGING/docker-ps.txt ]]; then
+            printf '\nContainers at backup time:\n'
+            sed 's/^/  /' "$STAGING/docker-ps.txt"
+        fi
+    } >"$STAGING/manifest.txt"
+}
+
+# ---------------------------------------------------------------- setup
+
+gen_password() {
+    local raw
+    raw="$(LC_ALL=C tr -dc 'abcdefghjkmnpqrstuvwxyz23456789' </dev/urandom | head -c 30 || true)"
+    [[ ${#raw} -eq 30 ]] || die "$E_FAIL" "Could not create a random password."
+    printf '%s-%s-%s-%s-%s-%s' "${raw:0:5}" "${raw:5:5}" "${raw:10:5}" "${raw:15:5}" "${raw:20:5}" "${raw:25:5}"
+}
+
+cmd_setup() {
+    need_root setup
+    [[ $# -eq 0 ]] || die "$E_USAGE" "setup takes no options."
+    take_lock
+    ensure_tools
+    say "server-backup setup"
+    say "This sets up encrypted nightly backups of this whole server to your own SFTP or FTP server."
+    if [[ -f $CONF_FILE ]]; then
+        load_config
+        say "Backups are already set up, to: $(dest_label)"
+        ask_yes_no "Set up again (replaces where backups go)?" n || {
+            say "Nothing changed."
+            return 0
+        }
+    fi
+    local old_host="${CFG[BACKUP_HOST]:-}"
+    prompt_destination
+    CFG[BACKUP_HOST]="${old_host:-$(hostname -s)}"
+    CFG[CREATED]="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+    local tmpd="$WORK" newpass="" ans
+    if RCLONE_CONFIG="$RCLONE_CONF" rclone lsf "$REMOTE:${CFG[DEST_PATH]}/config" </dev/null >/dev/null 2>&1; then
+        say ""
+        say "A backup store already exists in that folder (for example from this server"
+        say "before, or from the server this one replaces). Its password is needed."
+        ask_secret newpass "Backup password (restic password) of that store"
+        printf '%s' "$newpass" >"$tmpd/pw"
+        restic_env "$tmpd/pw"
+        if ! R cat config >/dev/null; then
+            explain_error >&2
+            die "$E_FAIL" "Could not open the existing backup store. Nothing else was changed."
+        fi
+        install -m 600 "$tmpd/pw" "$PASS_FILE"
+    else
+        newpass="$(gen_password)"
+        printf '%s' "$newpass" >"$tmpd/pw"
+        restic_env "$tmpd/pw"
+        step "Creating the encrypted backup store"
+        if ! R init >/dev/null; then
+            explain_error >&2
+            show_error_details
+            die "$E_FAIL" "Could not create the backup store."
+        fi
+        install -m 600 "$tmpd/pw" "$PASS_FILE"
+        cat <<EOF
+
+=====================================================================
+  YOUR BACKUP PASSWORD (shown only this once):
+
+      $newpass
+
+  Save it NOW in your password manager, under a name like
+  "Server backup password (restic)". Also note where the backups go:
+      $(dest_label)
+
+  Without this password NOBODY can restore anything, not even you,
+  if this server is lost. It is not stored in the backups.
+=====================================================================
+EOF
+        while :; do
+            ask ans "Type SAVED once the password is stored safely"
+            [[ $ans == SAVED ]] && break
+        done
+    fi
+    write_config
+    if [[ ! -e $HOOKS_DIR/10-cardvault ]]; then write_cardvault_hook; fi
+    mkdir -p "$STATE_DIR"
+    chmod 755 "$STATE_DIR"
+    install_timers
+    say ""
+    say "Setup finished. Settings are in $CONF_DIR (readable by root only)."
+    if ask_yes_no "Make the first backup now?" y; then
+        exec 9>&-
+        cmd_run
+    fi
+}
+
+# ---------------------------------------------------------------- run
+
+RUN_DONE=0
+RUN_STEP=""
+RUN_START=0
+run_exit_trap() {
+    local rc=$?
+    if ((RUN_DONE == 0 && DRY_RUN == 0)); then
+        status_update "time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "epoch=$(date +%s)" success=no \
+            "error=Stopped unexpectedly while: ${RUN_STEP:-starting}" warning= \
+            "duration_seconds=$(($(date +%s) - RUN_START))"
+    fi
+    cleanup
+    exit "$rc"
+}
+
+
+run_failed() { # run_failed "plain message"
+    status_update "time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "epoch=$(date +%s)" success=no "error=$1" warning= \
+        "duration_seconds=$(($(date +%s) - RUN_START))"
+    RUN_DONE=1
+    die "$E_FAIL" "$1"
+}
+
+cmd_run() {
+    need_root run
+    while (($#)); do
+        case "$1" in
+            --dry-run | -n) DRY_RUN=1 ;;
+            *) die "$E_USAGE" "Unknown option for run: $1" ;;
+        esac
+        shift
+    done
+    load_config
+    require_tools
+    take_lock
+    RUN_START=$(date +%s)
+    trap run_exit_trap EXIT
+    restic_env
+    [[ -f $PASS_FILE ]] || run_failed "The backup password file $PASS_FILE is missing. Run setup again."
+
+    local docker_ok=0
+    have_docker && docker_ok=1
+
+    RUN_STEP="checking the backup server"
+    step "Checking the backup server ($(dest_label))"
+    if ! check_pinned_cert; then
+        run_failed "The FTPS server's certificate is not the one accepted during setup. Backup not made."
+    fi
+    if ! R cat config >/dev/null; then
+        show_error_details
+        run_failed "$(explain_error)"
+    fi
+    R unlock >/dev/null || true
+
+    RUN_STEP="preparing (database dump and hooks)"
+    rm -rf "$STAGING"
+    mkdir -p "$STAGING/hooks"
+    chmod 700 "$STAGING"
+    if ((DRY_RUN)); then
+        say "Dry run: the database dump and hooks are skipped."
+    elif ((docker_ok)); then
+        step "Preparing"
+        if ! dump_coolify_db; then
+            show_error_details
+            run_failed "Could not save Coolify's database (pg_dumpall in coolify-db failed). Backup not made."
+        fi
+    else
+        warn "Docker is not running here; Coolify's database and the Docker volumes are skipped."
+    fi
+    ((DRY_RUN)) || run_hooks
+
+    RUN_STEP="listing what to back up"
+    local -a paths=() excludes=()
+    local vols p name mp
+    vols="$WORK/volumes"
+    if ((docker_ok)); then list_volumes >"$vols"; fi
+    [[ -d $COOLIFY_DIR ]] && paths+=("$COOLIFY_DIR")
+    for p in "${ETC_PATHS[@]}"; do [[ -e $p ]] && paths+=("$p"); done
+    paths+=("$STAGING")
+    while IFS=$'\t' read -r name mp; do paths+=("$mp"); done <"$vols"
+    excludes=(--exclude "$PASS_FILE" --exclude "$CONF_DIR/.*" --exclude-caches)
+    for p in "${COOLIFY_EXCLUDES[@]}"; do excludes+=(--exclude "$p"); done
+    if ((docker_ok)); then
+        p="$(coolify_db_source)"
+        [[ -n $p ]] && excludes+=(--exclude "$p")
+    fi
+    write_manifest "$vols"
+    say ""
+    sed -n '1,/^Containers/p' "$STAGING/manifest.txt" | grep -v '^Containers'
+
+    RUN_STEP="sending the backup"
+    step "Backing up (this can take a while the first time)"
+    local out
+    out="$WORK/backup.json"
+    local rc=0
+    local -a dry=()
+    ((DRY_RUN)) && dry=(--dry-run)
+    R backup "${dry[@]}" --json --host "${CFG[BACKUP_HOST]}" --tag "$TAG" "${excludes[@]}" -- "${paths[@]}" >"$out" || rc=$?
+    local summary snap total added warning=""
+    summary="$(grep '"message_type":"summary"' "$out" | tail -n 1 || true)"
+    if [[ $rc -ne 0 && $rc -ne 3 ]] || [[ -z $summary ]]; then
+        show_error_details
+        run_failed "$(explain_error) The backup was not made."
+    fi
+    if ((rc == 3)); then
+        warning="Some files could not be read (they probably changed or vanished during the backup); everything else was saved."
+        warn "$warning"
+        grep '"message_type":"error"' "$out" | jq -r '.item // empty' 2>/dev/null | head -n 5 | sed 's/^/  could not read: /' >&2 || true
+    fi
+    snap="$(jq -r '.snapshot_id // empty' <<<"$summary")"
+    total="$(jq -r '.total_bytes_processed // 0' <<<"$summary")"
+    added="$(jq -r '.data_added // 0' <<<"$summary")"
+    if ((DRY_RUN)); then
+        say "Dry run: $(human "$total") would be backed up, about $(human "$added") of it new. Nothing was sent."
+        R forget --dry-run --group-by host,tags --tag "$TAG" --keep-daily "$KEEP_DAILY" --keep-weekly "$KEEP_WEEKLY" --keep-monthly "$KEEP_MONTHLY" | grep -E '^(keep|remove|Would)' || true
+        RUN_DONE=1
+        return 0
+    fi
+    say "Backup saved: snapshot ${snap:0:8}, $(human "$total") in total, $(human "$added") new data sent."
+
+    RUN_STEP="removing old backups"
+    step "Removing old backups (keeping $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly)"
+    if ! R forget --prune --group-by host,tags --tag "$TAG" --keep-daily "$KEEP_DAILY" --keep-weekly "$KEEP_WEEKLY" --keep-monthly "$KEEP_MONTHLY" >/dev/null; then
+        show_error_details
+        status_update "time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "epoch=$(date +%s)" success=no "snapshot=$snap" \
+            "size_bytes=$total" "size=$(human "$total")" "added_bytes=$added" \
+            "error=The backup itself was saved (snapshot ${snap:0:8}), but removing old backups failed: $(explain_error)" \
+            "warning=$warning" "duration_seconds=$(($(date +%s) - RUN_START))"
+        RUN_DONE=1
+        die "$E_FAIL" "Removing old backups failed. The new backup itself was saved."
+    fi
+    rm -rf "$STAGING"
+
+    local err=""
+    [[ -n $HOOK_FAILED ]] && err="These preparation hooks failed: $HOOK_FAILED. Their files were still backed up as they were."
+    status_update "time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "epoch=$(date +%s)" \
+        "success=$([[ -z $err ]] && echo yes || echo no)" "snapshot=$snap" "size_bytes=$total" "size=$(human "$total")" \
+        "added_bytes=$added" "error=$err" "warning=$warning" "duration_seconds=$(($(date +%s) - RUN_START))"
+    RUN_DONE=1
+    if [[ -n $err ]]; then die "$E_FAIL" "$err"; fi
+    say "All done."
+}
+
+# ---------------------------------------------------------------- check
+
+cmd_check() {
+    need_root check
+    local quick=0
+    while (($#)); do
+        case "$1" in
+            --quick) quick=1 ;;
+            *) die "$E_USAGE" "Unknown option for check: $1" ;;
+        esac
+        shift
+    done
+    load_config
+    require_tools
+    take_lock
+    restic_env
+    local -a extra=()
+    ((quick)) || extra=(--read-data-subset=5%)
+    step "Checking the backup store $(dest_label)"
+    ((quick)) || say "Reading back a random 5% of the stored data to prove it is intact."
+    if ! check_pinned_cert || ! R check "${extra[@]}" >/dev/null; then
+        show_error_details
+        local msg
+        msg="$(explain_error)"
+        grep -q -E 'Fatal: repository contains errors|error: |ciphertext verification failed|pack .* contains' "$ERRF" &&
+            msg="The backup store has errors. Make a new backup soon and ask for help to repair the store (restic repair)."
+        status_update "check_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "check_epoch=$(date +%s)" check_success=no "check_error=$msg"
+        die "$E_FAIL" "$msg"
+    fi
+    status_update "check_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "check_epoch=$(date +%s)" check_success=yes check_error=
+    say "The backup store is fine."
+}
+
+# ---------------------------------------------------------------- list
+
+snapshots_json() { R snapshots --json --tag "$TAG"; }
+
+cmd_list() {
+    need_root list
+    load_config
+    require_tools
+    restic_env
+    local js
+    if ! js="$(snapshots_json)"; then
+        show_error_details
+        die "$E_FAIL" "$(explain_error)"
+    fi
+    if [[ $(jq 'length' <<<"$js") -eq 0 ]]; then
+        say "There are no backups yet."
+        return 0
+    fi
+    say "Backups in $(dest_label), newest first:"
+    say ""
+    printf '  %-3s %-24s %-10s %s\n' "#" "Made (this server's time)" "ID" "Server"
+    local n=0 t id host
+    while IFS=$'\t' read -r t id host; do
+        n=$((n + 1))
+        printf '  %-3s %-24s %-10s %s\n' "$n" "$(date -d "$t" '+%a %d %b %Y %H:%M')" "$id" "$host"
+    done < <(jq -r 'sort_by(.time) | reverse | .[] | [.time, .short_id, .hostname] | @tsv' <<<"$js")
+    say ""
+    say "$n backups. To restore single files: server-backup restore-files --snapshot ID ..."
+}
+
+# ---------------------------------------------------------------- status
+
+cmd_status() {
+    need_root status
+    local k v
+    declare -A st=()
+    say "server-backup status"
+    say "--------------------"
+    if [[ -f $CONF_FILE ]]; then
+        load_config
+        say "Backups go to:   $(dest_label)"
+        say "Backup name:     ${CFG[BACKUP_HOST]}"
+        [[ -f $PASS_FILE ]] || say "PROBLEM:         the backup password file is missing ($PASS_FILE)."
+    else
+        say "Not set up yet. Run: sudo server-backup setup"
+    fi
+    if [[ -f $STATUS_FILE ]]; then
+        while IFS='=' read -r k v; do st[$k]=$v; done <"$STATUS_FILE"
+        if [[ -n ${st[time]:-} ]]; then
+            local age=$(($(date +%s) - ${st[epoch]:-0}))
+            say "Last backup:     $(date -d "${st[time]}" '+%a %d %b %Y %H:%M') ($((age / 3600)) hours ago)"
+            if [[ ${st[success]:-} == yes ]]; then
+                say "Result:          OK, snapshot ${st[snapshot]:0:8}, ${st[size]:-?} in total"
+            else
+                say "Result:          FAILED: ${st[error]:-unknown problem}"
+            fi
+            [[ -n ${st[warning]:-} ]] && say "Note:            ${st[warning]}"
+            ((age > 36 * 3600)) && say "PROBLEM:         the last backup is more than a day and a half old."
+        else
+            say "Last backup:     none yet"
+        fi
+        if [[ -n ${st[check_time]:-} ]]; then
+            say "Last check:      $(date -d "${st[check_time]}" '+%a %d %b %Y %H:%M'), $([[ ${st[check_success]:-} == yes ]] && echo OK || echo "FAILED: ${st[check_error]:-}")"
+        fi
+    else
+        say "Last backup:     none yet"
+    fi
+    if [[ -d /run/systemd/system ]]; then
+        local nb nc
+        nb="$(systemctl show server-backup.timer -p NextElapseUSecRealtime --value 2>/dev/null || true)"
+        nc="$(systemctl show server-backup-check.timer -p NextElapseUSecRealtime --value 2>/dev/null || true)"
+        if systemctl is-active --quiet server-backup.timer 2>/dev/null; then
+            say "Next backup:     ${nb:-scheduled}"
+        else
+            say "PROBLEM:         the nightly backup timer is not active."
+        fi
+        systemctl is-active --quiet server-backup-check.timer 2>/dev/null && say "Next check:      ${nc:-scheduled}"
+    fi
+    if ! (exec 8>"$LOCK_FILE" && flock -n 8); then say "Right now:       a backup, check or restore is running."; fi
+    if [[ ${st[success]:-} == no ]]; then return "$E_FAIL"; fi
+    return 0
+}
+
+# ---------------------------------------------------------------- restore helpers
+
+# Picks the snapshot: the given ID, or the newest one. Prints the full ID.
+pick_snapshot() {
+    local want=$1 js id
+    if ! js="$(snapshots_json)"; then
+        show_error_details
+        die "$E_FAIL" "$(explain_error)"
+    fi
+    if [[ -n $want ]]; then
+        id="$(jq -r --arg w "$want" '[.[] | select(.id == $w or .short_id == $w or (.id | startswith($w)))] | .[0].id // empty' <<<"$js")"
+        [[ -n $id ]] || die "$E_USAGE" "There is no backup with the ID $want. See: server-backup list"
+    else
+        id="$(jq -r 'sort_by(.time) | last | .id // empty' <<<"$js")"
+        [[ -n $id ]] || die "$E_FAIL" "There are no backups in this backup store."
+    fi
+    printf '%s' "$id"
+}
+
+snap_time() { # snap_time ID
+    R snapshots --json "$1" | jq -r '.[0].time' | xargs -I{} date -d {} '+%a %d %b %Y %H:%M'
+}
+
+# Moves an existing path aside into the pre-restore folder (keeps its full path).
+move_aside() { # move_aside PATH PRE_DIR
+    local p=$1 pre=$2
+    [[ -e $p || -L $p ]] || return 0
+    mkdir -p "$pre$(dirname "$p")"
+    mv -- "$p" "$pre$p"
+}
+
+# Validates the restore target: new or empty folder, never / or a system folder.
+check_target() {
+    local t=$1
+    [[ $t == /* ]] || die "$E_USAGE" "The target folder must be a full path starting with /."
+    case "$(readlink -m "$t")" in
+        / | /etc | /data | /data/coolify | /var | /var/lib | /var/lib/docker* | /usr* | /bin | /sbin | /boot* | /root | /home)
+            die "$E_USAGE" "Restoring straight into $t could overwrite live files. Pick a new, empty folder." ;;
+    esac
+    if [[ -e $t ]]; then
+        [[ -d $t ]] || die "$E_USAGE" "$t exists and is not a folder."
+        [[ -z $(ls -A "$t") ]] || die "$E_USAGE" "$t is not empty. Pick a new, empty folder."
+    fi
+}
+
+# ---------------------------------------------------------------- restore-files
+
+cmd_restore_files() {
+    need_root restore-files
+    local snap_arg="" target="" vol="" stamp
+    local -a want=()
+    while (($#)); do
+        case "$1" in
+            --snapshot) snap_arg=${2:?--snapshot needs an ID} && shift ;;
+            --target) target=${2:?--target needs a folder} && shift ;;
+            --volume) vol=${2:?--volume needs a volume name} && shift ;;
+            --dry-run | -n) DRY_RUN=1 ;;
+            -*) die "$E_USAGE" "Unknown option for restore-files: $1" ;;
+            *) want+=("$1") ;;
+        esac
+        shift
+    done
+    load_config
+    require_tools
+    restic_env
+    local snap
+    snap="$(pick_snapshot "$snap_arg")"
+    say "Backup ${snap:0:8} from $(snap_time "$snap")"
+    if [[ -z $vol && ${#want[@]} -eq 0 ]]; then
+        say "What should be restored? Docker volumes in this backup:"
+        R dump "$snap" "$STAGING/volumes.tsv" | awk -F'\t' '{print "  " $1}' || true
+        say "Or a full path such as /data/coolify/proxy or /etc/cloudflared."
+        local ans=""
+        ask ans "Volume name or full path"
+        [[ -n $ans ]] || die "$E_USAGE" "Nothing chosen."
+        if [[ $ans == /* ]]; then want=("$ans"); else vol=$ans; fi
+    fi
+    if [[ -n $vol ]]; then
+        local mp
+        mp="$(R dump "$snap" "$STAGING/volumes.tsv" | awk -F'\t' -v v="$vol" '$1 == v {print $2}')"
+        [[ -n $mp ]] || die "$E_USAGE" "The volume $vol is not in this backup."
+        want+=("$mp")
+    fi
+    local p
+    for p in "${want[@]}"; do
+        [[ $p == /* ]] || die "$E_USAGE" "Paths must start with / (for example /data/coolify/proxy)."
+    done
+    stamp="$(date '+%Y%m%d-%H%M%S')"
+    [[ -n $target ]] || target="$STATE_DIR/restored-$stamp"
+    check_target "$target"
+    if ((DRY_RUN)); then
+        say "Dry run. These would be restored into $target:"
+        for p in "${want[@]}"; do
+            R ls "$snap" "$p" | head -n 20 | sed 's/^/  /'
+        done
+        return 0
+    fi
+    take_lock
+    mkdir -p "$target"
+    chmod 700 "$target"
+    local -a inc=()
+    for p in "${want[@]}"; do inc+=(--include "$p"); done
+    step "Restoring into $target"
+    if ! R restore "$snap" --target "$target" "${inc[@]}" >/dev/null; then
+        show_error_details
+        die "$E_FAIL" "$(explain_error) The restore did not finish."
+    fi
+    local n
+    n="$(find "$target" -type f | wc -l)"
+    ((n > 0)) || die "$E_FAIL" "Nothing matched ${want[*]} in that backup."
+    say "Restored $n files into $target, keeping their full paths, for example:"
+    for p in "${want[@]}"; do say "  $target$p"; done
+    say "Nothing on the live server was changed. Copy back what you need, for example:"
+    say "  cp -a $target${want[0]}/THE-FILE ${want[0]}/"
+}
+
+# ---------------------------------------------------------------- restore-dr
+
+# Merges Coolify .env files: every key from the backup wins (APP_KEY, database
+# and Redis passwords), keys that only exist in the new install are kept.
+merge_env() { # merge_env BACKUP_ENV NEW_ENV OUT
+    awk -F= '
+        NR == FNR { if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { k = $1; a[k] = $0; order[++n] = k }; next }
+        {
+            if ($0 ~ /^[A-Za-z_][A-Za-z0-9_]*=/ && ($1 in a)) { print a[$1]; seen[$1] = 1 }
+            else print
+        }
+        END { for (i = 1; i <= n; i++) if (!(order[i] in seen)) print a[order[i]] }
+    ' "$1" "$2" >"$3"
+}
+
+wait_pg() { # wait_pg USER
+    local _
+    for _ in $(seq 1 60); do
+        docker exec coolify-db pg_isready -U "$1" -q </dev/null 2>/dev/null && return 0
+        sleep 2
+    done
+    return 1
+}
+
+restore_coolify_db() { # restore_coolify_db DUMP PRE
+    local dump=$1 pre=$2 user filtered
+    user="$(env_get DB_USERNAME "$COOLIFY_ENV")"
+    [[ -n $user ]] || user=coolify
+    [[ $user =~ ^[A-Za-z0-9_]+$ ]] || die "$E_FAIL" "Unexpected database user name in $COOLIFY_ENV."
+    docker start coolify-db >/dev/null
+    wait_pg "$user" || die "$E_FAIL" "Coolify's database (coolify-db) did not start."
+    say "Saving this server's current Coolify database aside"
+    mkdir -p "$pre"
+    docker exec coolify-db pg_dumpall -U "$user" </dev/null >"$pre/coolify-db-before-restore.sql"
+    say "Replacing Coolify's database with the one from the backup"
+    docker exec -i coolify-db psql -U "$user" -d template1 -q -v ON_ERROR_STOP=1 >/dev/null <<SQL
+SELECT format('DROP DATABASE %I WITH (FORCE)', datname) FROM pg_database WHERE NOT datistemplate \gexec
+SELECT format('DROP ROLE %I', rolname) FROM pg_roles WHERE rolname !~ '^pg_' AND rolname <> current_user \gexec
+CREATE DATABASE postgres;
+SQL
+    # The role we are logged in as already exists: skip only its CREATE line.
+    filtered="$(dirname "$dump")/coolify-db.restore.sql"
+    sed -E "/^CREATE ROLE \"?${user}\"?;\$/d" "$dump" >"$filtered"
+    if ! docker exec -i coolify-db psql -U "$user" -d template1 -q -v ON_ERROR_STOP=1 <"$filtered" >/dev/null 2>"$ERRF"; then
+        show_error_details
+        die "$E_FAIL" "Loading the database from the backup failed. The previous database is saved in $pre/coolify-db-before-restore.sql"
+    fi
+    say "  Coolify's database is restored."
+}
+
+coolify_compose_up() {
+    local src="$COOLIFY_DIR/source"
+    local -a files=()
+    [[ -f $src/docker-compose.yml ]] || return 1
+    files=(-f "$src/docker-compose.yml")
+    [[ -f $src/docker-compose.prod.yml ]] && files+=(-f "$src/docker-compose.prod.yml")
+    [[ -f $src/docker-compose.custom.yml ]] && files+=(-f "$src/docker-compose.custom.yml")
+    (cd "$src" && docker compose --env-file "$src/.env" "${files[@]}" up -d --remove-orphans --force-recreate --wait --wait-timeout 180 </dev/null)
+}
+
+# Coolify logs in to this server over SSH with its own key (restored in
+# /data/coolify/ssh/keys). The new server must accept that key for root.
+authorize_coolify_keys() {
+    local k pub ak=/root/.ssh/authorized_keys added=0
+    [[ -d $COOLIFY_DIR/ssh/keys ]] || return 0
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    touch "$ak"
+    chmod 600 "$ak"
+    for k in "$COOLIFY_DIR"/ssh/keys/*; do
+        [[ -f $k ]] || continue
+        pub="$(ssh-keygen -y -P '' -f "$k" 2>/dev/null </dev/null || true)"
+        [[ -n $pub ]] || continue
+        if ! grep -qF -- "$pub" "$ak"; then
+            printf '%s coolify-restored\n' "$pub" >>"$ak"
+            added=$((added + 1))
+        fi
+    done
+    say "  Coolify's SSH keys from the backup are allowed to log in to this server ($added added)."
+}
+
+cmd_restore_dr() {
+    need_root restore-dr
+    local snap_arg=""
+    while (($#)); do
+        case "$1" in
+            --snapshot) snap_arg=${2:?--snapshot needs an ID} && shift ;;
+            --dry-run | -n) DRY_RUN=1 ;;
+            *) die "$E_USAGE" "Unknown option for restore-dr: $1" ;;
+        esac
+        shift
+    done
+    take_lock
+    say "server-backup: full disaster recovery onto this server"
+    have_docker || die "$E_FAIL" "Docker is not running. Set up this server with bootstrap.sh first (same mode as the old server)."
+    docker container inspect coolify-db >/dev/null 2>&1 ||
+        die "$E_FAIL" "Coolify is not installed here (no coolify-db container). Set up this server with bootstrap.sh first."
+    docker compose version >/dev/null 2>&1 || die "$E_FAIL" "Docker Compose is missing; Coolify cannot be restarted without it."
+    ensure_tools
+
+    # 1. Destination and password, kept in a temporary folder until confirmed.
+    local work="$WORK/conf" pwfile
+    mkdir -p "$work"
+    if [[ -f $REAL_CONF_DIR/config ]]; then
+        set_conf_dir "$REAL_CONF_DIR"
+        load_config
+        say "Using the backup destination saved on this server: $(dest_label)"
+        cp -a "$REAL_CONF_DIR/." "$work/"
+        set_conf_dir "$work"
+        sed -i "s#$REAL_CONF_DIR/#$work/#g" "$RCLONE_CONF"
+    else
+        set_conf_dir "$work"
+        say "Enter the details of the backup server the old server used."
+        prompt_destination
+        CFG[BACKUP_HOST]="$(hostname -s)"
+    fi
+    pwfile="$work/restic-password"
+    if [[ ! -s $pwfile ]]; then
+        local pw=""
+        ask_secret pw "Backup password (restic password, from your password manager)"
+        [[ -n $pw ]] || die "$E_USAGE" "The password cannot be empty."
+        printf '%s' "$pw" >"$pwfile"
+        chmod 600 "$pwfile"
+    fi
+    restic_env "$pwfile"
+    check_pinned_cert || die "$E_FAIL" "The FTPS server's certificate is not the accepted one."
+
+    # 2. Which backup.
+    local snap when
+    snap="$(pick_snapshot "$snap_arg")"
+    when="$(snap_time "$snap")"
+    local rtmp_list="$work/manifest.txt"
+    R dump "$snap" "$STAGING/manifest.txt" >"$rtmp_list" || die "$E_FAIL" "This backup has no manifest; it was not made by server-backup run."
+    say ""
+    say "Backup ${snap:0:8} from $when will be restored. It contains:"
+    sed -n '1,/^Containers/p' "$rtmp_list" | grep -v '^Containers' | sed 's/^/  /'
+    say ""
+    say "This will:"
+    say "  - stop Coolify and every container on this server"
+    say "  - replace Coolify's database, its settings (/data/coolify) and its .env (APP_KEY)"
+    say "  - replace the data of the Docker volumes listed above (creating missing ones)"
+    say "  - restore /etc/cloudflared, SSH settings, docker-port-guard and backup settings"
+    say "  - start Coolify again"
+    local stamp pre rtmp
+    stamp="$(date '+%Y%m%d-%H%M%S')"
+    pre="$STATE_DIR/pre-restore-$stamp"
+    rtmp="$STATE_DIR/restore-$stamp"
+    say "Anything replaced is first moved to $pre"
+
+    local need avail
+    need="$(R stats --json --mode restore-size "$snap" | jq -r '.total_size // 0')"
+    mkdir -p "$STATE_DIR"
+    avail="$(df -B1 --output=avail "$STATE_DIR" | tail -n 1 | tr -d ' ')"
+    say "Space needed: about $(human "$need"), free: $(human "$avail")"
+    ((avail > need + 1073741824)) || die "$E_FAIL" "Not enough free disk space for the restore (need $(human "$need") plus 1 GiB spare)."
+    if ((DRY_RUN)); then
+        say ""
+        say "Dry run: the backup server and password work, nothing was changed."
+        return 0
+    fi
+    local ans=""
+    ask ans "Type RESTORE (capital letters) to start"
+    [[ $ans == RESTORE ]] || die "$E_FAIL" "Stopped. Nothing was changed."
+
+    # 3. Get the files from the backup into a temporary folder.
+    mkdir -p "$pre" "$rtmp"
+    chmod 700 "$pre" "$rtmp"
+    step "1/7 Downloading the backup (this can take a while)"
+    if ! R restore "$snap" --target "$rtmp" >/dev/null; then
+        show_error_details
+        die "$E_FAIL" "$(explain_error) Downloading the backup failed. Nothing on this server was changed yet."
+    fi
+    local rs="$rtmp$STAGING"
+    say "  done."
+
+    # 4. Stop containers (coolify first, so it does not restart anything).
+    step "2/7 Stopping Coolify and all containers"
+    local -a running=()
+    mapfile -t running < <(docker ps --format '{{.Names}}' | grep -v -x 'coolify-db' || true)
+    docker stop coolify >/dev/null 2>&1 || true
+    if ((${#running[@]})); then docker stop "${running[@]}" >/dev/null; fi
+    printf '%s\n' "${running[@]}" >"$pre/stopped-containers.txt"
+    say "  stopped ${#running[@]} containers."
+
+    # 5. Coolify's database.
+    step "3/7 Coolify's database"
+    if [[ -f $rs/coolify-db.sql ]]; then
+        restore_coolify_db "$rs/coolify-db.sql" "$pre"
+    else
+        warn "This backup has no Coolify database dump; the database was left as it is."
+    fi
+
+    # 6. /data/coolify files.
+    step "4/7 Coolify's files in $COOLIFY_DIR"
+    if [[ -d $rtmp$COOLIFY_DIR ]]; then
+        local e base
+        mkdir -p "$COOLIFY_DIR"
+        shopt -s dotglob nullglob
+        for e in "$rtmp$COOLIFY_DIR"/*; do
+            base="$(basename "$e")"
+            if [[ $base == source && -d $COOLIFY_DIR/source ]]; then
+                # Keep this server's freshly installed Coolify program files; take
+                # the old server's secrets (.env keys win) and any extra files.
+                mkdir -p "$pre$COOLIFY_DIR/source"
+                cp -a "$COOLIFY_DIR/source/." "$pre$COOLIFY_DIR/source/"
+                if [[ -f $e/.env ]]; then
+                    merge_env "$e/.env" "$COOLIFY_ENV" "$work/env.merged"
+                    cat "$work/env.merged" >"$COOLIFY_ENV"
+                fi
+                local f
+                for f in "$e"/*; do
+                    [[ -e $COOLIFY_DIR/source/$(basename "$f") ]] || cp -a "$f" "$COOLIFY_DIR/source/"
+                done
+                say "  source: .env from the backup (APP_KEY and passwords), Coolify program files kept"
+            else
+                move_aside "$COOLIFY_DIR/$base" "$pre"
+                mv -- "$e" "$COOLIFY_DIR/$base"
+                say "  $base"
+            fi
+        done
+        shopt -u dotglob nullglob
+    else
+        warn "This backup has no $COOLIFY_DIR."
+    fi
+
+    # 7. Docker volumes.
+    step "5/7 Docker volumes"
+    local name amp bytes bmp
+    while IFS=$'\t' read -r name amp bytes; do
+        [[ -n $name ]] || continue
+        if [[ ! -d $rtmp$amp ]]; then
+            warn "Volume $name is listed but its files are not in the backup; skipped."
+            continue
+        fi
+        if ! docker volume inspect "$name" >/dev/null 2>&1; then
+            local -a args=()
+            if [[ -f $rs/volumes.json ]]; then
+                mapfile -t args < <(jq -r --arg n "$name" '.[] | select(.Name == $n) |
+                    ((.Labels // {}) | to_entries[] | "--label", "\(.key)=\(.value)"),
+                    ((.Options // {}) | to_entries[] | "--opt", "\(.key)=\(.value)")' "$rs/volumes.json")
+            fi
+            docker volume create "${args[@]}" "$name" >/dev/null
+            say "  $name (created)"
+        else
+            say "  $name"
+        fi
+        bmp="$(docker volume inspect -f '{{.Mountpoint}}' "$name")"
+        if [[ -d $bmp && -n $(ls -A "$bmp") ]]; then
+            mkdir -p "$pre/volumes/$name"
+            mv -- "$bmp" "$pre/volumes/$name/_data"
+        else
+            rmdir -- "$bmp" 2>/dev/null || true
+        fi
+        mv -- "$rtmp$amp" "$bmp"
+    done < <(cat "$rs/volumes.tsv" 2>/dev/null || true)
+
+    # 8. /etc files.
+    step "6/7 Settings in /etc"
+    local p
+    for p in "${ETC_PATHS[@]}"; do
+        [[ -e $rtmp$p ]] || continue
+        move_aside "$p" "$pre"
+        mkdir -p "$(dirname "$p")"
+        mv -- "$rtmp$p" "$p"
+        say "  $p"
+    done
+    if [[ -d /etc/ssh/sshd_config.d ]] && command -v sshd >/dev/null 2>&1; then
+        mkdir -p /run/sshd
+        if ! sshd -t 2>"$ERRF"; then
+            warn "The restored SSH settings are not valid here; the previous ones were put back."
+            rm -rf /etc/ssh/sshd_config.d
+            [[ -e $pre/etc/ssh/sshd_config.d ]] && cp -a "$pre/etc/ssh/sshd_config.d" /etc/ssh/
+        elif systemctl is-active --quiet ssh 2>/dev/null; then
+            systemctl reload ssh || true
+        fi
+    fi
+    # Backup settings: the old server's hooks and name, with the connection
+    # details and password that just worked. The password is stored again only
+    # here, never in the backups.
+    local oldhost=""
+    [[ -f $REAL_CONF_DIR/config ]] && oldhost="$(env_get BACKUP_HOST "$REAL_CONF_DIR/config")"
+    [[ -n $oldhost ]] && CFG[BACKUP_HOST]=$oldhost
+    mkdir -p "$REAL_CONF_DIR"
+    chmod 700 "$REAL_CONF_DIR"
+    local f
+    for f in rclone.conf known_hosts ssh-key; do
+        if [[ -f $work/$f ]]; then
+            install -m 600 "$work/$f" "$REAL_CONF_DIR/$f"
+        fi
+    done
+    sed -i "s#$work/#$REAL_CONF_DIR/#g" "$REAL_CONF_DIR/rclone.conf"
+    install -m 600 "$pwfile" "$REAL_CONF_DIR/restic-password"
+    set_conf_dir "$REAL_CONF_DIR"
+    write_config
+    [[ -e $HOOKS_DIR/10-cardvault ]] || write_cardvault_hook
+    local unit
+    for unit in cloudflared docker-port-guard; do
+        if systemctl cat "$unit.service" >/dev/null 2>&1; then
+            systemctl restart "$unit.service" || warn "Could not restart $unit; check it with: systemctl status $unit"
+        fi
+    done
+    authorize_coolify_keys
+
+    # 9. Start Coolify with the restored settings.
+    step "7/7 Starting Coolify"
+    if coolify_compose_up >"$ERRF" 2>&1; then
+        say "  Coolify is running."
+    else
+        show_error_details
+        warn "Coolify did not start cleanly. Try: cd $COOLIFY_DIR/source && bash upgrade.sh, or ask for help."
+    fi
+    if [[ -f $COOLIFY_DIR/proxy/docker-compose.yml ]]; then
+        (cd "$COOLIFY_DIR/proxy" && docker compose up -d --force-recreate </dev/null >/dev/null 2>&1) ||
+            warn "The web proxy did not start yet; Coolify starts it on its own, or use Servers, Proxy, Restart."
+    fi
+    install_timers || true
+    rm -rf -- "$rtmp"
+    status_update "restore_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "restore_snapshot=$snap"
+
+    cat <<EOF
+
+=====================================================================
+  Restore finished (backup ${snap:0:8} from $when).
+
+  Next steps:
+  1. Open Coolify in your browser and log in with your OLD Coolify
+     account (email and password from the old server).
+  2. For EACH app in Coolify: open it and click Redeploy. Coolify then
+     rebuilds the app from GitHub and attaches it to its restored data.
+     Start with Card Vault and check that your cards and photos are there.
+  3. Direct mode: point your domain names (DNS) to this server's new IP
+     address. Cloudflare mode: in Cloudflare, Zero Trust, Networks,
+     Tunnels, check that the tunnel shows as Healthy.
+  4. If the old server still exists, keep it switched off.
+  5. Nightly backups continue to the same place. Check with:
+     sudo server-backup status
+  6. Everything this restore replaced was moved to:
+     $pre
+     You can delete that folder once all apps work (after a few weeks).
+=====================================================================
+EOF
+}
+
+# ---------------------------------------------------------------- main
+
+usage() {
+    cat <<'EOF'
+server-backup: backups of this whole server to your own SFTP or FTP server.
+
+  sudo server-backup setup             choose where backups go (run this first)
+  sudo server-backup run [--dry-run]   make a backup now (also runs every night)
+  sudo server-backup check [--quick]   check the stored backups (also runs weekly)
+  sudo server-backup list              show the backups that exist
+  sudo server-backup status            one screen summary
+  sudo server-backup restore-files [--snapshot ID] [--target DIR] [--volume NAME] [PATH...]
+                                       get back deleted files, into a separate folder
+  sudo server-backup restore-dr [--snapshot ID] [--dry-run]
+                                       full recovery onto a NEW server set up with bootstrap.sh
+EOF
+}
+
+main() {
+    local cmd=${1:-help}
+    (($#)) && shift
+    init_work
+    case "$cmd" in
+        setup) cmd_setup "$@" ;;
+        run) cmd_run "$@" ;;
+        check) cmd_check "$@" ;;
+        list) cmd_list "$@" ;;
+        status) cmd_status "$@" ;;
+        restore-files) cmd_restore_files "$@" ;;
+        restore-dr) cmd_restore_dr "$@" ;;
+        version | --version) say "server-backup $VERSION" ;;
+        help | -h | --help) usage ;;
+        *)
+            usage >&2
+            exit "$E_USAGE"
+            ;;
+    esac
+}
+
+main "$@"

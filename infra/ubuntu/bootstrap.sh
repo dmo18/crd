@@ -2,7 +2,8 @@
 #
 # bootstrap.sh: prepare a fresh Ubuntu 24.04 LTS server for Coolify v4.
 #
-# Usage (from the server console, as the user created during Ubuntu install):
+# Usage (from the server console, as the user created during Ubuntu install;
+# always with sudo from that account, never logged in as root):
 #   sudo bash bootstrap.sh admin.example.com [you@example.com]
 #   sudo bash bootstrap.sh --dry-run admin.example.com      (only print what would change)
 #   sudo bash bootstrap.sh --cloudflare admin.example.com [you@example.com]
@@ -12,21 +13,25 @@
 #   --cloudflare      everything comes in through a Cloudflare Tunnel: cloudflared
 #                     on this server connects OUT to Cloudflare, so no port at all
 #                     is open to the internet (not 22, not 80, not 443). The tunnel
-#                     token is asked for with hidden typing, or read from the
-#                     environment variable CF_TUNNEL_TOKEN (never from the command
-#                     line, where other users could see it).
+#                     token is asked for with hidden typing, or read from a
+#                     root-only file given with --token-file (never from the
+#                     command line or the environment, which end up in the shell
+#                     history or are visible to other programs).
 #
 # What it does, in order:
-#   1. Preflight checks (Ubuntu 24.04, root, CPU/RAM/disk, internet).
+#   1. Preflight checks (Ubuntu 24.04, sudo from the owner's account, CPU/RAM/disk,
+#      internet).
 #   2. Updates the system and installs: ufw, fail2ban, unattended-upgrades, curl,
 #      ca-certificates, jq, openssh-server, python3-systemd.
-#   3. Automatic updates every day (Ubuntu security and regular updates, Docker's
-#      packages, cloudflared in Cloudflare mode), reboot at 04:30 only when required.
+#   3. Automatic updates: ONLY Ubuntu security patches, daily, never a restart.
+#      Everything else waits for the owner's "sudo server-update" (installed to
+#      /usr/local/sbin), which backs up first and asks before restarting.
 #   4. A 2 GB swap file if the server has no swap, and vm.swappiness=10.
-#   5. SSH hardening: keys only, root only with a key (Coolify needs that), 3 tries.
-#      Cloudflare mode only: password login is allowed for connections from this
-#      server itself (127.0.0.1, ::1), which is where Cloudflare's browser SSH
-#      terminal arrives through the tunnel. Root still never logs in by password.
+#   5. SSH hardening: no passwords at all, root only with a key (Coolify needs
+#      that), 3 tries. Cloudflare mode: Cloudflare's browser SSH terminal logs in
+#      with a short-lived certificate signed by the account's SSH CA
+#      (/etc/ssh/ca.pub, set with "sudo server-ssh-ca set"), only for the owner's
+#      account (/etc/ssh/principals/<user>).
 #   6. Firewall (ufw): only 80/tcp, 443/tcp and 443/udp from the internet (direct
 #      mode) or nothing at all (Cloudflare mode). SSH (22) only from Docker's
 #      private networks, so Coolify can manage this server.
@@ -38,8 +43,13 @@
 #   9. Cloudflare mode only: cloudflared from Cloudflare's signed apt repository,
 #      run as a locked down systemd service; the token is kept in a root-only file.
 #  10. Coolify, with its official installer and an admin account created up front.
-#  11. Direct mode only: a 30 minute "setup window" on ports 8000 and 6001 so the
-#      owner can do the first login from a browser. It closes by itself.
+#      The installer's SHA-256 is printed and, if COOLIFY_INSTALLER_SHA256 is set
+#      in /etc/default/server-setup, must match.
+#  11. Docker's current major version is pinned (apt preferences), so even
+#      server-update moves to a new major only with --allow-docker-major.
+#  12. Direct mode only: a 30 minute "setup window" on ports 8000 and 6001 so the
+#      owner can do the first login from a browser. It closes by itself. On a
+#      later run it is only opened again after asking.
 #
 # Safe to run again: every step checks the current state first. Coolify is only
 # installed once; after that it updates itself.
@@ -47,7 +57,7 @@
 set -euo pipefail
 umask 022
 
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.2.0"
 readonly COOLIFY_INSTALLER_URL="https://cdn.coollabs.io/coolify/install.sh"
 readonly COOLIFY_ENV="/data/coolify/source/.env"
 readonly GUARD_BIN="/usr/local/sbin/docker-port-guard"
@@ -76,7 +86,16 @@ readonly CF_TOKEN_DIR="/etc/cloudflared"
 readonly CF_TOKEN_FILE="/etc/cloudflared/tunnel-token"
 readonly CF_UNIT="/etc/systemd/system/cloudflared.service"
 readonly CF_METRICS="127.0.0.1:20241"
+# Written by earlier versions (cloudflared automatic updates); removed now.
 readonly UU_CLOUDFLARE="/etc/apt/apt.conf.d/53unattended-upgrades-cloudflared"
+readonly UPDATE_BIN="/usr/local/sbin/server-update"
+readonly SSH_CA_BIN="/usr/local/sbin/server-ssh-ca"
+readonly SSH_CA_FILE="/etc/ssh/ca.pub"
+readonly SSH_PRINCIPALS_DIR="/etc/ssh/principals"
+readonly DOCKER_PIN_FILE="/etc/apt/preferences.d/docker-major-pin"
+# Optional owner settings for this script, read as plain KEY=value lines (never
+# run as a script). Known key: COOLIFY_INSTALLER_SHA256.
+readonly SETUP_CONFIG="/etc/default/server-setup"
 
 DRY_RUN=false
 ASSUME_YES=false
@@ -84,6 +103,12 @@ MODE=""            # direct or cloudflare, from --direct / --cloudflare or the e
 MODE_FROM_ARGS=""
 CF_TOKEN=""        # the tunnel token, only in memory; never printed
 CF_TOKEN_KEEP=false
+TOKEN_FILE_ARG=""  # --token-file: a root-only file holding the token
+OWNER_USER=""      # the Ubuntu account that ran sudo (SUDO_USER)
+CF_EMAIL=""        # the email that signs in to Cloudflare Access
+SSH_PRINCIPAL=""   # what Cloudflare puts in the certificate: CF_EMAIL before the @
+SSH_CA_KEY=""      # the Cloudflare SSH CA public key line, if given in this run
+COOLIFY_WAS_INSTALLED=false
 DASHBOARD_HOST=""
 ADMIN_EMAIL=""
 PUBLIC_IP=""
@@ -143,11 +168,19 @@ write_file() {
         printf '%s\n' "$content" | sed 's/^/        | /'
         return 0
     fi
-    mkdir -p -- "$(dirname -- "$path")"
-    tmp="$(mktemp "${path}.tmp.XXXXXX")"
-    printf '%s\n' "$content" >"$tmp"
-    chmod "$mode" "$tmp"
-    mv -f -- "$tmp" "$path"
+    local dir stage
+    dir="$(dirname -- "$path")"
+    mkdir -p -- "$dir"
+    # The temporary copy goes in a private folder NEXT TO the target folder
+    # (same file system, so the final mv is atomic), never inside it: programs
+    # such as apt (apt.conf.d) and sshd (sshd_config.d) read every file there.
+    stage="$(mktemp -d "$(dirname -- "$dir")/.bootstrap-stage.XXXXXX")"
+    tmp="$stage/$(basename -- "$path")"
+    if ! { printf '%s\n' "$content" >"$tmp" && chmod "$mode" "$tmp" && mv -f -- "$tmp" "$path"; }; then
+        rm -rf -- "$stage"
+        die "Could not write $path."
+    fi
+    rmdir -- "$stage"
 }
 
 # True when there is a console to ask on. Testing the file is not enough: without
@@ -188,10 +221,13 @@ Usage:
 
 Options:
   --cloudflare    Cloudflare Tunnel mode: no port open to the internet at all.
-                  You are asked for the tunnel token (typing stays hidden).
-                  For runs without a console, put it in the environment
-                  variable CF_TUNNEL_TOKEN instead. Never type it on the
+                  You are asked for the tunnel token (typing stays hidden),
+                  the email you sign in to Cloudflare with, and the SSH CA
+                  public key for the browser terminal (can be added later
+                  with: sudo server-ssh-ca set). Never type the token on the
                   command line.
+  --token-file F  Read the tunnel token from file F instead of asking. F must
+                  belong to root and be readable only by root (chmod 600).
   --direct        Direct mode (the default): this server answers 80/443 itself.
                   Only needed to switch back from Cloudflare mode.
   --dry-run       Show every change without making it.
@@ -211,6 +247,11 @@ parse_args() {
             --yes | -y) ASSUME_YES=true ;;
             --cloudflare) MODE_FROM_ARGS="cloudflare" ;;
             --direct) MODE_FROM_ARGS="direct" ;;
+            --token-file)
+                [ $# -ge 2 ] || die "--token-file needs a file name, for example: --token-file /root/tunnel-token"
+                TOKEN_FILE_ARG="$2"
+                shift ;;
+            --token-file=*) TOKEN_FILE_ARG="${1#--token-file=}" ;;
             --token | --token=* | --tunnel-token | --tunnel-token=*)
                 die "Do not put the tunnel token on the command line (other users and the shell history can see it). Leave it out: the script asks for it." ;;
             --help | -h) usage; exit 0 ;;
@@ -308,16 +349,37 @@ except Exception:
 ' 2>/dev/null
 }
 
+# A token file given with --token-file must be a regular file (not a link) that
+# only root can read or change, so no other account can have seen or swapped it.
+check_token_file() {
+    local f="$1" perm
+    [ -f "$f" ] && [ ! -L "$f" ] || die "--token-file: $f is not a regular file."
+    perm="$(stat -c '%u %a' -- "$f")"
+    case "$perm" in
+        "0 400" | "0 600") ;;
+        *) die "--token-file: $f must belong to root and be readable only by root. Fix: sudo chown root:root $f && sudo chmod 600 $f" ;;
+    esac
+}
+
 read_tunnel_token() {
-    local from_env="${CF_TUNNEL_TOKEN:-}" typed="" tries=0
-    # Keep it out of the environment of every program started from here on.
-    unset CF_TUNNEL_TOKEN
-    if [ -n "$from_env" ]; then
-        CF_TOKEN="$(clean_token "$from_env")"
-        from_env=""
+    local typed="" tries=0
+    if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
+        # Older versions read the token from this variable. Not any more: with
+        # sudo it has to be typed on the command line, so it lands in the shell
+        # history.
+        unset CF_TUNNEL_TOKEN
+        die "CF_TUNNEL_TOKEN is no longer read (it ends up in the shell history). Run without it: the script asks for the token with hidden typing, or use --token-file with a root-only file. To clear the history line: history -c"
+    fi
+    if [ -n "$TOKEN_FILE_ARG" ]; then
+        if [ "$DRY_RUN" = true ] && [ "$(id -u)" -ne 0 ]; then
+            info "Dry run: the real run reads the tunnel token from $TOKEN_FILE_ARG"
+            return 0
+        fi
+        check_token_file "$TOKEN_FILE_ARG"
+        CF_TOKEN="$(clean_token "$(cat -- "$TOKEN_FILE_ARG")")"
         token_is_valid "$CF_TOKEN" ||
-            die "The tunnel token in CF_TUNNEL_TOKEN does not look right. Copy it again from Cloudflare (it starts with eyJ and is one long line)."
-        ok "Tunnel token read from CF_TUNNEL_TOKEN (not shown)"
+            die "The tunnel token in $TOKEN_FILE_ARG does not look right. Copy it again from Cloudflare (it starts with eyJ and is one long line)."
+        ok "Tunnel token read from $TOKEN_FILE_ARG (not shown). You can delete that file after this run."
         return 0
     fi
     if [ "$DRY_RUN" = true ]; then
@@ -330,7 +392,7 @@ read_tunnel_token() {
             ok "Keeping the tunnel token already saved on this server"
             return 0
         fi
-        die "No console to ask for the tunnel token. Run it from the console, or set CF_TUNNEL_TOKEN."
+        die "No console to ask for the tunnel token. Run it from the console, or use --token-file with a root-only file."
     fi
     while [ "$tries" -lt 3 ]; do
         tries=$((tries + 1))
@@ -356,6 +418,122 @@ read_tunnel_token() {
         warn "That does not look like a tunnel token. It is one long line that starts with eyJ. Try again."
     done
     die "No valid tunnel token. Nothing was changed. In Cloudflare: Zero Trust, Networks, Tunnels, your tunnel, then copy the token."
+}
+
+# ---------------------------------------------------------------------------
+# Browser SSH with Cloudflare short-lived certificates (Cloudflare mode)
+# ---------------------------------------------------------------------------
+# Cloudflare's browser SSH terminal signs a certificate that is valid for a few
+# minutes, for the person who passed the Access sign-in. Its principal (the name
+# it is issued to) is that person's email before the @, lowercased:
+# jdoe@example.com -> jdoe. This server trusts certificates signed by the
+# account's SSH CA (/etc/ssh/ca.pub) and maps that principal to the owner's
+# Ubuntu account in /etc/ssh/principals/<user>. No password is involved.
+principal_from_email() {
+    local local_part="${1%@*}"
+    printf '%s' "${local_part,,}"
+}
+
+current_principal() {
+    if [ -n "$OWNER_USER" ] && [ -r "$SSH_PRINCIPALS_DIR/$OWNER_USER" ]; then
+        grep -v '^[[:space:]]*\(#\|$\)' "$SSH_PRINCIPALS_DIR/$OWNER_USER" | head -n 1 | tr -d '[:space:]'
+    fi
+}
+
+read_cloudflare_identity() {
+    local typed="" tries=0 existing
+    existing="$(current_principal)"
+    if [ -n "$ADMIN_EMAIL" ]; then CF_EMAIL="$ADMIN_EMAIL"; fi
+    if have_tty && [ "$DRY_RUN" = false ]; then
+        while [ "$tries" -lt 3 ]; do
+            tries=$((tries + 1))
+            if [ -n "$CF_EMAIL" ]; then
+                printf '    Type the email you sign in to Cloudflare with, or press Enter for %s: ' "$CF_EMAIL" >/dev/tty
+            elif [ -n "$existing" ]; then
+                printf '    Type the email you sign in to Cloudflare with, or press Enter to keep the\n    current browser SSH login name "%s": ' "$existing" >/dev/tty
+            else
+                printf '    Type the email you sign in to Cloudflare with, then press Enter: ' >/dev/tty
+            fi
+            typed=""
+            read -r typed </dev/tty || typed=""
+            typed="${typed//[[:space:]]/}"
+            if [ -z "$typed" ] && { [ -n "$CF_EMAIL" ] || [ -n "$existing" ]; }; then
+                break
+            fi
+            if valid_email "$typed"; then
+                CF_EMAIL="$typed"
+                break
+            fi
+            warn "That is not an email address. Try again."
+            typed=""
+        done
+    fi
+    if [ -n "$CF_EMAIL" ]; then
+        SSH_PRINCIPAL="$(principal_from_email "$CF_EMAIL")"
+    elif [ -n "$existing" ]; then
+        SSH_PRINCIPAL="$existing"
+    elif [ "$DRY_RUN" = true ]; then
+        CF_EMAIL="owner@example.com"
+        SSH_PRINCIPAL="$(principal_from_email "$CF_EMAIL")"
+        info "Dry run: using the example Cloudflare email $CF_EMAIL"
+    else
+        die "Please give the email you sign in to Cloudflare with, for example: sudo bash bootstrap.sh --cloudflare $DASHBOARD_HOST you@example.com"
+    fi
+    ok "Browser SSH: a Cloudflare certificate for '$SSH_PRINCIPAL' logs in as Ubuntu user '$OWNER_USER'"
+    if [ "$SSH_PRINCIPAL" != "$OWNER_USER" ]; then
+        warn "Your email starts with '$SSH_PRINCIPAL' but your Ubuntu user is '$OWNER_USER'. Cloudflare's guide says the browser terminal expects them to be the same. If the terminal refuses, type '$OWNER_USER' when it asks for the user name."
+    fi
+}
+
+# A public key line as Cloudflare shows it: type, base64, optional comment.
+ssh_ca_key_valid() {
+    local key="$1"
+    [[ $key =~ ^(ecdsa-sha2-nistp(256|384|521)|ssh-ed25519|ssh-rsa)\ [A-Za-z0-9+/]{40,}={0,3}(\ [^[:cntrl:]]*)?$ ]] || return 1
+    printf '%s\n' "$key" | ssh-keygen -l -f /dev/stdin >/dev/null 2>&1
+}
+
+read_ssh_ca_key() {
+    local typed="" tries=0
+    if [ "$DRY_RUN" = true ]; then
+        info "Dry run: the real run asks for the Cloudflare SSH CA public key here (Enter skips)"
+        return 0
+    fi
+    if ! have_tty; then
+        if [ -s "$SSH_CA_FILE" ]; then
+            ok "Keeping the SSH CA key already saved in $SSH_CA_FILE"
+        else
+            warn "No console to ask for the Cloudflare SSH CA key. Add it later: sudo server-ssh-ca set"
+        fi
+        return 0
+    fi
+    while [ "$tries" -lt 3 ]; do
+        tries=$((tries + 1))
+        if [ -s "$SSH_CA_FILE" ]; then
+            printf '    Paste the SSH CA public key from Cloudflare and press Enter,\n    or press Enter alone to keep the key already saved: ' >/dev/tty
+        else
+            printf '    Paste the SSH CA public key from Cloudflare (it starts with ecdsa-sha2-nistp256)\n    and press Enter. No key yet? Press Enter alone to skip and add it later: ' >/dev/tty
+        fi
+        typed=""
+        IFS= read -r typed </dev/tty || typed=""
+        typed="${typed//$'\r'/}"
+        typed="${typed#"${typed%%[![:space:]]*}"}"
+        typed="${typed%"${typed##*[![:space:]]}"}"
+        if [ -z "$typed" ]; then
+            if [ -s "$SSH_CA_FILE" ]; then
+                ok "Keeping the SSH CA key already saved in $SSH_CA_FILE"
+            else
+                warn "Skipped. Browser SSH works only after you add the key: sudo server-ssh-ca set"
+            fi
+            return 0
+        fi
+        if ssh_ca_key_valid "$typed"; then
+            SSH_CA_KEY="$typed"
+            ok "SSH CA key accepted ($(printf '%s\n' "$SSH_CA_KEY" | ssh-keygen -l -f /dev/stdin | awk '{print $2}'))"
+            return 0
+        fi
+        warn "That does not look like the CA public key. It is one line that starts with ecdsa-sha2-nistp256. Try again."
+    done
+    warn "No valid SSH CA key. Continuing without it; add it later: sudo server-ssh-ca set"
 }
 
 # ---------------------------------------------------------------------------
@@ -411,6 +589,25 @@ preflight() {
         fi
     else
         ok "Running as root"
+    fi
+
+    # The owner's own account: SSH certificates (Cloudflare mode) are mapped to
+    # it. A root login (or sudo from root) gives no account to map to.
+    local su="${SUDO_USER:-}"
+    if [ -z "$su" ] || [ "$su" = root ]; then
+        if [ "$DRY_RUN" = true ]; then
+            OWNER_USER="$(id -un)"
+            [ "$OWNER_USER" != root ] || OWNER_USER="youruser"
+            warn "Not started with sudo from your own account. Fine for a dry run (showing user '$OWNER_USER'); the real run stops here."
+        else
+            die "Please log in as your own Ubuntu user (the one created when installing Ubuntu), not as root, and run: sudo bash bootstrap.sh ${MODE_FROM_ARGS:+--$MODE_FROM_ARGS }$DASHBOARD_HOST"
+        fi
+    else
+        if [[ ! $su =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || ! id -u -- "$su" >/dev/null 2>&1; then
+            die "The account that ran sudo ('$su') is not a normal Ubuntu user name. Log in as your own user and run the command again."
+        fi
+        OWNER_USER="$su"
+        ok "Started by Ubuntu user '$OWNER_USER'"
     fi
 
     local os_id="" os_version=""
@@ -499,7 +696,16 @@ preflight() {
         fi
     fi
 
-    if ! coolify_installed; then
+    if [ -n "$TOKEN_FILE_ARG" ] && [ "$MODE" != cloudflare ]; then
+        die "--token-file is only for Cloudflare mode (--cloudflare)."
+    fi
+
+    if coolify_installed; then
+        COOLIFY_WAS_INSTALLED=true
+        if [ -n "$ADMIN_EMAIL" ] && ! valid_email "$ADMIN_EMAIL"; then
+            die "'$ADMIN_EMAIL' is not a valid email address."
+        fi
+    else
         if [ -z "$ADMIN_EMAIL" ]; then
             if have_tty && [ "$DRY_RUN" = false ]; then
                 printf '    Type the email address you want to log in to Coolify with, then press Enter: ' >/dev/tty
@@ -516,6 +722,8 @@ preflight() {
 
     if [ "$MODE" = cloudflare ]; then
         read_tunnel_token
+        read_cloudflare_identity
+        read_ssh_ca_key
     fi
 }
 
@@ -543,47 +751,369 @@ install_packages() {
 # 3. Automatic security updates
 # ---------------------------------------------------------------------------
 configure_unattended_upgrades() {
-    step "Turning on automatic updates"
+    step "Turning on automatic security updates"
     write_file "$UU_PERIODIC" 0644 <<'EOF'
-// Written by bootstrap.sh: check for and install updates every day.
+// Written by bootstrap.sh: refresh the package lists and install Ubuntu
+// security patches every day (which ones: 52unattended-upgrades-server).
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
 EOF
     write_file "$UU_LOCAL" 0644 <<'EOF'
-// Written by bootstrap.sh. Keep everything on the latest released version:
-// Ubuntu's security and regular updates, and Docker's own packages (docker-ce,
-// containerd.io, the compose and buildx plugins) from Docker's repository,
-// which Coolify's installer adds (Release file: Origin "Docker", Label
-// "Docker CE", Suite = the Ubuntu codename). A Docker engine update restarts
-// Docker; Coolify's containers and apps have restart policies and come back.
-// These lists add to Ubuntu's defaults in 50unattended-upgrades.
+// Written by bootstrap.sh. Owner rule: nothing on the live system changes by
+// itself except Ubuntu security patches. Everything else (Ubuntu's regular
+// updates, Docker, cloudflared) waits until the owner runs: sudo server-update
+//
+// "#clear" empties the lists from Ubuntu's 50unattended-upgrades first, so the
+// security pocket below is the ONLY origin that installs automatically.
+#clear Unattended-Upgrade::Allowed-Origins;
+#clear Unattended-Upgrade::Origins-Pattern;
 Unattended-Upgrade::Allowed-Origins {
         "${distro_id}:${distro_codename}-security";
-        "${distro_id}:${distro_codename}-updates";
 };
-Unattended-Upgrade::Origins-Pattern {
-        "origin=Docker,label=Docker CE,archive=${distro_codename}";
-};
-// Restart at a quiet time, only when an update needs one.
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
-Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+// Never restart the server by itself; server-update asks before restarting
+// and check.sh warns when a restart has been waiting for more than 7 days.
+Unattended-Upgrade::Automatic-Reboot "false";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "false";
 EOF
+    # Earlier versions also updated cloudflared automatically.
+    if [ -e "$UU_CLOUDFLARE" ]; then
+        run rm -f -- "$UU_CLOUDFLARE"
+    fi
     run systemctl enable --now unattended-upgrades.service
     run systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
-    local tz
-    tz="$(timedatectl show -p Timezone --value 2>/dev/null || echo "server time")"
     if [ "$DRY_RUN" = false ]; then
-        local timer
+        local timer origins
         for timer in apt-daily.timer apt-daily-upgrade.timer; do
-            systemctl is-enabled --quiet "$timer" || warn "$timer is not enabled; automatic updates will not run"
+            systemctl is-enabled --quiet "$timer" || warn "$timer is not enabled; automatic security updates will not run"
         done
+        # Prove the result: exactly one allowed origin, the security pocket.
+        origins="$(apt-config dump 2>/dev/null | grep -E '^Unattended-Upgrade::(Allowed-Origins|Origins-Pattern):: ' || true)"
+        # shellcheck disable=SC2016 # the ${...} are unattended-upgrades variables, not shell
+        if [ "$origins" != 'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security";' ]; then
+            die "The automatic update settings did not come out as expected (only security patches). Found: ${origins:-nothing}"
+        fi
     fi
-    ok "Updates (Ubuntu security and regular, Docker) install daily; restart at 04:30 ($tz) only when needed"
-    done_item "Automatic updates on: Ubuntu security and regular updates, Docker packages (restart at 04:30 $tz only when required)"
+    install_update_tool
+    ok "Only Ubuntu security patches install by themselves (daily); the server never restarts by itself"
+    ok "Everything else waits for you: sudo server-update"
+    done_item "Automatic updates: Ubuntu security patches only, no automatic restart. Other updates: sudo server-update (backup first, asks before restarting)"
+}
+
+# server-update: the owner's command for every other update.
+install_update_tool() {
+    update_script | write_file "$UPDATE_BIN" 0755
+}
+
+update_script() {
+    cat <<'UPDATE_EOF'
+#!/bin/bash
+# server-update: install waiting updates when YOU choose. Installed by bootstrap.sh.
+#
+# Automatic updates on this server install only Ubuntu security patches and
+# never restart it. Everything else (Ubuntu's regular updates, Docker,
+# cloudflared) waits for this command. It shows what is waiting, asks, runs the
+# backup first (if server-backup is installed), updates, and asks before a
+# restart.
+#
+#   sudo server-update                       show, ask, back up, update
+#   sudo server-update --dry-run             only show what is waiting
+#   sudo server-update --yes                 do not ask before updating
+#   sudo server-update --skip-backup         update without running the backup
+#   sudo server-update --allow-docker-major  also move Docker to a new major version
+#
+# Docker's major version (for example 28) is pinned in
+# /etc/apt/preferences.d/docker-major-pin, so a normal run installs only
+# updates within that major version. --allow-docker-major lifts the pin for
+# this run and then pins the new major version.
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin
+umask 022
+
+PIN_FILE="/etc/apt/preferences.d/docker-major-pin"
+BACKUP_BIN="/usr/local/sbin/server-backup"
+REBOOT_FILE="/var/run/reboot-required"
+DOCKER_PKGS="docker-ce docker-ce-cli docker-ce-rootless-extras"
+CONTAINERD_PKG="containerd.io"
+APT_OPTS=(-y -o DPkg::Lock::Timeout=900 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+
+DRY_RUN=false
+ASSUME_YES=false
+SKIP_BACKUP=false
+ALLOW_MAJOR=false
+PREF_OPTS=()
+TMP=""
+
+if [ -t 1 ]; then
+    B=$'\033[1m'; Y=$'\033[33m'; R=$'\033[31m'; G=$'\033[32m'; N=$'\033[0m'
+else
+    B=""; Y=""; R=""; G=""; N=""
+fi
+say()  { printf '%s\n' "$*"; }
+warn() { printf '%sWARN%s %s\n' "$Y" "$N" "$*" >&2; }
+die()  { printf '\n%sSTOPPED:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
+cleanup() { if [ -n "$TMP" ]; then rm -rf -- "$TMP"; fi; }
+trap cleanup EXIT
+
+usage() {
+    sed -n '2,/^set -euo/p' "$0" | sed -e '/^set -euo/d' -e 's/^# \{0,1\}//'
+}
+
+have_tty() { { : >/dev/tty; } 2>/dev/null; }
+
+# Ask on the console; default "no". Without a console the answer is "no".
+ask() {
+    local answer=""
+    have_tty || return 1
+    printf '%s [y/N] ' "$1" >/dev/tty
+    read -r answer </dev/tty || answer=""
+    case "$answer" in y | Y | yes | YES | Yes) return 0 ;; *) return 1 ;; esac
+}
+
+installed_version() {
+    dpkg-query -W -f '${db:Status-Abbrev} ${Version}\n' "$1" 2>/dev/null | awk '$1 == "ii" { print $2; exit }'
+}
+
+# The pin pattern for a version: epoch and major number, "5:28.1.1-1~..." -> "5:28".
+major_of() {
+    local v="$1" epoch=""
+    case "$v" in *:*) epoch="${v%%:*}:"; v="${v#*:}" ;; esac
+    v="${v%%[!0-9]*}"
+    [ -n "$v" ] && printf '%s%s' "$epoch" "$v"
+}
+
+# Pin Docker (and containerd) to the major version installed now.
+write_pin() {
+    local dv cv dm cm tmpdir content
+    dv="$(installed_version docker-ce || true)"
+    cv="$(installed_version "$CONTAINERD_PKG" || true)"
+    dm="$(major_of "${dv:-}" || true)"
+    cm="$(major_of "${cv:-}" || true)"
+    if [ -z "$dm" ] && [ -z "$cm" ]; then
+        say "Docker is not installed, so there is no Docker version to pin."
+        return 0
+    fi
+    content="# Written by bootstrap.sh / server-update. Keeps Docker on its current
+# major version: newer versions within it are preferred (990), a new major
+# version (default 500) is never chosen. To move to a new major version:
+#   sudo server-update --allow-docker-major
+"
+    if [ -n "$dm" ]; then
+        content="$content
+Package: $DOCKER_PKGS
+Pin: version $dm.*
+Pin-Priority: 990
+"
+    fi
+    if [ -n "$cm" ]; then
+        content="$content
+Package: $CONTAINERD_PKG
+Pin: version $cm.*
+Pin-Priority: 990
+"
+    fi
+    if [ -f "$PIN_FILE" ] && [ "$(cat -- "$PIN_FILE")" = "$(printf '%s' "$content")" ]; then
+        say "Docker pin unchanged (${dm:+docker-ce ${dm#*:}.x}${cm:+, containerd.io $cm.x})."
+        return 0
+    fi
+    mkdir -p "$(dirname "$PIN_FILE")"
+    # Stage next to preferences.d, not inside it (apt reads every file there).
+    tmpdir="$(mktemp -d /etc/apt/.server-update.XXXXXX)"
+    printf '%s' "$content" >"$tmpdir/pin"
+    chmod 0644 "$tmpdir/pin"
+    mv -f -- "$tmpdir/pin" "$PIN_FILE"
+    rmdir -- "$tmpdir"
+    say "Docker pinned to its current major version (${dm:+docker-ce ${dm#*:}.x}${cm:+, containerd.io $cm.x})."
+}
+
+# The highest version of a package that apt knows of (ignoring pins).
+highest_known_version() {
+    local best="" v
+    while read -r v; do
+        [ -n "$v" ] || continue
+        if [ -z "$best" ] || dpkg --compare-versions "$v" gt "$best"; then best="$v"; fi
+    done < <(apt-cache madison "$1" 2>/dev/null | awk -F'|' '{ gsub(/ /, "", $2); print $2 }')
+    printf '%s' "$best"
+}
+
+# Group the planned changes: security, ubuntu, docker, cloudflared, other, remove.
+plan() {
+    apt-get -s -o Debug::NoLocking=1 "${PREF_OPTS[@]}" full-upgrade 2>/dev/null | awk '
+        /^Inst / {
+            name = $2; rest = $0; sub(/^Inst [^ ]+ /, "", rest); old = ""
+            if (rest ~ /^\[/) { old = substr(rest, 2, index(rest, "]") - 2); rest = substr(rest, index(rest, "]") + 2) }
+            sub(/^\(/, "", rest); split(rest, a, " "); new = a[1]
+            if (name ~ /^docker-/ || name == "containerd.io") grp = "docker"
+            else if (name == "cloudflared") grp = "cloudflared"
+            else if (rest ~ /-security/) grp = "security"
+            else if (rest ~ /Ubuntu:/) grp = "ubuntu"
+            else grp = "other"
+            printf "%s\t%s\t%s\t%s\n", grp, name, (old == "" ? "new" : old), new
+        }
+        /^Remv / { name = $2; ver = $3; gsub(/[][]/, "", ver); printf "remove\t%s\t%s\t-\n", name, ver }'
+}
+
+show_plan() {
+    local list="$1" grp title n
+    for grp in security ubuntu docker cloudflared other remove; do
+        case "$grp" in
+            security) title="Ubuntu security updates" ;;
+            ubuntu) title="Other Ubuntu updates" ;;
+            docker) title="Docker" ;;
+            cloudflared) title="Cloudflare Tunnel (cloudflared)" ;;
+            other) title="Other packages" ;;
+            remove) title="Packages that would be REMOVED" ;;
+        esac
+        n="$(awk -F'\t' -v g="$grp" '$1 == g' <<<"$list" | grep -c . || true)"
+        printf '%s%s: %s%s\n' "$B" "$title" "$n" "$N"
+        if [ "$n" -gt 0 ]; then
+            awk -F'\t' -v g="$grp" '$1 == g { if (g == "remove") printf "    %s %s\n", $2, $3; else printf "    %s  %s -> %s\n", $2, $3, $4 }' <<<"$list"
+        fi
+    done
+}
+
+docker_major_notice() {
+    local pkg inst best
+    for pkg in docker-ce "$CONTAINERD_PKG"; do
+        inst="$(installed_version "$pkg" || true)"
+        [ -n "$inst" ] || continue
+        best="$(highest_known_version "$pkg")"
+        if [ -n "$best" ] && dpkg --compare-versions "$best" gt "$inst" && [ "$(major_of "$best")" != "$(major_of "$inst")" ]; then
+            if [ "$ALLOW_MAJOR" = true ]; then
+                say "${Y}New major version allowed in this run:${N} $pkg $inst -> $best"
+            else
+                say "${Y}Held back:${N} $pkg $best is a new major version (installed: $inst)."
+                say "    Read Docker's release notes first, then: sudo server-update --allow-docker-major"
+            fi
+        fi
+    done
+}
+
+reboot_status() {
+    local since days
+    if [ -f "$REBOOT_FILE" ]; then
+        since="$(stat -c %Y "$REBOOT_FILE")"
+        days=$(( ($(date +%s) - since) / 86400 ))
+        say "${Y}A restart is needed${N} (for: $(tr '\n' ' ' <"$REBOOT_FILE.pkgs" 2>/dev/null || echo "an update"); waiting $days days)."
+        return 0
+    fi
+    say "No restart needed."
+    return 1
+}
+
+main() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run | -n) DRY_RUN=true ;;
+            --yes | -y) ASSUME_YES=true ;;
+            --skip-backup) SKIP_BACKUP=true ;;
+            --allow-docker-major) ALLOW_MAJOR=true ;;
+            pin) [ "$(id -u)" -eq 0 ] || die "Please run with sudo."; write_pin; exit 0 ;;
+            --help | -h) usage; exit 0 ;;
+            *) usage >&2; die "Unknown option: $1" ;;
+        esac
+        shift
+    done
+    if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" = false ]; then
+        die "Please run with sudo: sudo server-update"
+    fi
+
+    if [ "$ALLOW_MAJOR" = true ]; then
+        # Read every preferences file except the Docker pin, for this run only.
+        TMP="$(mktemp -d)"
+        mkdir "$TMP/preferences.d"
+        local f
+        for f in /etc/apt/preferences.d/*; do
+            if [ -f "$f" ] && [ "$f" != "$PIN_FILE" ]; then cp -- "$f" "$TMP/preferences.d/"; fi
+        done
+        PREF_OPTS=(-o "Dir::Etc::PreferencesParts=$TMP/preferences.d")
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        say "Dry run: nothing is changed. Package lists are from $(date -r /var/lib/apt/lists '+%Y-%m-%d %H:%M' 2>/dev/null || echo 'an unknown time') (they refresh daily)."
+    else
+        say "Refreshing the package lists..."
+        apt-get -o DPkg::Lock::Timeout=900 update -qq || die "Could not refresh the package lists. Check the internet connection and try again."
+    fi
+
+    local list total
+    list="$(plan)" || die "apt could not work out the updates. Try: sudo apt-get -f install"
+    total="$(grep -c . <<<"$list" || true)"
+    say ""
+    show_plan "$list"
+    say ""
+    docker_major_notice
+    if [ "$total" -eq 0 ]; then
+        say "${G}Nothing to update.${N}"
+        reboot_status || true
+        exit 0
+    fi
+    if [ "$DRY_RUN" = true ]; then
+        reboot_status || true
+        say "Dry run: nothing was changed. To install these: sudo server-update"
+        exit 0
+    fi
+
+    if [ "$ASSUME_YES" = false ] && ! ask "Install these $total updates now?"; then
+        say "Nothing was changed."
+        exit 0
+    fi
+
+    if [ "$SKIP_BACKUP" = true ]; then
+        warn "Skipping the backup (--skip-backup)."
+    elif [ -x "$BACKUP_BIN" ]; then
+        say "Running the backup first..."
+        "$BACKUP_BIN" run || die "The backup failed, so nothing was updated. Fix the backup first, or run: sudo server-update --skip-backup"
+        say "Backup done."
+    else
+        say "No backup tool installed ($BACKUP_BIN), so no backup is made first."
+    fi
+
+    local cf_before cf_after
+    cf_before="$(installed_version cloudflared || true)"
+    export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+    apt-get "${APT_OPTS[@]}" "${PREF_OPTS[@]}" upgrade || die "The update stopped with an error (see above). Run sudo server-update again; if it repeats: sudo dpkg --configure -a"
+    apt-get "${APT_OPTS[@]}" "${PREF_OPTS[@]}" full-upgrade || die "The update stopped with an error (see above). Run sudo server-update again; if it repeats: sudo dpkg --configure -a"
+    cf_after="$(installed_version cloudflared || true)"
+    if [ "$ALLOW_MAJOR" = true ]; then
+        write_pin
+    fi
+    say ""
+    say "${G}Updates installed.${N}"
+
+    if reboot_status; then
+        if ask "Restart the server now? Websites are down for a minute or two."; then
+            say "Restarting now."
+            systemctl reboot
+            exit 0
+        fi
+        say "Restart later, at a quiet time: sudo reboot"
+    fi
+    # apt replaced cloudflared's program but the tunnel still runs the old
+    # one. Restarting it drops sessions that come through it (perhaps this
+    # one), so it is the very last step.
+    if [ -n "$cf_after" ] && [ "$cf_after" != "$cf_before" ] && systemctl is-active --quiet cloudflared.service 2>/dev/null; then
+        say "Restarting the tunnel with the new cloudflared. A browser SSH session drops; open it again in a few seconds."
+        systemctl restart --no-block cloudflared.service
+    fi
+}
+
+main "$@"
+UPDATE_EOF
+}
+
+# Pin Docker's major version now that Docker exists (written by server-update).
+pin_docker_major() {
+    step "Keeping Docker on its current major version"
+    if [ "$DRY_RUN" = true ]; then
+        info "[dry-run] $UPDATE_BIN pin (writes $DOCKER_PIN_FILE for the installed Docker major version)"
+        return 0
+    fi
+    local out
+    out="$("$UPDATE_BIN" pin)" || die "Could not pin Docker's version ($DOCKER_PIN_FILE)."
+    info "$out"
+    done_item "Docker pinned to its current major version ($DOCKER_PIN_FILE); a new major only with: sudo server-update --allow-docker-major"
 }
 
 # ---------------------------------------------------------------------------
@@ -610,18 +1140,24 @@ configure_swap() {
     if [ -n "$(swapon --noheadings --show 2>/dev/null || true)" ]; then
         ok "Swap already present"
     else
+        local made=true
         if [ ! -f "$SWAPFILE" ]; then
-            run fallocate -l 2G "$SWAPFILE"
+            if ! run fallocate -l 2G "$SWAPFILE"; then
+                rm -f -- "$SWAPFILE"
+                made=false
+            fi
         else
             info "Found $SWAPFILE but it is not in use; turning it on"
         fi
-        if enable_swapfile; then
+        if [ "$made" = true ] && enable_swapfile; then
             use_swapfile=true
         else
             # Some file systems refuse fallocate'd swap files; write it out instead.
             rm -f -- "$SWAPFILE"
-            dd if=/dev/zero of="$SWAPFILE" bs=1M count=2048 status=none
-            if enable_swapfile; then
+            if ! dd if=/dev/zero of="$SWAPFILE" bs=1M count=2048 status=none; then
+                rm -f -- "$SWAPFILE"
+                warn "Could not write a 2 GB swap file (is the disk full?). Continuing without swap."
+            elif enable_swapfile; then
                 use_swapfile=true
             else
                 rm -f -- "$SWAPFILE"
@@ -653,29 +1189,37 @@ EOF
 configure_ssh() {
     step "Hardening SSH"
     # The 01- prefix makes this file win: sshd uses the first value it reads,
-    # and files in sshd_config.d are read in name order before sshd_config.
-    local loopback_passwords=""
+    # and files in sshd_config.d are read in name order before sshd_config
+    # (Ubuntu's sshd_config includes them on its first line, which is what
+    # Cloudflare's guide asks for: these lines "at the top").
+    local ca_lines=""
     if [ "$MODE" = cloudflare ]; then
-        # Must stay at the end of the file: everything after "Match" belongs to it.
-        loopback_passwords='
-# Cloudflare mode: Cloudflare'"'"'s browser SSH terminal reaches this server through
-# the tunnel, so cloudflared connects from this server itself (127.0.0.1 or ::1).
-# Only those connections may use a password, and only after the Cloudflare Access
-# sign-in. Root still needs a key (PermitRootLogin above applies here too).
-Match Address 127.0.0.1,::1
-    PasswordAuthentication yes
-    KbdInteractiveAuthentication no'
-        # Only the person who ran this setup may use it, so nothing else on
-        # this server (for example an app on the host network) can try other
-        # accounts through 127.0.0.1.
-        if [[ ${SUDO_USER:-} =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && [ "$SUDO_USER" != root ]; then
-            loopback_passwords="$loopback_passwords
-    AllowUsers $SUDO_USER root"
+        ca_lines="
+# Cloudflare mode: Cloudflare's browser SSH terminal arrives through the tunnel
+# and logs in with a short-lived certificate (valid for minutes) signed by the
+# Cloudflare account's SSH CA. No password is ever accepted, not even from
+# this server itself. The certificate's principal (the Cloudflare email before
+# the @) must be listed in $SSH_PRINCIPALS_DIR/<user> for the Ubuntu user it
+# logs in as; only the owner's account has such a file, so root and every
+# other account cannot log in with a certificate. Ubuntu 24.04's default
+# PubkeyAcceptedAlgorithms and CASignatureAlgorithms accept Cloudflare's ECDSA
+# certificates; server-ssh-ca checks that whenever the key is set.
+TrustedUserCAKeys $SSH_CA_FILE
+AuthorizedPrincipalsFile $SSH_PRINCIPALS_DIR/%u"
+        ssh_ca_script | write_file "$SSH_CA_BIN" 0755
+        if [ "$DRY_RUN" = false ]; then
+            install -d -m 0755 -o root -g root "$SSH_PRINCIPALS_DIR"
         fi
+        write_file "$SSH_PRINCIPALS_DIR/$OWNER_USER" 0644 <<EOF
+# Written by bootstrap.sh. Cloudflare SSH certificates whose principal is on a
+# line below may log in as the Ubuntu user "$OWNER_USER". Cloudflare uses the
+# part of the sign-in email before the @, in lower case.
+$SSH_PRINCIPAL
+EOF
     fi
     {
         cat <<'EOF'
-# Written by bootstrap.sh. Keys only; no passwords over the network.
+# Written by bootstrap.sh. No passwords over SSH at all.
 # Root may log in only with a key: Coolify manages this server as root over SSH
 # with its own key, from its container (Docker private network only, see ufw).
 PasswordAuthentication no
@@ -687,10 +1231,13 @@ MaxAuthTries 3
 LoginGraceTime 30
 X11Forwarding no
 EOF
-        if [ -n "$loopback_passwords" ]; then printf '%s\n' "$loopback_passwords"; fi
+        if [ -n "$ca_lines" ]; then printf '%s\n' "$ca_lines"; fi
     } | write_file "$SSHD_DROPIN" 0644
     if [ "$DRY_RUN" = true ]; then
-        info "[dry-run] sshd -t (check the config), then reload SSH"
+        info "[dry-run] sshd -t (check the config), reload SSH, prove: no password for $OWNER_USER from 127.0.0.1, ::1 or elsewhere"
+        if [ "$MODE" = cloudflare ]; then
+            info "[dry-run] save the Cloudflare SSH CA key (if given) with: $SSH_CA_BIN set"
+        fi
     else
         mkdir -p /run/sshd
         if ! sshd -t; then
@@ -703,28 +1250,183 @@ EOF
             systemctl enable --now ssh.socket
         fi
         # Ubuntu 24.04 starts sshd on demand (ssh.socket); new logins read the new settings.
+        verify_ssh_rules
+        if [ "$MODE" = cloudflare ] && [ -n "$SSH_CA_KEY" ]; then
+            ensure_workdir
+            printf '%s\n' "$SSH_CA_KEY" >"$WORKDIR/ca.pub"
+            "$SSH_CA_BIN" set "$WORKDIR/ca.pub" | sed 's/^/    /' ||
+                die "The SSH CA key could not be saved (see above). Add it later: sudo server-ssh-ca set"
+        fi
     fi
     if [ "$MODE" = cloudflare ]; then
-        if [ "$DRY_RUN" = false ]; then
-            # Prove the rule: password only for connections from this server itself.
-            local pw_local pw_remote pw_root
-            pw_local="$(sshd -T -C addr=127.0.0.1,user=check,host=localhost,laddr=127.0.0.1,lport=22 2>/dev/null | awk '$1 == "passwordauthentication" {print $2}')"
-            pw_remote="$(sshd -T -C addr=203.0.113.9,user=check,host=example.net,laddr=127.0.0.1,lport=22 2>/dev/null | awk '$1 == "passwordauthentication" {print $2}')"
-            pw_root="$(sshd -T -C addr=127.0.0.1,user=root,host=localhost,laddr=127.0.0.1,lport=22 2>/dev/null | awk '$1 == "permitrootlogin" {print $2}')"
-            case "$pw_root" in without-password | prohibit-password) ;; *) pw_root="bad:$pw_root" ;; esac
-            if [ "$pw_local" != yes ] || [ "$pw_remote" != no ] || [ "${pw_root#bad:}" != "$pw_root" ]; then
-                rm -f -- "$SSHD_DROPIN"
-                systemctl reload ssh.service 2>/dev/null || true
-                die "The SSH password rule did not check out (local=$pw_local, other=$pw_remote, root=$pw_root), so the settings were removed again."
-            fi
+        ok "SSH: no passwords at all; browser SSH with a Cloudflare certificate for '$SSH_PRINCIPAL' as user '$OWNER_USER'"
+        if [ "$DRY_RUN" = false ] && [ ! -s "$SSH_CA_FILE" ]; then
+            warn "Browser SSH needs the Cloudflare SSH CA key. When you have it: sudo server-ssh-ca set"
         fi
-        ok "SSH: keys only from the network; password only through the Cloudflare tunnel (not for root)"
-        done_item "SSH hardened (keys only; password only for Cloudflare's browser SSH via the tunnel, never root; 3 tries)"
+        done_item "SSH hardened (no passwords; root by key only; browser SSH by Cloudflare short-lived certificate for $OWNER_USER only; 3 tries)"
     else
-        ok "SSH: keys only, root only with a key, 3 tries per connection"
+        ok "SSH: no passwords, root only with a key, 3 tries per connection"
         warn "Password login over SSH is now OFF. Use the Hyper-V console to log in, as before."
         done_item "SSH hardened (passwords off, root by key only, 3 tries)"
     fi
+}
+
+# Ask sshd what it will really do, for connections from this server itself
+# (where the tunnel arrives) and from elsewhere. Undo the settings if any check
+# fails.
+verify_ssh_rules() {
+    local addr user v problems=""
+    sshd_value() {
+        sshd -T -C "addr=$1,user=$2,host=check.invalid,laddr=127.0.0.1,lport=22" 2>/dev/null | awk -v k="$3" '$1 == k { print $2; exit }'
+    }
+    for addr in 127.0.0.1 ::1 203.0.113.9; do
+        for user in "$OWNER_USER" root; do
+            v="$(sshd_value "$addr" "$user" passwordauthentication)"
+            [ "$v" = no ] || problems="$problems password($addr,$user)=$v"
+            v="$(sshd_value "$addr" "$user" kbdinteractiveauthentication)"
+            [ "$v" = no ] || problems="$problems keyboard($addr,$user)=$v"
+        done
+        v="$(sshd_value "$addr" root permitrootlogin)"
+        case "$v" in without-password | prohibit-password) ;; *) problems="$problems root($addr)=$v" ;; esac
+    done
+    if [ "$MODE" = cloudflare ]; then
+        v="$(sshd_value 127.0.0.1 "$OWNER_USER" trustedusercakeys)"
+        [ "$v" = "$SSH_CA_FILE" ] || problems="$problems ca=$v"
+        v="$(sshd_value 127.0.0.1 "$OWNER_USER" authorizedprincipalsfile)"
+        [ "$v" = "$SSH_PRINCIPALS_DIR/%u" ] || problems="$problems principals=$v"
+    fi
+    if [ -n "$problems" ]; then
+        rm -f -- "$SSHD_DROPIN"
+        systemctl reload ssh.service 2>/dev/null || true
+        die "The SSH rules did not check out ($problems ), so the settings were removed again."
+    fi
+    ok "Checked: no password login for '$OWNER_USER' or root, from this server or anywhere else"
+}
+
+ssh_ca_script() {
+    cat <<'CA_EOF'
+#!/bin/bash
+# server-ssh-ca: the Cloudflare SSH CA key that lets Cloudflare's browser SSH
+# terminal log in with short-lived certificates. Installed by bootstrap.sh.
+#
+#   sudo server-ssh-ca set          paste the CA public key from Cloudflare
+#   sudo server-ssh-ca set FILE     read the key from FILE
+#   sudo server-ssh-ca status       show the key and who may log in with it
+#
+# Where to find the key in Cloudflare: Zero Trust, Access controls, Service
+# credentials, SSH, Add a certificate, choose the browser SSH application
+# (ssh.<your domain>), Generate certificate, then copy the "CA public key"
+# (one line that starts with ecdsa-sha2-nistp256).
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 022
+
+CA_FILE="/etc/ssh/ca.pub"
+PRINCIPALS_DIR="/etc/ssh/principals"
+DROPIN="/etc/ssh/sshd_config.d/01-server-hardening.conf"
+
+die() { printf '\nSTOPPED: %s\n' "$*" >&2; exit 1; }
+have_tty() { { : >/dev/tty; } 2>/dev/null; }
+
+trim() {
+    local t="${1//$'\r'/}"
+    t="${t#"${t%%[![:space:]]*}"}"
+    printf '%s' "${t%"${t##*[![:space:]]}"}"
+}
+
+key_valid() {
+    local key="$1"
+    [[ $key =~ ^(ecdsa-sha2-nistp(256|384|521)|ssh-ed25519|ssh-rsa)\ [A-Za-z0-9+/]{40,}={0,3}(\ [^[:cntrl:]]*)?$ ]] || return 1
+    printf '%s\n' "$key" | ssh-keygen -l -f /dev/stdin >/dev/null 2>&1
+}
+
+# sshd must accept signatures made by this CA type, and certificates of that
+# type (Ubuntu 24.04's defaults do; a custom PubkeyAcceptedAlgorithms or
+# CASignatureAlgorithms line could remove them).
+algorithms_ok() {
+    local type="$1" cfg sig cert
+    cfg="$(sshd -T -C user=check,addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=22 2>/dev/null)" || return 1
+    case "$type" in
+        ssh-rsa) sig="rsa-sha2-512"; cert="rsa-sha2-512-cert-v01@openssh.com" ;;
+        *) sig="$type"; cert="$type-cert-v01@openssh.com" ;;
+    esac
+    awk '$1 == "casignaturealgorithms" { print $2 }' <<<"$cfg" | tr ',' '\n' | grep -qxF -- "$sig" || return 1
+    awk '$1 == "pubkeyacceptedalgorithms" { print $2 }' <<<"$cfg" | tr ',' '\n' | grep -qxF -- "$cert"
+}
+
+reload_ssh() {
+    if systemctl is-active --quiet ssh.service 2>/dev/null; then
+        systemctl reload ssh.service
+    fi
+    # With ssh.socket (Ubuntu 24.04's default) every new login reads the files.
+}
+
+cmd_status() {
+    local f rc=0 cfg
+    if [ -s "$CA_FILE" ]; then
+        echo "SSH CA key in $CA_FILE:"
+        ssh-keygen -l -f "$CA_FILE" 2>/dev/null | sed 's/^/    /' || { echo "    (cannot be read)"; rc=1; }
+    else
+        echo "No SSH CA key yet, so browser SSH cannot log in. Add it: sudo server-ssh-ca set"
+        rc=1
+    fi
+    cfg="$(sshd -T -C user=check,addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=22 2>/dev/null || true)"
+    if ! grep -qx "trustedusercakeys $CA_FILE" <<<"$cfg"; then
+        echo "SSH does not use $CA_FILE. Run bootstrap.sh again with --cloudflare."
+        rc=1
+    fi
+    for f in "$PRINCIPALS_DIR"/*; do
+        [ -f "$f" ] || continue
+        echo "Ubuntu user $(basename "$f") accepts certificates for: $(grep -v '^[[:space:]]*\(#\|$\)' "$f" | tr '\n' ' ')"
+    done
+    return "$rc"
+}
+
+cmd_set() {
+    local src="${1:-}" line="" previous="" stage
+    [ "$(id -u)" -eq 0 ] || die "Please run with sudo: sudo server-ssh-ca set"
+    if [ -n "$src" ]; then
+        [ -r "$src" ] || die "Cannot read $src"
+        line="$(grep -v '^[[:space:]]*\(#\|$\)' -- "$src" | head -n 1 || true)"
+    elif have_tty; then
+        printf 'Paste the SSH CA public key from Cloudflare (one line, starts with\necdsa-sha2-nistp256), then press Enter: ' >/dev/tty
+        IFS= read -r line </dev/tty || line=""
+    else
+        IFS= read -r line || line=""
+    fi
+    line="$(trim "$line")"
+    key_valid "$line" ||
+        die "That does not look like an SSH CA public key. Copy the whole line (it starts with ecdsa-sha2-nistp256) from Cloudflare: Zero Trust, Access controls, Service credentials, SSH."
+    if ! grep -q "^TrustedUserCAKeys $CA_FILE" "$DROPIN" 2>/dev/null; then
+        echo "Note: SSH is not set up for certificates yet. Run bootstrap.sh again with --cloudflare."
+    fi
+    if [ -f "$CA_FILE" ]; then previous="$(cat -- "$CA_FILE")"; fi
+    # Stage next to the file and move it into place in one step.
+    stage="$(mktemp -d /etc/ssh/.server-ssh-ca.XXXXXX)"
+    printf '%s\n' "$line" >"$stage/ca.pub"
+    chmod 0644 "$stage/ca.pub"
+    mv -f -- "$stage/ca.pub" "$CA_FILE"
+    rmdir -- "$stage"
+    if ! sshd -t || ! algorithms_ok "${line%% *}"; then
+        if [ -n "$previous" ]; then printf '%s\n' "$previous" >"$CA_FILE"; else rm -f -- "$CA_FILE"; fi
+        die "SSH does not accept this key type (${line%% *}), so the previous setting was put back."
+    fi
+    if [ -n "$previous" ] && [ "$previous" != "$line" ]; then
+        printf '%s\n' "$previous" >"$CA_FILE.previous"
+        echo "The old key is kept in $CA_FILE.previous (not used)."
+    fi
+    reload_ssh
+    echo "Saved. Browser SSH can now log in with Cloudflare certificates."
+    cmd_status || true
+}
+
+case "${1:-status}" in
+    set) cmd_set "${2:-}" ;;
+    status) cmd_status ;;
+    -h | --help | help) sed -n '2,/^set -euo/p' "$0" | sed -e '/^set -euo/d' -e 's/^# \{0,1\}//' ;;
+    *) echo "Usage: server-ssh-ca set [FILE] | status" >&2; exit 2 ;;
+esac
+CA_EOF
 }
 
 # ---------------------------------------------------------------------------
@@ -812,17 +1514,25 @@ guard_script() {
 # the packet reaches DOCKER-USER.
 #
 # Usage:
-#   docker-port-guard apply            rebuild the rules (safe to repeat)
-#   docker-port-guard open-setup [M]   allow 8000 and 6001 for M minutes (default 30)
-#   docker-port-guard close            end the setup window now
-#   docker-port-guard status           show the rules
+#   docker-port-guard apply                  rebuild the rules (safe to repeat)
+#   docker-port-guard open-setup [M] [ADDR]  allow 8000 and 6001 for M minutes
+#                                            (default 30), only from ADDR if given
+#                                            (your computer's internet address)
+#   docker-port-guard close                  end the setup window now
+#   docker-port-guard status                 show the rules
+#   docker-port-guard check-config           check the settings file
+#
+# The settings file is read as plain KEY=value lines, never run as a script.
+# If it has a mistake, the guard does NOT stop (Docker must keep starting); it
+# logs the mistake and uses safe settings instead: no extra ports, and the
+# closed Cloudflare mode unless a valid MODE line was read. A mistake can
+# therefore only close ports, never open them.
 set -euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 CHAIN="PORT-GUARD"
 CONFIG="/etc/default/docker-port-guard"
 STATE_DIR="/run/docker-port-guard"
-WINDOW_FILE="$STATE_DIR/setup-window-until"
 CLOSE_UNIT="docker-port-guard-close"
 SELF="/usr/local/sbin/docker-port-guard"
 ALWAYS_ALLOWED="tcp/80 tcp/443 udp/443"
@@ -830,20 +1540,85 @@ SETUP_PORTS="tcp/8000 tcp/6001"
 TRUSTED_IFACES="lo docker0 br-+"
 EXTRA_ALLOWED=""
 MODE="direct"
+CONFIG_ERRORS=""
 
 # Test hooks: let a test point the script at other files.
 CONFIG="${DPG_CONFIG:-$CONFIG}"
 STATE_DIR="${DPG_STATE_DIR:-$STATE_DIR}"
 WINDOW_FILE="$STATE_DIR/setup-window-until"
+FROM_FILE="$STATE_DIR/setup-window-from"
 
-if [ -r "$CONFIG" ]; then
-    # shellcheck source=/dev/null
-    . "$CONFIG"
-fi
+log_error() {
+    echo "docker-port-guard: $*" >&2
+    logger -t docker-port-guard -p user.err -- "$*" 2>/dev/null || true
+}
+
+valid_port_entry() {
+    [[ $1 =~ ^(tcp|udp)/([0-9]{1,5})$ ]] && [ "${BASH_REMATCH[2]}" -ge 1 ] && [ "${BASH_REMATCH[2]}" -le 65535 ]
+}
+
+read_config() {
+    local line key value n=0 mode_seen="" extra_seen="" entry bad
+    [ -e "$CONFIG" ] || return 0
+    if [ ! -r "$CONFIG" ]; then
+        CONFIG_ERRORS="cannot read $CONFIG"
+    else
+        while IFS= read -r line || [ -n "$line" ]; do
+            n=$((n + 1))
+            line="${line//$'\r'/}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            case "$line" in '' | '#'*) continue ;; esac
+            if [[ ! $line =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+                CONFIG_ERRORS="$CONFIG_ERRORS; line $n is not KEY=value"
+                continue
+            fi
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            case "$value" in
+                \"*\") value="${value:1:${#value}-2}" ;;
+                \'*\') value="${value:1:${#value}-2}" ;;
+            esac
+            if [[ ! $value =~ ^[A-Za-z0-9/\ ._-]*$ ]]; then
+                CONFIG_ERRORS="$CONFIG_ERRORS; line $n has characters that do not belong in a setting"
+                continue
+            fi
+            case "$key" in
+                MODE)
+                    case "$value" in
+                        direct | cloudflare) mode_seen="$value" ;;
+                        *) CONFIG_ERRORS="$CONFIG_ERRORS; line $n: MODE must be direct or cloudflare" ;;
+                    esac
+                    ;;
+                EXTRA_ALLOWED)
+                    bad=""
+                    for entry in $value; do
+                        valid_port_entry "$entry" || bad="$bad $entry"
+                    done
+                    if [ -n "$bad" ]; then
+                        CONFIG_ERRORS="$CONFIG_ERRORS; line $n: not a port (use tcp/1234 or udp/1234):$bad"
+                    else
+                        extra_seen="$value"
+                    fi
+                    ;;
+                *) CONFIG_ERRORS="$CONFIG_ERRORS; line $n: unknown setting $key" ;;
+            esac
+        done <"$CONFIG"
+    fi
+    if [ -n "$CONFIG_ERRORS" ]; then
+        CONFIG_ERRORS="${CONFIG_ERRORS#; }"
+        EXTRA_ALLOWED=""
+        MODE="${mode_seen:-cloudflare}"
+        log_error "mistake in $CONFIG ($CONFIG_ERRORS). Using safe settings: no extra ports, mode $MODE. Fix the file, then run: sudo docker-port-guard apply"
+    else
+        EXTRA_ALLOWED="$extra_seen"
+        MODE="${mode_seen:-direct}"
+    fi
+}
+
+read_config
 case "$MODE" in
     cloudflare) ALWAYS_ALLOWED="" ;;
-    direct) ;;
-    *) echo "docker-port-guard: unknown MODE '$MODE' in $CONFIG, using direct" >&2; MODE="direct" ;;
 esac
 
 window_until() {
@@ -856,10 +1631,26 @@ window_until() {
     return 1
 }
 
+# The address the setup window is limited to, if any (checked when it was set).
+window_from() {
+    local from=""
+    [ -r "$FROM_FILE" ] && from="$(cat "$FROM_FILE")"
+    if [[ $from =~ ^[0-9a-fA-F:.]+/[0-9]{1,3}$ ]]; then
+        printf '%s' "$from"
+    fi
+}
+
+# The rules for one address family (4 or 6).
 rule_set() {
-    local entries="$ALWAYS_ALLOWED $EXTRA_ALLOWED" entry proto port iface
+    local fam="${1:-4}" entries="$ALWAYS_ALLOWED $EXTRA_ALLOWED" setup="" entry proto port iface from="" src=""
     if window_until >/dev/null; then
-        entries="$entries $SETUP_PORTS"
+        from="$(window_from)"
+        if [ -z "$from" ]; then
+            setup="$SETUP_PORTS"
+        elif { [ "$fam" = 6 ] && [[ $from == *:* ]]; } || { [ "$fam" = 4 ] && [[ $from != *:* ]]; }; then
+            setup="$SETUP_PORTS"
+            src="-s $from "
+        fi
     fi
     echo "*filter"
     echo ":$CHAIN - [0:0]"
@@ -868,60 +1659,101 @@ rule_set() {
         echo "-A $CHAIN -i $iface -j RETURN"
     done
     for entry in $entries; do
-        if [[ ! $entry =~ ^(tcp|udp)/([0-9]{1,5})$ ]] || [ "${BASH_REMATCH[2]}" -lt 1 ] || [ "${BASH_REMATCH[2]}" -gt 65535 ]; then
-            echo "docker-port-guard: ignoring invalid port entry '$entry' (use tcp/1234 or udp/1234)" >&2
-            continue
-        fi
-        proto="${BASH_REMATCH[1]}"
-        port="${BASH_REMATCH[2]}"
+        valid_port_entry "$entry" || continue
+        proto="${entry%/*}"
+        port="${entry#*/}"
         # Only traffic Docker forwarded from a published port (DNAT), not any
         # container address that happens to listen on the same port.
         echo "-A $CHAIN -p $proto -m conntrack --ctstate DNAT --ctorigdstport $port --ctdir ORIGINAL -j RETURN"
+    done
+    for entry in $setup; do
+        proto="${entry%/*}"
+        port="${entry#*/}"
+        echo "-A $CHAIN ${src}-p $proto -m conntrack --ctstate DNAT --ctorigdstport $port --ctdir ORIGINAL -j RETURN"
     done
     echo "-A $CHAIN -j DROP"
     echo "COMMIT"
 }
 
+# Returns 0 when applied or when this address family does not exist here
+# (IPv6 switched off), 1 when it exists but the rules could not be applied.
 apply_family() {
-    local ipt="$1" restore="$2" first
+    local fam="$1" ipt restore first rules nums n
+    if [ "$fam" = 4 ]; then ipt=iptables; restore=iptables-restore; else ipt=ip6tables; restore=ip6tables-restore; fi
     if ! command -v "$ipt" >/dev/null 2>&1 || ! "$ipt" -w -S FORWARD >/dev/null 2>&1; then
         echo "docker-port-guard: $ipt not available, skipped"
         return 0
     fi
     "$ipt" -w -N DOCKER-USER 2>/dev/null || true
+    rules="$(rule_set "$fam")" || return 1
     # One transaction: the chain is emptied and refilled atomically, no gap.
-    rule_set | "$restore" -w --noflush
+    printf '%s\n' "$rules" | "$restore" -w --noflush || return 1
     # Our jump must be rule 1. Insert it first, then remove older copies
     # (highest rule number first), so there is never a moment without it.
-    first="$("$ipt" -w -S DOCKER-USER | sed -n '2p')"
+    first="$("$ipt" -w -S DOCKER-USER | sed -n '2p')" || return 1
     if [ "$first" != "-A DOCKER-USER -j $CHAIN" ]; then
-        "$ipt" -w -I DOCKER-USER 1 -j "$CHAIN"
+        "$ipt" -w -I DOCKER-USER 1 -j "$CHAIN" || return 1
     fi
-    "$ipt" -w -S DOCKER-USER |
-        awk -v r="-A DOCKER-USER -j $CHAIN" 'NR > 2 && $0 == r { print NR - 1 }' |
-        sort -rn |
-        while read -r n; do
-            "$ipt" -w -D DOCKER-USER "$n"
-        done
+    nums="$("$ipt" -w -S DOCKER-USER | awk -v r="-A DOCKER-USER -j $CHAIN" 'NR > 2 && $0 == r { print NR - 1 }' | sort -rn)" || return 1
+    for n in $nums; do
+        "$ipt" -w -D DOCKER-USER "$n" || return 1
+    done
+    [ "$("$ipt" -w -S DOCKER-USER | sed -n '2p')" = "-A DOCKER-USER -j $CHAIN" ] || return 1
     echo "docker-port-guard: $ipt rules applied"
 }
 
 apply() {
-    apply_family iptables iptables-restore
-    # The IPv6 part may be missing (IPv6 off); IPv4 must work.
-    apply_family ip6tables ip6tables-restore || echo "docker-port-guard: IPv6 rules could not be applied" >&2
-    local until ports
+    # Fail closed: if a family that exists cannot be protected, exit non-zero,
+    # so Docker (ExecStartPre) does not start with its ports unprotected.
+    if ! apply_family 4; then
+        log_error "IPv4 rules could not be applied"
+        exit 1
+    fi
+    if ! apply_family 6; then
+        log_error "IPv6 is on but its rules could not be applied"
+        exit 1
+    fi
+    local until ports from
     ports="$(printf '%s %s' "$ALWAYS_ALLOWED" "$EXTRA_ALLOWED" | xargs)"
     echo "docker-port-guard: mode $MODE, container ports open to the internet: ${ports:-none}"
     if until="$(window_until)"; then
-        echo "docker-port-guard: setup window OPEN until $(date -d "@$until" '+%H:%M')"
+        from="$(window_from)"
+        echo "docker-port-guard: setup window OPEN until $(date -d "@$until" '+%H:%M')${from:+ (only from $from)}"
     fi
 }
 
+# Check an address with Python's ipaddress module and print it as a network
+# (203.0.113.7 -> 203.0.113.7/32).
+normalize_address() {
+    python3 -I -c '
+import ipaddress, sys
+try:
+    n = ipaddress.ip_network(sys.argv[1], strict=False)
+except ValueError:
+    sys.exit(1)
+if n.is_unspecified or n.num_addresses > 256:
+    sys.exit(2)
+print(n)
+' "$1"
+}
+
 open_setup() {
-    local minutes="${1:-30}"
-    [[ $minutes =~ ^[0-9]+$ ]] && [ "$minutes" -ge 1 ] && [ "$minutes" -le 120 ] ||
+    local minutes="30" from="" norm rc
+    if [ $# -gt 0 ] && [[ $1 =~ ^[0-9]+$ ]]; then minutes="$1"; shift; fi
+    if [ $# -gt 0 ]; then from="$1"; shift; fi
+    [ $# -eq 0 ] || { echo "Usage: docker-port-guard open-setup [minutes] [your-internet-address]" >&2; exit 2; }
+    [ "$minutes" -ge 1 ] && [ "$minutes" -le 120 ] ||
         { echo "Minutes must be between 1 and 120" >&2; exit 2; }
+    if [ -n "$from" ]; then
+        rc=0
+        norm="$(normalize_address "$from")" || rc=$?
+        case "$rc" in
+            0) ;;
+            2) echo "'$from' covers too many addresses. Give your computer's internet address (search 'what is my IP' on it)." >&2; exit 2 ;;
+            *) echo "'$from' is not an internet address, for example 203.0.113.7" >&2; exit 2 ;;
+        esac
+        from="$norm"
+    fi
     mkdir -p "$STATE_DIR"
     chmod 700 "$STATE_DIR"
     # The closing timer is created first: if it cannot be created, the ports
@@ -934,18 +1766,23 @@ open_setup() {
         echo "docker-port-guard: could not create the closing timer, so the window was NOT opened" >&2
         exit 1
     fi
+    if [ -n "$from" ]; then
+        printf '%s\n' "$from" >"$FROM_FILE"
+    else
+        rm -f "$FROM_FILE"
+    fi
     echo $(( $(date +%s) + minutes * 60 )) >"$WINDOW_FILE"
     apply
 }
 
 close_setup() {
-    rm -f "$WINDOW_FILE"
+    rm -f "$WINDOW_FILE" "$FROM_FILE"
     apply
     echo "docker-port-guard: setup window closed"
 }
 
 status() {
-    local ipt until
+    local ipt until from
     for ipt in iptables ip6tables; do
         if command -v "$ipt" >/dev/null 2>&1 && "$ipt" -w -S "$CHAIN" >/dev/null 2>&1; then
             echo "== $ipt DOCKER-USER"
@@ -955,8 +1792,10 @@ status() {
         fi
     done
     echo "Mode: $MODE"
+    if [ -n "$CONFIG_ERRORS" ]; then echo "Settings file has mistakes: $CONFIG_ERRORS"; fi
     if until="$(window_until)"; then
-        echo "Setup window: OPEN until $(date -d "@$until" '+%H:%M')"
+        from="$(window_from)"
+        echo "Setup window: OPEN until $(date -d "@$until" '+%H:%M')${from:+ (only from $from)}"
     else
         echo "Setup window: closed"
     fi
@@ -964,11 +1803,15 @@ status() {
 
 case "${1:-apply}" in
     apply) apply ;;
-    open-setup) open_setup "${2:-30}" ;;
+    open-setup) shift; open_setup "$@" ;;
     close) close_setup ;;
     status) status ;;
-    print-rules) rule_set ;;
-    *) echo "Usage: $0 apply | open-setup [minutes] | close | status" >&2; exit 2 ;;
+    print-rules) rule_set "${2:-4}" ;;
+    check-config)
+        if [ -n "$CONFIG_ERRORS" ]; then exit 1; fi
+        echo "docker-port-guard: $CONFIG is fine (mode $MODE, extra ports: ${EXTRA_ALLOWED:-none})"
+        ;;
+    *) echo "Usage: $0 apply | open-setup [minutes] [address] | close | status | check-config" >&2; exit 2 ;;
 esac
 GUARD_EOF
 }
@@ -1106,11 +1949,12 @@ EOF
 # 9. Cloudflare Tunnel (Cloudflare mode only)
 # ---------------------------------------------------------------------------
 # Print the fingerprints of the primary keys in an OpenPGP key file.
+# Returns non-zero (and prints nothing) if gpg cannot read the file.
 key_fingerprints() {
-    local home="$WORKDIR/gnupg"
+    local home="$WORKDIR/gnupg" listing
     mkdir -p "$home" && chmod 700 "$home"
-    gpg --batch --homedir "$home" --with-colons --show-keys "$1" 2>/dev/null |
-        awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }'
+    listing="$(gpg --batch --homedir "$home" --with-colons --show-keys "$1" 2>/dev/null)" || return 1
+    awk -F: '$1 == "pub" { want = 1; next } $1 == "fpr" && want { print $10; want = 0 }' <<<"$listing"
 }
 
 install_cloudflare_key() {
@@ -1122,12 +1966,18 @@ install_cloudflare_key() {
     local key="$WORKDIR/cloudflare-main.download" plain="$WORKDIR/cloudflare-main.gpg" fprs
     curl --proto '=https' --tlsv1.2 -fsSL --max-time 60 -o "$key" "$CF_KEY_URL" ||
         die "Could not download Cloudflare's package signing key. Check the internet connection and run this script again."
-    if head -c 40 "$key" | grep -q -- '-----BEGIN PGP'; then
-        gpg --batch --homedir "$WORKDIR/gnupg" --dearmor <"$key" >"$plain" 2>/dev/null || die "Cloudflare's signing key could not be read."
+    mkdir -p "$WORKDIR/gnupg" && chmod 700 "$WORKDIR/gnupg"
+    if grep -q -- '-----BEGIN PGP' <(head -c 40 "$key"); then
+        gpg --batch --homedir "$WORKDIR/gnupg" --dearmor <"$key" >"$plain" 2>/dev/null || die "Cloudflare's signing key could not be read (gpg failed to convert it)."
     else
         cp -- "$key" "$plain"
     fi
-    fprs="$(key_fingerprints "$plain" | tr '\n' ' ')"
+    if ! fprs="$(key_fingerprints "$plain")"; then
+        die "Cloudflare's signing key could not be read (gpg could not list it). Nothing from Cloudflare was installed."
+    fi
+    fprs="$(tr '\n' ' ' <<<"$fprs")"
+    fprs="${fprs% }"
+    fprs="${fprs:+$fprs }"
     if [ "$fprs" != "$CF_KEY_FINGERPRINT " ]; then
         die "Cloudflare's package signing key is not the expected one (got: ${fprs:-nothing}). Nothing from Cloudflare was installed. Compare with https://pkg.cloudflare.com/ and update CF_KEY_FINGERPRINT in this script only if Cloudflare announced a new key."
     fi
@@ -1189,15 +2039,8 @@ EOF
         ok "$(cloudflared --version 2>/dev/null | head -n 1)"
     fi
 
-    # Updates come from apt (with the automatic security updates), not from
-    # cloudflared itself: allow Cloudflare's repository in unattended-upgrades.
-    write_file "$UU_CLOUDFLARE" 0644 <<'EOF'
-// Written by bootstrap.sh: install cloudflared updates from Cloudflare's signed
-// repository automatically, together with Ubuntu's security updates.
-Unattended-Upgrade::Origins-Pattern {
-        "origin=cloudflared,codename=${distro_codename}";
-};
-EOF
+    # Updates come from apt when the owner runs "sudo server-update", not from
+    # cloudflared itself (--no-autoupdate) and not automatically.
 
     save_tunnel_token
 
@@ -1235,10 +2078,14 @@ LockPersonality=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# Other programs' processes are hidden from it in /proc.
+ProtectProc=invisible
 # cloudflared runs as root (systemd credentials for a non-root user did not
-# work in testing), so hide the sockets that would turn a cloudflared break-in
-# into control of the whole server. "-" ignores paths that do not exist.
+# work in testing), so hide the sockets and files that would turn a cloudflared
+# break-in into control of the whole server, and the password hashes.
+# "-" ignores paths that do not exist.
 InaccessiblePaths=-/run/docker.sock -/var/run/docker.sock -/run/containerd -/run/docker -/var/lib/docker -/data/coolify
+InaccessiblePaths=-/etc/shadow -/etc/gshadow
 
 [Install]
 WantedBy=multi-user.target
@@ -1291,6 +2138,34 @@ gen_password() {
     done
 }
 
+# Read one setting from /etc/default/server-setup as text (never run as a
+# script). Other settings in the file are left alone.
+setup_setting() {
+    local key="$1" line value=""
+    [ -r "$SETUP_CONFIG" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        case "$line" in "$key="*) value="${line#"$key="}" ;; esac
+    done <"$SETUP_CONFIG"
+    case "$value" in
+        \"*\") value="${value:1:${#value}-2}" ;;
+        \'*\') value="${value:1:${#value}-2}" ;;
+    esac
+    printf '%s' "$value"
+}
+
+coolify_installer_pin() {
+    local pin
+    pin="$(setup_setting COOLIFY_INSTALLER_SHA256)"
+    pin="${pin,,}"
+    if [ -n "$pin" ] && [[ ! $pin =~ ^[0-9a-f]{64}$ ]]; then
+        die "COOLIFY_INSTALLER_SHA256 in $SETUP_CONFIG is not a SHA-256 fingerprint (64 characters 0-9, a-f). Fix or remove that line."
+    fi
+    printf '%s' "$pin"
+}
+
 install_coolify() {
     step "Installing Coolify"
     if coolify_installed; then
@@ -1303,18 +2178,34 @@ install_coolify() {
     # address (HTTPS only). We trust Coolify's publisher here, exactly as Coolify's
     # own documentation asks every self-hosted user to. The installer is also what
     # keeps future updates working (its header says so). The download goes to a
-    # private temporary file first, and its SHA-256 fingerprint is printed so the
-    # run can be compared against a fresh download later if anything looks wrong.
+    # private temporary file first, and its SHA-256 fingerprint is printed. If the
+    # owner pinned a fingerprint (COOLIFY_INSTALLER_SHA256 in
+    # /etc/default/server-setup), a different download is refused.
+    local pin
+    pin="$(coolify_installer_pin)" || exit 1
     ensure_workdir
     local installer="$WORKDIR/coolify-install.sh" sum
-    curl --proto '=https' --tlsv1.2 -fsSL --max-time 120 -o "$installer" "$COOLIFY_INSTALLER_URL" ||
-        die "Could not download the Coolify installer. Check the internet connection and run this script again."
-    if [ ! -s "$installer" ] || ! head -n 1 "$installer" | grep -q '^#!'; then
-        die "The downloaded Coolify installer looks wrong (not a script). Nothing was installed."
+    if [ "$DRY_RUN" = true ]; then
+        info "[dry-run] download $COOLIFY_INSTALLER_URL, print its SHA-256${pin:+ and require $pin}"
+    else
+        curl --proto '=https' --tlsv1.2 -fsSL --max-time 120 -o "$installer" "$COOLIFY_INSTALLER_URL" ||
+            die "Could not download the Coolify installer. Check the internet connection and run this script again."
+        if [ ! -s "$installer" ] || ! grep -q '^#!' <(head -n 1 "$installer"); then
+            die "The downloaded Coolify installer looks wrong (not a script). Nothing was installed."
+        fi
+        sum="$(sha256sum "$installer")"
+        sum="${sum%% *}"
+        info "Downloaded Coolify's official installer from $COOLIFY_INSTALLER_URL"
+        info "SHA-256 fingerprint: $sum"
+        if [ -n "$pin" ]; then
+            if [ "$sum" != "$pin" ]; then
+                die "The Coolify installer is not the one pinned in $SETUP_CONFIG (expected $pin, got $sum). Nothing was installed. Coolify may have published a new installer: check https://github.com/coollabsio/coolify/blob/main/scripts/install.sh, then update or remove COOLIFY_INSTALLER_SHA256."
+            fi
+            ok "Matches the fingerprint pinned in $SETUP_CONFIG"
+        else
+            info "No fingerprint pinned (optional: COOLIFY_INSTALLER_SHA256 in $SETUP_CONFIG)"
+        fi
     fi
-    sum="$(sha256sum "$installer" | awk '{print $1}')"
-    info "Downloaded Coolify's official installer from $COOLIFY_INSTALLER_URL"
-    info "SHA-256 fingerprint: $sum"
 
     # Create the admin account up front. Otherwise the first person to open the
     # dashboard becomes admin (root on this server). Coolify documents this.
@@ -1353,14 +2244,21 @@ install_coolify() {
     fi
 
     info "Running the Coolify installer. This takes a few minutes."
+    # The installer reads the admin account only from its environment
+    # (ROOT_USERNAME, ROOT_USER_EMAIL, ROOT_USER_PASSWORD; see its header). They
+    # are set with "export" (a shell builtin) in a subshell, so the password is
+    # never on a command line ("env NAME=value" would put it in the process
+    # list); the environment of a root process is readable only by root.
     # HOME and USER are set explicitly: the installer adds its SSH key to
     # ~/.ssh/authorized_keys of the current user, which must be root.
-    run env HOME=/root USER=root \
-        ROOT_USERNAME="admin" \
-        ROOT_USER_EMAIL="$ADMIN_EMAIL" \
-        ROOT_USER_PASSWORD="$ADMIN_PASSWORD" \
-        bash "$installer" ||
-        die "The Coolify installer reported a problem. Its log is in /data/coolify/source/. You can run this script again."
+    if [ "$DRY_RUN" = true ]; then
+        info "[dry-run] bash $installer, with HOME=/root USER=root ROOT_USERNAME=admin ROOT_USER_EMAIL=$ADMIN_EMAIL and the password in its environment"
+    else
+        (
+            export HOME=/root USER=root ROOT_USERNAME="admin" ROOT_USER_EMAIL="$ADMIN_EMAIL" ROOT_USER_PASSWORD="$ADMIN_PASSWORD"
+            exec bash "$installer"
+        ) || die "The Coolify installer reported a problem. Its log is in /data/coolify/source/. You can run this script again."
+    fi
 
     # Re-apply the guard now that Docker exists and has made its chains.
     run systemctl restart docker-port-guard.service
@@ -1405,10 +2303,45 @@ open_setup_window() {
         ok "https://$DASHBOARD_HOST already works. No setup window needed."
         return 0
     fi
-    "$GUARD_BIN" open-setup "$SETUP_WINDOW_MINUTES"
+    if [ -f /run/docker-port-guard/setup-window-until ] && "$GUARD_BIN" status 2>/dev/null | grep -q '^Setup window: OPEN'; then
+        ok "The setup window is already open: $("$GUARD_BIN" status | sed -n 's/^Setup window: //p')"
+        return 0
+    fi
+    # On a later run Coolify was set up before: opening the dashboard ports to
+    # the internet again is a choice, not a default.
+    if [ "$COOLIFY_WAS_INSTALLED" = true ]; then
+        info "Coolify was already set up, but https://$DASHBOARD_HOST does not answer from this server."
+        if [ "$ASSUME_YES" = true ] || ! ask_yes_no "Open the Coolify dashboard ports 8000 and 6001 to the internet again for $SETUP_WINDOW_MINUTES minutes?"; then
+            ok "Setup window left closed. If you need it: sudo docker-port-guard open-setup $SETUP_WINDOW_MINUTES <your-internet-address>"
+            return 0
+        fi
+    fi
+    # Optional: only the owner's own computer may use the window.
+    local from="" typed="" tries=0 out
+    if have_tty; then
+        while [ "$tries" -lt 3 ]; do
+            tries=$((tries + 1))
+            printf '    To allow only your own computer during the setup window, type its internet
+    address (on that computer, search the web for "what is my IP").
+    Or press Enter to allow any address: ' >/dev/tty
+            typed=""
+            read -r typed </dev/tty || typed=""
+            typed="${typed//[[:space:]]/}"
+            [ -n "$typed" ] || break
+            if out="$("$GUARD_BIN" open-setup "$SETUP_WINDOW_MINUTES" "$typed" 2>&1)"; then
+                from="$typed"
+                break
+            fi
+            warn "$out"
+        done
+    fi
+    if [ -z "$from" ]; then
+        "$GUARD_BIN" open-setup "$SETUP_WINDOW_MINUTES" >/dev/null ||
+            die "The setup window could not be opened. See: sudo docker-port-guard status"
+    fi
     SETUP_WINDOW_OPENED=true
-    ok "Ports 8000 and 6001 are open for $SETUP_WINDOW_MINUTES minutes, then close by themselves"
-    done_item "Setup window: 8000 and 6001 open until $(date -d "+$SETUP_WINDOW_MINUTES min" '+%H:%M'), then closed automatically"
+    ok "Ports 8000 and 6001 are open for $SETUP_WINDOW_MINUTES minutes${from:+, only from $from}, then close by themselves"
+    done_item "Setup window: 8000 and 6001 open${from:+ (only from $from)} until $(date -d "+$SETUP_WINDOW_MINUTES min" '+%H:%M'), then closed automatically"
 }
 
 # ---------------------------------------------------------------------------
@@ -1430,18 +2363,23 @@ print_summary_cloudflare() {
     fi
     cat <<EOF
 
-${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (details in README.md, "Cloudflare mode"):
-  1. Your tunnel, Routes (Public hostnames), add these in this order:
+${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (step by step: docs/SERVER.md):
+  1. FIRST, Zero Trust, Access, Applications: protect $DASHBOARD_HOST,
+     ssh.$base (browser rendering: SSH) and *.$base with your email.
+     Add a Bypass application for $DASHBOARD_HOST, path
+     webhooks/source/github/events, so GitHub can tell Coolify to deploy.
+  2. Only then, your tunnel, Routes, add these in this order:
+       $DASHBOARD_HOST   path ^/webhooks/source/github/events -> HTTP 127.0.0.1:8000
        $DASHBOARD_HOST   path ^/app/         ->  HTTP  127.0.0.1:6001
        $DASHBOARD_HOST   path ^/terminal/ws  ->  HTTP  127.0.0.1:6002
        $DASHBOARD_HOST   (no path)           ->  HTTP  127.0.0.1:8000
        ssh.$base         (no path)           ->  SSH   127.0.0.1:22
        *.$base           (no path)           ->  HTTP  127.0.0.1:80
-  2. Zero Trust, Access, Applications: protect $DASHBOARD_HOST and ssh.$base
-     (browser rendering: SSH) with your email, and also *.$base.
+  3. SSH CA for the browser terminal: Access controls, Service credentials,
+     SSH, Add a certificate, application ssh.$base, Generate certificate.
 
 ${C_BOLD}Then in your browser:${C_RESET}
-  3. Open https://$DASHBOARD_HOST and log in with:
+  4. Open https://$DASHBOARD_HOST and log in with:
 EOF
     if [ -n "$ADMIN_PASSWORD" ]; then
         cat <<EOF
@@ -1456,11 +2394,24 @@ EOF
         echo "       the Coolify account you already have."
     fi
     cat <<EOF
-  4. Change that password at once, then turn on two-factor login (Profile).
-  5. Settings: URL https://$DASHBOARD_HOST, "Redirect HTTP to HTTPS" Disabled.
-  6. Delete the saved password:  sudo rm $FIRST_LOGIN_FILE
+  5. Change that password at once, then turn on two-factor login (Profile).
+  6. Settings: URL https://$DASHBOARD_HOST, "Redirect HTTP to HTTPS" Disabled.
+  7. Delete the saved password:  sudo rm $FIRST_LOGIN_FILE
 
-SSH in the browser: https://ssh.$base, then your Ubuntu user name and password.
+SSH in the browser: https://ssh.$base, sign in to Cloudflare, user name $OWNER_USER.
+No password: Cloudflare gives the browser a certificate that lasts a few minutes.
+EOF
+    if [ ! -s "$SSH_CA_FILE" ]; then
+        cat <<EOF
+${C_YELLOW}Browser SSH needs the SSH CA key from Cloudflare first:${C_RESET}
+  Zero Trust, Access controls, Service credentials, SSH, Add a certificate,
+  choose the ssh.$base application, Generate certificate, copy the CA public key.
+  Then on this console:  sudo server-ssh-ca set   (paste it, press Enter)
+EOF
+    fi
+    cat <<EOF
+Updates: Ubuntu security patches install by themselves. For everything else,
+when it suits you:  sudo server-update
 Check the server any time with:  sudo bash check.sh
 EOF
 }
@@ -1522,12 +2473,14 @@ EOF
   8. Delete the saved password:  sudo rm $FIRST_LOGIN_FILE
   9. Optional: close the setup window early:  sudo docker-port-guard close
 
-If time runs out, open the window again with:  sudo docker-port-guard open-setup 30
+If time runs out, open the window again with:  sudo docker-port-guard open-setup 30 <your-internet-address>
+Updates (when it suits you):                   sudo server-update
 Check the server any time with:                sudo bash check.sh
 EOF
     else
         printf '\nDashboard: https://%s\n' "$DASHBOARD_HOST"
-        printf 'If you ever need the first-login window again: sudo docker-port-guard open-setup 30\n'
+        printf 'If you ever need the first-login window again: sudo docker-port-guard open-setup 30 <your-internet-address>\n'
+        printf 'Updates (when it suits you): sudo server-update\n'
     fi
 }
 
@@ -1549,6 +2502,7 @@ main() {
         warn "cloudflared is still running from Cloudflare mode. Remove it (sudo systemctl disable --now cloudflared) and remove CLIENT_IP_HEADER from your apps in Coolify: with 80/443 open, anyone could fake that header."
     fi
     install_coolify
+    pin_docker_major
     open_setup_window
     print_summary
     if [ "$CF_RESTART_AT_END" = true ]; then

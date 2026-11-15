@@ -1,0 +1,16 @@
+# Test backup destination: OpenSSH (SFTP) on 22, vsftpd FTPS (explicit TLS) on 21,
+# vsftpd plain FTP on 2121. User "bk", password "S3cret pass!". Self-signed certificate.
+FROM ubuntu:24.04
+ARG APT_PROXY=""
+COPY apt-ca.crt /usr/local/share/ca-certificates/apt-ca.crt
+RUN if [ -n "$APT_PROXY" ]; then \
+      printf 'Acquire::https::CaInfo "/usr/local/share/ca-certificates/apt-ca.crt";\nAcquire::https::Proxy "%s";\n' "$APT_PROXY" > /etc/apt/apt.conf.d/99proxy; \
+      sed -i "s#http://#https://#g" /etc/apt/sources.list.d/ubuntu.sources; fi \
+ && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server vsftpd openssl \
+ && apt-get clean && rm -f /etc/apt/apt.conf.d/99proxy \
+ && mkdir -p /run/sshd /var/run/vsftpd/empty \
+ && useradd -m -s /bin/bash bk && echo 'bk:S3cret pass!' | chpasswd \
+ && openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=ftps.test \
+      -keyout /etc/ssl/private/ftp.key -out /etc/ssl/certs/ftp.crt
+COPY vsftpd-tls.conf vsftpd-plain.conf start.sh /
+CMD ["sh", "/start.sh"]
