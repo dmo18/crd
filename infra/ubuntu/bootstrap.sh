@@ -1064,8 +1064,14 @@ main() {
         warn "Skipping the backup (--skip-backup)."
     elif [ -x "$BACKUP_BIN" ]; then
         say "Running the backup first..."
-        "$BACKUP_BIN" run || die "The backup failed, so nothing was updated. Fix the backup first, or run: sudo server-update --skip-backup"
-        say "Backup done."
+        local brc=0
+        "$BACKUP_BIN" run || brc=$?
+        case "$brc" in
+            0) say "Backup done." ;;
+            3) die "Backups are not set up yet, so nothing was updated. Set them up (sudo server-backup setup), or update without a backup: sudo server-update --skip-backup" ;;
+            75) die "Another backup or restore is running, so nothing was updated. Try again in a while." ;;
+            *) die "The backup failed, so nothing was updated. Fix the backup first (sudo server-backup status), or run: sudo server-update --skip-backup" ;;
+        esac
     else
         say "No backup tool installed ($BACKUP_BIN), so no backup is made first."
     fi
@@ -2311,7 +2317,8 @@ open_setup_window() {
     # the internet again is a choice, not a default.
     if [ "$COOLIFY_WAS_INSTALLED" = true ]; then
         info "Coolify was already set up, but https://$DASHBOARD_HOST does not answer from this server."
-        if [ "$ASSUME_YES" = true ] || ! ask_yes_no "Open the Coolify dashboard ports 8000 and 6001 to the internet again for $SETUP_WINDOW_MINUTES minutes?"; then
+        # Asked on the console only; --yes and runs without a console keep it closed.
+        if [ "$ASSUME_YES" = true ] || ! have_tty || ! ask_yes_no "Open the Coolify dashboard ports 8000 and 6001 to the internet again for $SETUP_WINDOW_MINUTES minutes?"; then
             ok "Setup window left closed. If you need it: sudo docker-port-guard open-setup $SETUP_WINDOW_MINUTES <your-internet-address>"
             return 0
         fi
