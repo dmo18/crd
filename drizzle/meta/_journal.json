@@ -15,6 +15,13 @@
       "when": 1794721988282,
       "tag": "0001_remarkable_the_initiative",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794729452518,
+      "tag": "0002_parallel_proteus",
+      "breakpoints": true
     }
   ]
 }

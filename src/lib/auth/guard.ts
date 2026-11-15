@@ -1,11 +1,21 @@
 import { redirect } from "next/navigation";
 import { appOriginHost } from "@/lib/env";
-import { getSession } from "./session";
+import { currentSessionVersion } from "./password";
+import { getSession, type SessionData } from "./session";
+
+/**
+ * Pure: a session belongs to the owner only when it was signed in and carries
+ * the current password's version (null when no password exists at all).
+ */
+export function sessionIsCurrent(session: SessionData, version: number | null): boolean {
+  return session.owner === true && version !== null && session.version === version;
+}
 
 export async function isOwner(): Promise<boolean> {
   try {
     const session = await getSession();
-    return session.owner === true;
+    if (session.owner !== true) return false;
+    return sessionIsCurrent(session, currentSessionVersion());
   } catch {
     return false;
   }

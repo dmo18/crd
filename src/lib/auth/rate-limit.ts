@@ -1,7 +1,7 @@
 import { isIP } from "node:net";
 import { and, count, desc, eq, gte, lt } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
-import { loginAttempts } from "@/db/schema";
+import { loginAttempts, type AttemptKind } from "@/db/schema";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -89,8 +89,10 @@ export function isRateLimited(ip: string, db: Db = getDb(), now: Date = new Date
   return currentLock(ip, db, now) !== null;
 }
 
-export function recordAttempt(ip: string, success: boolean, db: Db = getDb(), now: Date = new Date()): number {
-  return db.insert(loginAttempts).values({ ip, success, createdAt: now }).returning({ id: loginAttempts.id }).get().id;
+export function recordAttempt(
+  ip: string, success: boolean, db: Db = getDb(), now: Date = new Date(), kind: AttemptKind = "login",
+): number {
+  return db.insert(loginAttempts).values({ ip, success, kind, createdAt: now }).returning({ id: loginAttempts.id }).get().id;
 }
 
 /** Deletes sign-in records older than 30 days. Returns how many were removed. */
@@ -106,8 +108,12 @@ export type BeginResult = { ok: true; id: number } | { ok: false; lock: Lock };
  * Checks the limits and books a failed attempt in one step, before the slow
  * password check runs, so a burst of parallel guesses cannot slip past.
  * Every 100th call also deletes old records, in the same transaction.
+ * `kind` only marks what the attempt was for: sign-in, first-run setup and
+ * password changes all count toward the same per-address and global limits.
  */
-export function beginAttempt(ip: string, db: Db = getDb(), now: Date = new Date()): BeginResult {
+export function beginAttempt(
+  ip: string, db: Db = getDb(), now: Date = new Date(), kind: AttemptKind = "login",
+): BeginResult {
   counter.__crdAttemptCalls = ((counter.__crdAttemptCalls ?? 0) + 1) % PRUNE_EVERY;
   const prune = counter.__crdAttemptCalls === 1;
   return db.transaction((tx): BeginResult => {
@@ -115,7 +121,7 @@ export function beginAttempt(ip: string, db: Db = getDb(), now: Date = new Date(
     if (prune) pruneLoginAttempts(t, now);
     const lock = currentLock(ip, t, now);
     if (lock) return { ok: false, lock };
-    return { ok: true, id: recordAttempt(ip, false, t, now) };
+    return { ok: true, id: recordAttempt(ip, false, t, now, kind) };
   }, { behavior: "immediate" });
 }
 

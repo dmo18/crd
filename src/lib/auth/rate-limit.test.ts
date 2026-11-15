@@ -169,4 +169,15 @@ describe("beginAttempt", () => {
     expect(pruneLoginAttempts(db, T0)).toBe(2);
     expect(db.select().from(loginAttempts).all()).toHaveLength(2);
   });
+
+  it("setup, password change and sign-in share the same limits", () => {
+    const db = createDb(":memory:");
+    expect(beginAttempt("1.1.1.1", db, T0, "setup").ok).toBe(true);
+    expect(beginAttempt("1.1.1.1", db, T0, "change_password").ok).toBe(true);
+    for (let i = 0; i < 3; i++) expect(beginAttempt("1.1.1.1", db, T0).ok).toBe(true);
+    expect(beginAttempt("1.1.1.1", db, T0, "setup")).toEqual({ ok: false, lock: "short" });
+    expect(beginAttempt("1.1.1.1", db, T0)).toEqual({ ok: false, lock: "short" });
+    const kinds = db.select({ kind: loginAttempts.kind }).from(loginAttempts).all().map((r) => r.kind);
+    expect(kinds).toEqual(["setup", "change_password", "login", "login", "login"]);
+  });
 });

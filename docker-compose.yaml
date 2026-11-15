@@ -1,0 +1,36 @@
+# Card Vault for Coolify (Build Pack: Docker Compose). One service, built from
+# the Dockerfile in this repository. Coolify creates the secrets below the
+# first time it reads this file and keeps them under Environment Variables.
+# See docs/COOLIFY.md.
+services:
+  cardvault:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Coolify routes the domain set for this service to port 3000 inside it.
+      - SERVICE_URL_CARDVAULT_3000
+      # Public address, from the domain set in Coolify. Must be https.
+      - APP_ORIGIN=${SERVICE_URL_CARDVAULT_3000}
+      # 64 random letters and digits, made once by Coolify.
+      - SESSION_SECRET=${SERVICE_PASSWORD_64_SESSIONSECRET}
+      # One-time code for the first visit to /setup, made once by Coolify.
+      - SETUP_CODE=${SERVICE_PASSWORD_SETUPCODE}
+      # Optional. Leave empty to choose the password in the app at /setup.
+      - OWNER_PASSWORD_HASH_B64=${OWNER_PASSWORD_HASH_B64:-}
+      # Coolify's proxy (Traefik) adds the visitor's address as the last entry.
+      - TRUST_PROXY_HOPS=1
+      - RECOGNITION_MODE=auto
+      - DATA_DIR=/data
+    volumes:
+      - cardvault-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  cardvault-data:

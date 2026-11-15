@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { check, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 /** Shared value lists. Import these instead of retyping the strings. */
 export const ITEM_KINDS = ["card", "sealed", "bulk"] as const;
@@ -13,6 +13,8 @@ export const PRODUCT_TYPES = ["pack", "rack_pack", "cello_pack", "blister", "box
 export const SEAL_STATES = ["factory_sealed", "possibly_resealed", "opened", "unknown"] as const;
 export const IMAGE_ROLES = ["front", "back", "source", "crop"] as const;
 export const VALUE_SOURCES = ["ai_estimate", "manual", "sample", "price_feed"] as const;
+/** What a booked sign-in attempt was for. All kinds count toward the same limits. */
+export const ATTEMPT_KINDS = ["login", "setup", "change_password"] as const;
 
 export type ItemKind = (typeof ITEM_KINDS)[number];
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
@@ -25,6 +27,7 @@ export type ProductType = (typeof PRODUCT_TYPES)[number];
 export type SealState = (typeof SEAL_STATES)[number];
 export type ImageRole = (typeof IMAGE_ROLES)[number];
 export type ValueSource = (typeof VALUE_SOURCES)[number];
+export type AttemptKind = (typeof ATTEMPT_KINDS)[number];
 
 const now = sql`(unixepoch() * 1000)`;
 const bool = (name: string) => integer(name, { mode: "boolean" }).notNull().default(false);
@@ -185,8 +188,24 @@ export const loginAttempts = sqliteTable("login_attempts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   ip: text("ip").notNull(),
   success: bool("success"),
+  /** Sign-in, first-run setup or password change. Only a marker: limits count every kind. */
+  kind: text("kind", { enum: ATTEMPT_KINDS }).notNull().default("login"),
   createdAt: ts("created_at").notNull().default(now),
 }, (t) => [index("login_attempts_ip_idx").on(t.ip, t.createdAt)]);
+
+/**
+ * The owner password when it was set in the app (first-run setup) instead of
+ * in OWNER_PASSWORD_HASH_B64. At most one row, always id 1. A password set in
+ * the server settings wins over this row.
+ */
+export const ownerSettings = sqliteTable("owner_settings", {
+  id: integer("id").primaryKey(),
+  /** bcrypt hash. Never the password itself. */
+  passwordHash: text("password_hash").notNull(),
+  /** Raised on every password change, which signs out every other device. Starts at 1. */
+  sessionVersion: integer("session_version").notNull().default(1),
+  updatedAt: ts("updated_at").notNull().default(now),
+}, () => [check("owner_settings_single_row", sql`id = 1`)]);
 
 /** Facts about players from Wikidata (free, no key), cached so each name is looked up once. */
 export const playerFacts = sqliteTable("player_facts", {
