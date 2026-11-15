@@ -189,3 +189,26 @@ How it runs on Cloudways Flexible (no root):
 | 27 | Install, update and rollback scripts with releases | main (Opus) |
 | 28 | Start, stop, watchdog, health endpoint, logs | Sonnet |
 | 29 | Phone-friendly go-live guide and a local proxy rehearsal | main (Opus) |
+
+## Milestone 8: blind review, owner-approved updates, backups, logging, agent-ready (approved 2026-11-15)
+
+Owner decisions: nothing changes on the live server without the owner,
+except Ubuntu security patches (no automatic restarts); full disaster
+recovery from FTP or SFTP; logging and security built in; alerts to
+Telegram or Discord (owner chooses at setup); an AI agent will later run on
+the server with its own `ops-agent` account that may check freely but must
+ask before installing updates, restarting, restoring or deleting.
+
+| # | Task | Model |
+|---|---|---|
+| 40 | Blind review in four areas (done) | Opus, Sonnet |
+| 41 | Server fixes: security-only auto updates, `server-update`, Docker major pin, Cloudflare SSH certificates, other server findings | Opus |
+| 42 | App fixes: trusted device cookie, rapid scan duplicates, atomic deletes, other app findings | Opus |
+| 43 | Backup and disaster recovery engine (`server-backup`, restic to SFTP or FTPS) | Opus |
+| 44 | Card reading accuracy fixes | Opus |
+| 45 | Guides: restore, Access before routes, webhooks bypass, "This Machine", support report, runbook | main |
+| 46 | Security review and merge | Opus |
+| 47 | Logging and alerts: app activity log, journald and Docker log caps, Telegram or Discord alerts, weekly Lynis audit | Opus |
+| 48 | Agent-ready server: `ops-agent` user, sudo allowlist, command logging, server ops guide | Opus |
+
+Run cap: 11 tasks or 2.8M tokens.
