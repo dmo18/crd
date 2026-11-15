@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
-import { items, valuations, type NewItem } from "@/db/schema";
+import { items, locations, valuations, type NewItem } from "@/db/schema";
 import { confirmItem, deleteItem, updateItem } from "./update";
 
 let db: Db;
@@ -76,3 +76,29 @@ describe("confirm and delete", () => {
     expect((await deleteItem(id, db)).ok).toBe(false);
   });
 });
+
+describe("updateItem location", () => {
+  const loc = () => db.insert(locations).values({ name: "Box 1" }).returning({ id: locations.id }).get().id;
+
+  it("sets, keeps and clears the location", () => {
+    const id = insert();
+    const l = loc();
+    expect(updateItem(id, { ...base, locationId: String(l) }, db)).toEqual({ ok: true });
+    expect(get(id).locationId).toBe(l);
+    updateItem(id, { ...base }, db);
+    expect(get(id).locationId).toBe(l);
+    updateItem(id, { ...base, locationId: "" }, db);
+    expect(get(id).locationId).toBeNull();
+  });
+
+  it("works for every kind and rejects a location that does not exist", () => {
+    const l = loc();
+    const sealed = insert({ kind: "sealed" });
+    expect(updateItem(sealed, { ...base, locationId: String(l) }, db).ok).toBe(true);
+    expect(get(sealed).locationId).toBe(l);
+    const r = updateItem(sealed, { ...base, locationId: "9999" }, db);
+    expect(r).toEqual({ ok: false, errors: { locationId: "That location no longer exists." } });
+    expect(get(sealed).locationId).toBe(l);
+  });
+});
+

@@ -38,7 +38,7 @@ function Select<T extends string>({ id, name, value, values, labels }: {
 
 const INITIAL: SaveState = { status: "idle", errors: {} };
 
-export function ItemForm({ item }: { item: Item }) {
+export function ItemForm({ item, locations = [] }: { item: Item; locations?: { id: number; name: string }[] }) {
   const [state, action, pending] = useActionState(saveItemAction, INITIAL);
   const e = state.errors;
   const isCard = item.kind === "card";
@@ -138,6 +138,15 @@ export function ItemForm({ item }: { item: Item }) {
             defaultValue={item.manualValueCents == null ? "" : (item.manualValueCents / 100).toFixed(2)}
             className={INPUT_CLASS} aria-invalid={e.manualValue ? true : undefined}
           />
+        </Field>
+      </Group>
+
+      <Group title="Where it is">
+        <Field label="Stored in" error={e.locationId} htmlFor="f-locationId">
+          <select id="f-locationId" name="locationId" defaultValue={item.locationId == null ? "" : String(item.locationId)} className={INPUT_CLASS}>
+            <option value="">No location</option>
+            {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
         </Field>
       </Group>
 

@@ -115,7 +115,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Edit details</h2>
-        <ItemForm item={item} />
+        <ItemForm item={item} locations={db.select({ id: locations.id, name: locations.name }).from(locations).orderBy(locations.name).all()} />
       </section>
 
       <section className="flex flex-col gap-2 border-t border-border pt-5">

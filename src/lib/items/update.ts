@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
-import { CONDITIONS, images, items, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS, valuations, type Item } from "@/db/schema";
+import { CONDITIONS, images, items, locations, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS, valuations, type Item } from "@/db/schema";
 import { deleteStored } from "@/lib/images/store";
 import { parseDollars } from "@/lib/money";
 import { buildTitle } from "@/lib/title";
@@ -49,6 +49,7 @@ export const itemEditSchema = z.object({
     .transform((v) => Number(v))
     .refine((v) => v >= 1 && v <= 100_000, "Enter a whole number from 1 to 100,000."),
   notes: text(600),
+  locationId: wholeNumber(1, 2_000_000_000, "That location no longer exists."),
   manualValue: z.string().trim().transform((v, ctx) => {
     if (v === "") return null;
     const cents = parseDollars(v);
@@ -89,6 +90,8 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
   if (!existing) return GONE;
 
   const raw: Record<string, unknown> = { ...(input as Record<string, unknown>) };
+  // A caller that does not send locationId leaves the location as it is.
+  const keepLocation = raw.locationId === undefined;
   for (const key of Object.keys(itemEditSchema.shape)) {
     if (raw[key] == null) raw[key] = FLAG_KEYS.has(key) ? false : "";
   }
@@ -101,8 +104,11 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
     }
     return { ok: false, errors };
   }
-  const { manualValue, ...rest } = parsed.data;
-  const patch: Partial<Item> = {};
+  const { manualValue, locationId, ...rest } = parsed.data;
+  if (!keepLocation && locationId !== null && !db.select({ id: locations.id }).from(locations).where(eq(locations.id, locationId)).get()) {
+    return { ok: false, errors: { locationId: "That location no longer exists." } };
+  }
+  const patch: Partial<Item> = keepLocation ? {} : { locationId };
   for (const key of editableFields(existing.kind)) {
     (patch as Record<string, unknown>)[key] = (rest as Record<string, unknown>)[key];
   }

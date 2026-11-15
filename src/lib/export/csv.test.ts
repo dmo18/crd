@@ -1,0 +1,74 @@
+import { describe, expect, it } from "vitest";
+import type { Item } from "@/db/schema";
+import { itemsToCsv } from "./csv";
+
+const row = (over: Partial<Item> = {}): Item => ({
+  id: 1, kind: "card", status: "confirmed", scanId: null, title: "T", sport: null, year: null, yearEnd: null, brand: null,
+  setName: null, cardNumber: null, player: null, team: null, variation: null, isRookie: false, isError: false,
+  isParallel: false, isInsert: false, isAutograph: false, isMemorabilia: false, serialNumber: null, rarityTier: null,
+  rarityNotes: null, condition: null, conditionNotes: null, grader: null, grade: null, certNumber: null,
+  worthGrading: null, gradingNotes: null, productType: null, packCount: null, sealState: null, estCount: null,
+  containerType: null, description: null, pullList: null, quantity: 1, locationId: null, notes: null, confidence: null,
+  aiNotes: null, estLowCents: null, estHighCents: null, estValueCents: null, valueSource: null, valueBasis: null,
+  valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(),
+  ...over,
+});
+
+const parse = (csv: string) => {
+  const lines = csv.replace(/^﻿/, "").split("\r\n");
+  lines.pop();
+  return lines;
+};
+const none = new Map<number, string>();
+
+describe("itemsToCsv", () => {
+  it("empty collection gives only the header, with BOM and CRLF", () => {
+    const csv = itemsToCsv([], none);
+    expect(csv.startsWith("﻿")).toBe(true);
+    const lines = parse(csv);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^ID,Kind,Status,Title,/);
+    expect(lines[0]).toMatch(/,Notes,Added \(ISO date\)$/);
+    expect(csv.endsWith("\r\n")).toBe(true);
+    expect(csv.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
+  });
+
+  it("quotes commas, quotes and line breaks", () => {
+    const csv = itemsToCsv([row({ title: 'A, "B"', notes: "line1\nline2" })], none);
+    expect(csv).toContain('"A, ""B"""');
+    expect(csv).toContain('"line1\nline2"');
+  });
+
+  it("guards each formula trigger character", () => {
+    for (const lead of ["=", "+", "-", "@", "\t", "\r"]) {
+      const csv = itemsToCsv([row({ player: `${lead}HYPERLINK("x")` })], none);
+      expect(csv).toContain(`'${lead}HYPERLINK`);
+    }
+    expect(itemsToCsv([row({ player: '=HYPERLINK("http://x","y")' })], none)).toContain(`"'=HYPERLINK(""http://x"",""y"")"`);
+    expect(itemsToCsv([row({ player: "Safe =1" })], none)).not.toContain("'Safe");
+  });
+
+  it("formats money as plain decimals and does not guard numbers", () => {
+    const lines = parse(itemsToCsv([row({ quantity: 3, estValueCents: 1250, estLowCents: 1000, estHighCents: 1500, manualValueCents: 2000 })], new Map()));
+    const header = lines[0].split(",");
+    const cells = lines[1].split(",");
+    const at = (h: string) => cells[header.indexOf(h)];
+    expect(at("Value each (USD)")).toBe("20.00");
+    expect(at("Total value (USD)")).toBe("60.00");
+    expect(at("Estimate low (USD)")).toBe("10.00");
+    expect(at("Estimate high (USD)")).toBe("15.00");
+    expect(at("Your value (USD)")).toBe("20.00");
+    expect(at("Value source")).toBe("manual");
+    expect(at("Added (ISO date)")).toBe("2026-03-04");
+    expect(lines[1]).not.toContain("$");
+  });
+
+  it("writes Yes/No flags and the location name", () => {
+    const lines = parse(itemsToCsv([row({ isRookie: true, locationId: 5 })], new Map([[5, "Box 1"]])));
+    const header = lines[0].split(",");
+    const cells = lines[1].split(",");
+    expect(cells[header.indexOf("Rookie")]).toBe("Yes");
+    expect(cells[header.indexOf("Error")]).toBe("No");
+    expect(cells[header.indexOf("Location")]).toBe("Box 1");
+  });
+});
