@@ -57,7 +57,8 @@ const COLUMNS: Col[] = [
 
 /** Stops spreadsheets from running a cell as a formula. */
 export function guardFormula(value: string): string {
-  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  // Leading spaces and line breaks are skipped by some spreadsheets, so look past them too.
+  return /^[\s]*[=+\-@]|^[\t\r\n]/.test(value) ? `'${value}` : value;
 }
 
 /** RFC 4180 quoting. */

@@ -72,3 +72,13 @@ describe("itemsToCsv", () => {
     expect(cells[header.indexOf("Location")]).toBe("Box 1");
   });
 });
+
+describe("formula guard, leading whitespace", () => {
+  it("guards formulas hidden behind spaces or a line break, and leaves normal text alone", async () => {
+    const { guardFormula } = await import("./csv");
+    expect(guardFormula(" =HYPERLINK(1)")).toBe("' =HYPERLINK(1)");
+    expect(guardFormula("\n=1+1")).toBe("'\n=1+1");
+    expect(guardFormula("Ken Griffey Jr.")).toBe("Ken Griffey Jr.");
+    expect(guardFormula("Topps - Traded")).toBe("Topps - Traded");
+  });
+});
