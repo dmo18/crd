@@ -30,7 +30,7 @@ function searchBody(ids: string[]) {
 
 /** A fake Wikidata: answers the search call and the SPARQL call. */
 function fakeFetch(rows: object[], ids = ["Q1", "Q2", "Q3"]) {
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = new URL(String(input));
     const body = url.hostname === "www.wikidata.org" ? searchBody(ids) : { results: { bindings: rows } };
     return new Response(JSON.stringify(body), { status: 200 });
