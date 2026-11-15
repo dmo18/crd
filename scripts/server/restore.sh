@@ -20,15 +20,15 @@ if [ -z "$file" ] || [ ! -f "$file" ]; then
 fi
 
 # Check the archive before touching anything.
-if ! tar -tzf "$file" >/dev/null 2>&1; then
+if ! listing="$(tar -tzf "$file" 2>/dev/null)"; then
   log "That file is not a readable backup."
   exit 1
 fi
-if tar -tzf "$file" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+if printf '%s\n' "$listing" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   log "Backup contains unsafe paths. Refusing."
   exit 1
 fi
-if ! tar -tzf "$file" | grep -qx 'crd.db'; then
+if ! printf '%s\n' "$listing" | grep -qx 'crd.db'; then
   log "Backup has no database (crd.db). Refusing."
   exit 1
 fi

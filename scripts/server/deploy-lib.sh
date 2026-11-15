@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Shared helpers for install.sh, update.sh and rollback.sh.
 # Sourced, not run. Works without root on a Cloudways Flexible server.
 

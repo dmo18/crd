@@ -9,6 +9,13 @@ if health_ok; then
   log "Already running and healthy on port $PORT. Nothing to do."
   exit 1
 fi
+if [ -f "$CV_PID_FILE" ]; then
+  oldpid="$(tr -d '[:space:]' <"$CV_PID_FILE")"
+  if [[ "$oldpid" =~ ^[0-9]+$ ]] && [[ "$(ps -p "$oldpid" -o args= 2>/dev/null || true)" == *next* ]]; then
+    log "Process $oldpid is already running but not answering. Run stop.sh first."
+    exit 1
+  fi
+fi
 if [ ! -d "$CV_CURRENT" ]; then
   log "No active release at $CV_CURRENT."
   exit 1
@@ -41,5 +48,6 @@ for _ in $(seq 1 60); do
   fi
   sleep 1
 done
-log "Not healthy after 60 seconds. See $CV_APP_LOG"
+log "Not healthy after 60 seconds. Stopping it. See $CV_APP_LOG"
+"$HERE/stop.sh" || true
 exit 1

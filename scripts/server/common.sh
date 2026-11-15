@@ -3,15 +3,19 @@
 set -euo pipefail
 
 CV_HOME="${CV_HOME:-$HOME/cardvault}"
+export CV_HOME
 CV_CURRENT="$CV_HOME/current"
 CV_SHARED="$CV_HOME/shared"
 CV_ENV_FILE="$CV_SHARED/.env.local"
 CV_DATA="$CV_SHARED/data"
+export CV_DATA
 CV_LOGS="$CV_SHARED/logs"
 CV_BACKUPS="$CV_SHARED/backups"
 CV_PID_FILE="$CV_SHARED/app.pid"
+export CV_PID_FILE
 CV_OPS_LOG="$CV_LOGS/ops.log"
 CV_APP_LOG="$CV_LOGS/app.log"
+export CV_APP_LOG
 
 mkdir -p "$CV_LOGS" "$CV_BACKUPS"
 

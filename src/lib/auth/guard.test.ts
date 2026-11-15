@@ -25,4 +25,11 @@ describe("checkSameOrigin", () => {
     expect(checkSameOrigin(req("POST", { "sec-fetch-site": "same-origin" }))).toBe(true);
     expect(checkSameOrigin(req("POST", {}))).toBe(true);
   });
+  it("accepts the APP_ORIGIN host behind a proxy that rewrites Host", () => {
+    const behindApache = { origin: "https://cards.example.com", host: "127.0.0.1:3210" };
+    expect(checkSameOrigin(req("POST", behindApache))).toBe(false);
+    expect(checkSameOrigin(req("POST", behindApache), "cards.example.com")).toBe(true);
+    expect(checkSameOrigin(req("POST", { origin: "https://evil.com", host: "127.0.0.1:3210" }), "cards.example.com")).toBe(false);
+    expect(checkSameOrigin(req("POST", { origin: "https://cards.example.com:8443", host: "x" }), "cards.example.com")).toBe(false);
+  });
 });
