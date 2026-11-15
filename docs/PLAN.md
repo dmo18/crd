@@ -154,3 +154,38 @@ Rules: a scan never fails because Wikidata is slow or down (lookups time out
 and return null). Network calls only to `www.wikidata.org` and
 `query.wikidata.org`, with a generic User-Agent and no personal details.
 Tests never touch the network.
+
+## Milestone 5: go live on Cloudways (approved 2026-11-15)
+
+Owner choice: their existing Cloudways **Flexible** server (DigitalOcean),
+which already hosts their site. Card Vault runs as a separate Cloudways
+application on its own subdomain (for example cards.<their domain>), public
+link protected by the owner password. No new paid service. The existing
+site must not be disturbed.
+
+How it runs on Cloudways Flexible (no root):
+- Node 22 installed with nvm in the master user's home (`.nvmrc` = 22).
+- Code is cloned from the public GitHub repo (no keys needed).
+- Layout under `CV_HOME` (default `$HOME/cardvault`):
+  `releases/<stamp>-<sha>/` (built copies), `current` -> active release,
+  `shared/.env.local`, `shared/data/` (DATA_DIR: database and photos),
+  `shared/logs/`, `shared/backups/`, `shared/app.pid`.
+- Started with `next start -p $PORT` (PORT default 3210) by
+  `scripts/server/start.sh`; `watchdog.sh` (cron, every minute) restarts it
+  if `/api/health` fails, which also covers server reboots.
+- Traffic: Cloudways Nginx -> (Varnish off for this app) -> Apache ->
+  `.htaccess` `RewriteRule ... http://127.0.0.1:3210/$1 [P,L]` -> Node.
+  mod_proxy may need enabling by Cloudways support.
+- Through Apache's proxy the Host header becomes 127.0.0.1:3210 and the
+  public host arrives in X-Forwarded-Host. Absolute URLs use `APP_ORIGIN`.
+- Daily backup (cron) of the database (online SQLite backup) and photos,
+  14 kept, one-step restore. Update and rollback switch the `current` link.
+- Memory: heap capped with NODE_OPTIONS so the existing site keeps room.
+
+| # | Task | Model |
+|---|---|---|
+| 25 | Production settings: APP_ORIGIN redirects, trusted proxy hops for client IP, owner-only connection check, stronger public sign-in limits, scan deadline, cache prune, health route exclusion | Opus |
+| 26 | Backup and restore scripts | Sonnet |
+| 27 | Install, update and rollback scripts with releases | main (Opus) |
+| 28 | Start, stop, watchdog, health endpoint, logs | Sonnet |
+| 29 | Phone-friendly go-live guide and a local proxy rehearsal | main (Opus) |
