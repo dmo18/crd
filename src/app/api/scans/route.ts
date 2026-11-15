@@ -13,8 +13,10 @@ const fieldsSchema = z.object({
 });
 
 const ROLES: ScanPhotoRole[] = ["front", "back", "source"];
-// A little headroom over the photos themselves for the form's own overhead.
-const MAX_BODY_BYTES = MAX_PHOTOS_PER_SCAN * MAX_UPLOAD_BYTES + 1024 * 1024;
+// The whole request, all photos together. Must stay in step with
+// proxyClientMaxBodySize in next.config.ts. Phones shrink photos before
+// sending, so twelve photos normally total well under this.
+const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 const bad = (error: string, status = 400) => Response.json({ error }, { status });
 

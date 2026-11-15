@@ -2,8 +2,8 @@ import { and, asc, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { items, locations } from "@/db/schema";
+import { LOCATION_KINDS } from "./kinds";
 
-export const LOCATION_KINDS = ["Box", "Binder", "Shelf", "Safe", "Display", "Other"] as const;
 
 export const locationInputSchema = z.object({
   name: z.string().trim().min(1, "Give this location a name.").max(60, "Keep the name under 60 characters."),

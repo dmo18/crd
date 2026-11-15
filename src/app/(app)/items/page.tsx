@@ -2,6 +2,7 @@ import { InventoryFilters } from "@/components/items/InventoryFilters";
 import { ItemRow } from "@/components/items/ItemRow";
 import { EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
+import { requireOwner } from "@/lib/auth/guard";
 import { locations } from "@/db/schema";
 import { inventoryFilterSchema, listItems } from "@/lib/items/query";
 import { formatCents } from "@/lib/money";
@@ -14,6 +15,7 @@ type Params = Record<string, string | string[] | undefined>;
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 
 export default async function InventoryPage({ searchParams }: { searchParams: Promise<Params> }) {
+  await requireOwner();
   const params = await searchParams;
   const filters = inventoryFilterSchema.parse(params);
   const db = getDb();

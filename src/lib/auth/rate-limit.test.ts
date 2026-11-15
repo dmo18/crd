@@ -37,3 +37,18 @@ describe("rate limit", () => {
     expect(clientIp(new Headers())).toBe("unknown");
   });
 });
+
+describe("beginAttempt", () => {
+  it("books a failure up front and refuses once the limit is reached", async () => {
+    const { beginAttempt, markAttemptSucceeded } = await import("./rate-limit");
+    const db = createDb(":memory:");
+    const ids = [];
+    for (let i = 0; i < 5; i++) ids.push(beginAttempt("1.1.1.1", db, T0));
+    expect(ids.every((id) => typeof id === "number")).toBe(true);
+    // Five guesses are booked before any password check finished: the sixth is refused.
+    expect(beginAttempt("1.1.1.1", db, T0)).toBeNull();
+    // A success frees one slot only for that attempt.
+    markAttemptSucceeded(ids[0]!, db);
+    expect(isRateLimited("1.1.1.1", db, T0)).toBe(false);
+  });
+});

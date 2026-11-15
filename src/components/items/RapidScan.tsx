@@ -81,7 +81,6 @@ export function RapidScan({ hint, locationId }: { hint: string; locationId: stri
       void upload(key);
     }
     // upload only uses refs and dispatch, so it is safe to leave out.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
   // One timer for all unfinished scans.
@@ -182,7 +181,7 @@ export function RapidScan({ hint, locationId }: { hint: string; locationId: stri
             <li key={e.key}>
               <QueueRow
                 entry={e}
-                canRetry={files.current.has(e.key)}
+                canRetry={e.previewUrl !== null}
                 onRetry={() => dispatch({ type: "retry", key: e.key })}
               />
             </li>

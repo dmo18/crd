@@ -3,6 +3,7 @@ import { ItemRow } from "@/components/items/ItemRow";
 import { ReviewRowActions } from "@/components/items/ReviewRowActions";
 import { Button, Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
+import { requireOwner } from "@/lib/auth/guard";
 import { items } from "@/db/schema";
 import { findDuplicates, reviewCount } from "@/lib/items/duplicates";
 import { mergeDuplicateAction } from "@/lib/items/review-actions";
@@ -12,7 +13,8 @@ export const metadata = { title: "Review" };
 
 const LIMIT = 100;
 
-export default function ReviewPage() {
+export default async function ReviewPage() {
+  await requireOwner();
   const db = getDb();
   const total = reviewCount(db);
   const rows = db.select().from(items).where(eq(items.status, "needs_review"))

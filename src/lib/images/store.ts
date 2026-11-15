@@ -26,7 +26,7 @@ export class ImageError extends Error {
 
 export type StoredImage = { file: string; thumbFile: string; width: number; height: number; bytes: number };
 
-const DECODE_OPTIONS = { failOn: "error", limitInputPixels: 50_000_000 } as const;
+const DECODE_OPTIONS = { failOn: "error", limitInputPixels: 30_000_000 } as const;
 
 function uploadsDir(): string {
   return path.resolve(env().DATA_DIR, "uploads");

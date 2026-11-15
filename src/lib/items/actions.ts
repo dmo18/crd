@@ -13,7 +13,7 @@ const FLAGS = ["isRookie", "isError", "isParallel", "isInsert", "isAutograph", "
 const TEXT_FIELDS = [
   "sport", "year", "yearEnd", "brand", "setName", "cardNumber", "player", "team", "variation", "serialNumber",
   "rarityTier", "condition", "conditionNotes", "grader", "grade", "certNumber", "productType", "packCount",
-  "sealState", "estCount", "containerType", "description", "quantity", "notes", "manualValue",
+  "sealState", "estCount", "containerType", "description", "quantity", "notes", "manualValue", "locationId",
 ] as const;
 
 function str(v: FormDataEntryValue | null): string {

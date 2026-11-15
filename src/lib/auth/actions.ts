@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { verifyPassword } from "./password";
-import { clientIp, isRateLimited, recordAttempt } from "./rate-limit";
+import { beginAttempt, clientIp, markAttemptSucceeded } from "./rate-limit";
 import { getSession } from "./session";
 
 export type LoginState = { error: string | null };
@@ -13,12 +13,14 @@ const TOO_MANY = "Too many tries. Wait 15 minutes and try again.";
 
 export async function login(_prev: LoginState, formData: FormData): Promise<LoginState> {
   const ip = clientIp(await headers());
-  if (isRateLimited(ip)) return { error: TOO_MANY };
+  // Booked as a failure first; only a correct password turns it into a success.
+  const attemptId = beginAttempt(ip);
+  if (attemptId === null) return { error: TOO_MANY };
 
   const value = formData.get("password");
   const ok = typeof value === "string" && (await verifyPassword(value));
-  recordAttempt(ip, ok);
   if (!ok) return { error: WRONG_PASSWORD };
+  markAttemptSucceeded(attemptId);
 
   const session = await getSession();
   session.owner = true;

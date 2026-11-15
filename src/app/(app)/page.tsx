@@ -3,6 +3,7 @@ import { ValueChart } from "@/components/dashboard/ValueChart";
 import { DecadeBars } from "@/components/dashboard/DecadeBars";
 import { ItemRow } from "@/components/items/ItemRow";
 import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
+import { requireOwner } from "@/lib/auth/guard";
 import { decadeBreakdown, highlights, kindBreakdown, recentItems, topItems } from "@/lib/items/stats";
 import { formatCents } from "@/lib/money";
 import { summarize } from "@/lib/scans/view";
@@ -19,7 +20,8 @@ const KIND_ROWS = [
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 const linkClass = "inline-flex min-h-11 items-center text-base font-semibold text-accent";
 
-export default function Home() {
+export default async function Home() {
+  await requireOwner();
   try {
     recordSnapshot();
   } catch {

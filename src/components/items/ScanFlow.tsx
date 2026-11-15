@@ -3,17 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 import { PhotoPicker } from "@/components/capture/PhotoPicker";
 import { ItemRow } from "@/components/items/ItemRow";
+import { RapidScan } from "@/components/items/RapidScan";
 import { Button, Card, INPUT_CLASS, LinkButton, Notice } from "@/components/ui";
 import type { ScanMode } from "@/db/schema";
 import type { ScanView } from "@/lib/scans/view";
 
 type Rules = Record<ScanMode, { min: number; max: number }>;
+type Choice = ScanMode | "rapid";
+export type LocationOption = { id: number; name: string };
 
-const MODES: { value: ScanMode; title: string; text: string }[] = [
+const LOCATION_KEY = "crd.scan.location";
+
+const MODES: { value: Choice; title: string; text: string }[] = [
   { value: "single", title: "One card", text: "Front photo, and a back photo if you have one. The back makes it more accurate." },
   { value: "multi", title: "Many cards in one photo", text: "Lay cards flat, not overlapping. Up to about 9 per photo works best." },
   { value: "sealed", title: "Sealed pack or box", text: "Never open it. Photograph the front, plus the seal or back if you can." },
   { value: "bulk", title: "Bulk lot", text: "Photograph the box or stack and its label. You get a count estimate and a list of cards worth pulling out." },
+  { value: "rapid", title: "Rapid fire", text: "One card after another. Take a photo, it uploads, take the next. Results appear below as they finish." },
 ];
 
 const WAITING: Record<ScanMode, string> = {
@@ -32,8 +38,11 @@ type Phase =
   | { name: "waiting"; scanId: number }
   | { name: "result"; scan: ScanView };
 
-export function ScanFlow({ rules }: { rules: Rules }) {
-  const [mode, setMode] = useState<ScanMode>("single");
+export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: LocationOption[] }) {
+  const [choice, setChoice] = useState<Choice>("single");
+  const mode: ScanMode = choice === "rapid" ? "single" : choice;
+  const rapid = choice === "rapid";
+  const [locationId, setLocationId] = useState("");
   const [front, setFront] = useState<File[]>([]);
   const [back, setBack] = useState<File[]>([]);
   const [source, setSource] = useState<File[]>([]);
@@ -45,8 +54,28 @@ export function ScanFlow({ rules }: { rules: Rules }) {
   const ready = single ? front.length >= rules.single.min : source.length >= rules[mode].min;
   const busy = phase.name === "sending" || phase.name === "waiting";
 
-  function changeMode(next: ScanMode) {
-    setMode(next);
+  // Restore the remembered location after the first render (localStorage is browser only).
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LOCATION_KEY);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (saved && locations.some((l) => String(l.id) === saved)) setLocationId(saved);
+    } catch {
+      // Storage can be blocked; the choice just is not remembered.
+    }
+  }, [locations]);
+
+  function changeLocation(value: string) {
+    setLocationId(value);
+    try {
+      localStorage.setItem(LOCATION_KEY, value);
+    } catch {
+      // Ignore: remembering is a convenience only.
+    }
+  }
+
+  function changeMode(next: Choice) {
+    setChoice(next);
     setFront([]);
     setBack([]);
     setSource([]);
@@ -59,6 +88,7 @@ export function ScanFlow({ rules }: { rules: Rules }) {
     const body = new FormData();
     body.set("mode", mode);
     if (hint.trim()) body.set("hint", hint.trim());
+    if (locationId) body.set("locationId", locationId);
     if (single) {
       body.set("front", front[0]);
       if (back[0]) body.set("back", back[0]);
@@ -168,7 +198,7 @@ export function ScanFlow({ rules }: { rules: Rules }) {
       className="flex flex-col gap-6"
       onSubmit={(e) => {
         e.preventDefault();
-        if (ready) void submit();
+        if (ready && !rapid) void submit();
       }}
     >
       <fieldset className="flex flex-col gap-3">
@@ -182,7 +212,7 @@ export function ScanFlow({ rules }: { rules: Rules }) {
               type="radio"
               name="mode"
               value={m.value}
-              checked={mode === m.value}
+              checked={choice === m.value}
               onChange={() => changeMode(m.value)}
               className="mt-1 size-5 shrink-0 accent-accent"
             />
@@ -194,7 +224,24 @@ export function ScanFlow({ rules }: { rules: Rules }) {
         ))}
       </fieldset>
 
-      {single ? (
+      {locations.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="scan-location" className="text-sm font-semibold">Store in</label>
+          <select
+            id="scan-location"
+            value={locationId}
+            onChange={(e) => changeLocation(e.target.value)}
+            className={INPUT_CLASS}
+            aria-describedby="scan-location-help"
+          >
+            <option value="">No location</option>
+            {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+          </select>
+          <p id="scan-location-help" className="text-xs text-muted">Add boxes and binders under More, then Locations.</p>
+        </div>
+      ) : null}
+
+      {rapid ? null : single ? (
         <div className="flex flex-col gap-5">
           <PhotoPicker label="Front" max={1} value={front} onChange={setFront} captureFirst />
           <PhotoPicker label="Back (optional)" max={1} value={back} onChange={setBack} />
@@ -224,9 +271,11 @@ export function ScanFlow({ rules }: { rules: Rules }) {
         <p id="scan-hint-help" className="text-xs text-muted">Optional. For example: 1989 Topps baseball</p>
       </div>
 
-      {phase.name === "form" && phase.error ? <div role="alert"><Notice tone="danger">{phase.error}</Notice></div> : null}
+      {rapid ? <RapidScan hint={hint} locationId={locationId} /> : null}
 
-      <Button type="submit" disabled={!ready || busy}>Scan</Button>
+      {!rapid && phase.name === "form" && phase.error ? <div role="alert"><Notice tone="danger">{phase.error}</Notice></div> : null}
+
+      {rapid ? null : <Button type="submit" disabled={!ready || busy}>Scan</Button>}
     </form>
   );
 }
