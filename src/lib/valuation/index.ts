@@ -9,13 +9,16 @@ import { ValuationError, type PriceQuote, type PriceSource } from "./types";
 export const REVALUE_MESSAGES = {
   missing: "This item no longer exists.",
   noValue: "The AI could not put a value on this one.",
+  freeMode: "Automatic estimates are off. Tap a sold listings link and enter the price you see.",
   notSetUp: "AI estimates are not set up yet. Add the API key in settings.",
   generic: "Something went wrong getting a value. Try again.",
 } as const;
 
 /** The price source to use right now, following the same setting as recognition. */
 export function getPriceSource(): PriceSource {
-  if (recognitionMode() === "sample") return new SampleSource();
+  const mode = recognitionMode();
+  if (mode === "sample") return new SampleSource();
+  if (mode === "free") throw new ValuationError(REVALUE_MESSAGES.freeMode);
   if (!env().ANTHROPIC_API_KEY) throw new ValuationError(REVALUE_MESSAGES.notSetUp);
   return new AiPriceSource();
 }

@@ -32,7 +32,7 @@ const nextConfig: NextConfig = {
   // Scans upload several photos in one request. Must stay in step with
   // MAX_BODY_BYTES in src/app/api/scans/route.ts.
   experimental: { proxyClientMaxBodySize: "64mb" },
-  serverExternalPackages: ["better-sqlite3", "sharp"],
+  serverExternalPackages: ["better-sqlite3", "sharp", "tesseract.js", "@tesseract.js-data/eng"],
   turbopack: {
     rules: {
       "*.css": {

@@ -7,7 +7,7 @@ const schema = z.object({
   OWNER_PASSWORD_HASH_B64: z.string().min(1, "OWNER_PASSWORD_HASH_B64 is required"),
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().optional(),
-  RECOGNITION_MODE: z.enum(["auto", "sample", "anthropic"]).default("auto"),
+  RECOGNITION_MODE: z.enum(["auto", "free", "sample", "anthropic"]).default("auto"),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -34,10 +34,13 @@ export function resetEnvCache() {
   cached = undefined;
 }
 
-/** Which recognizer to use: real AI only when asked for or when a key exists. */
-export function recognitionMode(): "sample" | "anthropic" {
+/**
+ * Which recognizer to use. The owner chose free reading with no keys, so
+ * "auto" means free. Paid AI runs only when explicitly set to "anthropic".
+ */
+export function recognitionMode(): "free" | "sample" | "anthropic" {
   const e = env();
   if (e.RECOGNITION_MODE === "sample") return "sample";
   if (e.RECOGNITION_MODE === "anthropic") return "anthropic";
-  return e.ANTHROPIC_API_KEY ? "anthropic" : "sample";
+  return "free";
 }

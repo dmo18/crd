@@ -108,3 +108,49 @@ one interface in `src/lib/valuation/` so a paid feed can be added later.
 - Sensitive tasks (3, 4, and anything touching auth or uploads) get an
   independent review by a fresh reviewer.
 - A subagent that meets a choice not covered here stops and reports back.
+
+## Milestone 4: free card reading, no keys (approved 2026-11-15)
+
+Owner direction: never require API keys, free preferred. Paid AI code stays
+but is off unless `RECOGNITION_MODE=anthropic` is set on purpose. Values come
+from sold-listing links plus quick owner entry (no free, allowed, keyless
+price source exists; scraping eBay is against its terms).
+
+Recognition modes: `free` (default, `auto` means free), `sample` (tests and
+previews), `anthropic` (off unless chosen). Everything in `src/lib/free/`.
+
+```ts
+// src/lib/free/ocr.ts  (tesseract.js 7, bundled @tesseract.js-data/eng, offline)
+export type OcrLine = { text: string; confidence: number; box: Box };  // box in fractions
+export type OcrResult = { text: string; lines: OcrLine[]; confidence: number }; // 0..1
+export interface TextReader { read(image: Buffer): Promise<OcrResult> }
+export function getTextReader(): TextReader;   // one shared worker, one job at a time
+// src/lib/free/find-cards.ts  (sharp only, no AI)
+export async function findCardBoxes(image: Buffer): Promise<Box[]>; // reading order
+// src/lib/free/parse.ts
+export function parseCardText(front: OcrResult | null, back: OcrResult | null): ParsedCard;
+export function parseProductText(ocr: OcrResult): ParsedProduct;
+// src/lib/free/key-cards.ts
+export const KEY_CARDS: readonly KeyCard[];
+export function findKeyCard(q: KeyCardQuery): KeyCard | null;
+export function keyCardsFor(q: { year?: number | null; yearEnd?: number | null; brand?: string | null; sport?: Sport | null }): KeyCard[];
+// src/lib/free/wikidata.ts  (free public API, no key, cached in player_facts)
+export async function lookupPlayer(name: string, opts?: LookupOptions): Promise<PlayerFacts | null>;
+// src/lib/free/recognizer.ts
+export class FreeRecognizer implements Recognizer { name = "free" }
+```
+
+| # | Task | Model |
+|---|---|---|
+| 18 | Server text reading (ocr.ts) | Opus |
+| 19 | Card finder for many-card photos (find-cards.ts) | Opus |
+| 20 | Text to card details (parse.ts) | Opus |
+| 21 | Wikidata player lookup with cache (wikidata.ts) | Sonnet |
+| 22 | Key 1980 to 1995 cards list (key-cards.ts) | Opus |
+| 23 | Free recognizer wiring, paid path off, quick sold price entry, wording | main + Sonnet |
+| 24 | Real-style photo test, security review, pull request | Opus |
+
+Rules: a scan never fails because Wikidata is slow or down (lookups time out
+and return null). Network calls only to `www.wikidata.org` and
+`query.wikidata.org`, with a generic User-Agent and no personal details.
+Tests never touch the network.
