@@ -523,7 +523,7 @@ read_cloudflare_identity() {
     fi
     ok "Browser SSH: a Cloudflare certificate for '$SSH_PRINCIPAL' logs in as Ubuntu user '$OWNER_USER'"
     if [ "$SSH_PRINCIPAL" != "$OWNER_USER" ]; then
-        warn "Your email starts with '$SSH_PRINCIPAL' but your Ubuntu user is '$OWNER_USER'. Cloudflare's guide says the browser terminal expects them to be the same. If the terminal refuses, type '$OWNER_USER' when it asks for the user name."
+        info "That is fine. When the browser terminal asks for a user name, type: $OWNER_USER"
     fi
 }
 
@@ -1261,8 +1261,10 @@ AuthorizedPrincipalsFile $SSH_PRINCIPALS_DIR/%u"
         write_file "$SSH_PRINCIPALS_DIR/$OWNER_USER" 0644 <<EOF
 # Written by bootstrap.sh. Cloudflare SSH certificates whose principal is on a
 # line below may log in as the Ubuntu user "$OWNER_USER". Cloudflare uses the
-# part of the sign-in email before the @, in lower case.
+# part of the sign-in email before the @, in lower case. The Ubuntu user name
+# is listed too, for certificates issued for the name typed at the login.
 $SSH_PRINCIPAL
+$( [ "$SSH_PRINCIPAL" = "$OWNER_USER" ] || printf '%s' "$OWNER_USER" )
 EOF
     fi
     {
@@ -4455,6 +4457,18 @@ GRANT_EOF
 # ---------------------------------------------------------------------------
 print_summary_cloudflare() {
     local item base="${DASHBOARD_HOST#*.}"
+    # The browser terminal is named after the dashboard: appy.example.com -> appy-ssh.example.com
+    local ssh_host="${DASHBOARD_HOST%%.*}-ssh.$base" routes
+    # Same order and spelling as the guide (docs/SERVER.md, step 7).
+    routes="$(
+        printf '       %-22s %-49s %s\n' \
+            "$DASHBOARD_HOST" 'path ^/webhooks/source/github/events(/manual)?$' 'HTTP 127.0.0.1:8000' \
+            "$DASHBOARD_HOST" 'path ^/app/' 'HTTP 127.0.0.1:6001' \
+            "$DASHBOARD_HOST" 'path ^/terminal/ws' 'HTTP 127.0.0.1:6002' \
+            "$DASHBOARD_HOST" '(no path)' 'HTTP 127.0.0.1:8000' \
+            "$ssh_host" '(no path)' 'SSH  127.0.0.1:22' \
+            "*.$base" '(no path)' 'HTTP 127.0.0.1:80'
+    )"
     printf '\n%s============================================================%s\n' "$C_BOLD" "$C_RESET"
     printf '%s Done. What this script did%s\n' "$C_BOLD" "$C_RESET"
     printf '%s============================================================%s\n' "$C_BOLD" "$C_RESET"
@@ -4471,18 +4485,13 @@ print_summary_cloudflare() {
 
 ${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (step by step: docs/SERVER.md):
   1. FIRST, Zero Trust, Access, Applications: protect $DASHBOARD_HOST,
-     ssh.$base (browser rendering: SSH) and *.$base with your email.
+     $ssh_host (browser rendering: SSH) and *.$base with your email.
      Add a Bypass application for $DASHBOARD_HOST, path
      webhooks/source/github/events, so GitHub can tell Coolify to deploy.
   2. Only then, your tunnel, Routes, add these in this order:
-       $DASHBOARD_HOST   path ^/webhooks/source/github/events -> HTTP 127.0.0.1:8000
-       $DASHBOARD_HOST   path ^/app/         ->  HTTP  127.0.0.1:6001
-       $DASHBOARD_HOST   path ^/terminal/ws  ->  HTTP  127.0.0.1:6002
-       $DASHBOARD_HOST   (no path)           ->  HTTP  127.0.0.1:8000
-       ssh.$base         (no path)           ->  SSH   127.0.0.1:22
-       *.$base           (no path)           ->  HTTP  127.0.0.1:80
+$routes
   3. SSH CA for the browser terminal: Access controls, Service credentials,
-     SSH, Add a certificate, application ssh.$base, Generate certificate.
+     SSH, Add a certificate, application $ssh_host, Generate certificate.
 
 ${C_BOLD}Then in your browser:${C_RESET}
   4. Open https://$DASHBOARD_HOST and log in with:
@@ -4504,14 +4513,14 @@ EOF
   6. Settings: URL https://$DASHBOARD_HOST, "Redirect HTTP to HTTPS" Disabled.
   7. Delete the saved password:  sudo rm $FIRST_LOGIN_FILE
 
-SSH in the browser: https://ssh.$base, sign in to Cloudflare, user name $OWNER_USER.
+SSH in the browser: https://$ssh_host, sign in to Cloudflare, user name $OWNER_USER.
 No password: Cloudflare gives the browser a certificate that lasts a few minutes.
 EOF
     if [ ! -s "$SSH_CA_FILE" ]; then
         cat <<EOF
 ${C_YELLOW}Browser SSH needs the SSH CA key from Cloudflare first:${C_RESET}
   Zero Trust, Access controls, Service credentials, SSH, Add a certificate,
-  choose the ssh.$base application, Generate certificate, copy the CA public key.
+  choose the $ssh_host application, Generate certificate, copy the CA public key.
   Then on this console:  sudo server-ssh-ca set   (paste it, press Enter)
 EOF
     fi

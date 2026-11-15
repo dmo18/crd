@@ -248,7 +248,7 @@ if have sshd; then
                 found="$found $(basename "$f") <- $(grep -v '^[[:space:]]*\(#\|$\)' "$f" | tr '\n' ' ')"
             done
             if [ -n "$found" ]; then
-                note "Browser SSH logins (Ubuntu user <- Cloudflare email before the @):$found"
+                note "Browser SSH logins (Ubuntu user <- certificate names it accepts):$found"
             else
                 warn "No account accepts Cloudflare certificates (/etc/ssh/principals is empty)"
             fi

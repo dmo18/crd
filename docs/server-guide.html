@@ -1,0 +1,505 @@
+<title>Appy Setup Guide</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap">
+<style>
+/* Layout: one narrow column of numbered steps; each step = where you are, what to click, a drawing of the screen, what you should see. */
+:root {
+  --bg: #f2f5f9; --surface: #ffffff; --surface-2: #e8edf4; --line: #cfd8e3;
+  --ink: #15202c; --muted: #566475; --accent: #1b5cc0; --accent-ink: #ffffff;
+  --hit: #d9480f; --hit-soft: #ffe8dc; --ok: #19703f; --ok-soft: #dcf3e5;
+  --warn: #7a5200; --warn-soft: #fdf0cc; --term-bg: #0f1620; --term-fg: #d7e2ee; --term-dim: #8496aa; --term-hit: #ffb37a;
+  --display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f141a; --surface: #18202a; --surface-2: #222c38; --line: #33404f;
+  --ink: #e7edf3; --muted: #9dabba; --accent: #86b4ff; --accent-ink: #0b1626;
+  --hit: #ff9a57; --hit-soft: #3d2413; --ok: #62d394; --ok-soft: #14301f;
+  --warn: #f2c766; --warn-soft: #382c0d; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f141a; --surface: #18202a; --surface-2: #222c38; --line: #33404f;
+  --ink: #e7edf3; --muted: #9dabba; --accent: #86b4ff; --accent-ink: #0b1626;
+  --hit: #ff9a57; --hit-soft: #3d2413; --ok: #62d394; --ok-soft: #14301f;
+  --warn: #f2c766; --warn-soft: #382c0d; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 64px; }
+.wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+h1 { font-family: var(--display); font-size: 2rem; line-height: 1.1; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-size: 1.25rem; line-height: 1.2; margin: 0; text-wrap: balance; }
+h3 { font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0; }
+p { margin: 0; } a { color: var(--accent); }
+.lead { color: var(--muted); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.note { border-radius: 10px; padding: 10px 12px; font-size: .92rem; }
+.note.warn { background: var(--warn-soft); color: var(--warn); }
+.note.ok { background: var(--ok-soft); color: var(--ok); }
+.note.plain { background: var(--surface-2); color: var(--ink); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.two ul, .list { margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: 4px; }
+label { font-weight: 600; font-size: .9rem; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+input[type="text"], input[type="email"] { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-width: 0; width: 100%; box-sizing: border-box; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.progress { display: flex; align-items: center; gap: 12px; }
+.bar { flex: 1; height: 10px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--ok); border-radius: 99px; }
+.progress b { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: .9rem; }
+
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
+.step > header { display: flex; gap: 12px; align-items: flex-start; padding: 16px; }
+.num { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-family: var(--display); font-weight: 700; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.step.done .num { background: var(--ok); }
+.head { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: .75rem; font-weight: 600; padding: 2px 9px; border-radius: 99px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.chip.auto { background: var(--ok-soft); color: var(--ok); }
+.body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.step.done .body { display: none; }
+ol.do { margin: 0; padding-left: 1.3rem; display: flex; flex-direction: column; gap: 8px; }
+ol.do li::marker { font-weight: 700; color: var(--accent); }
+kbd, .ui { font-family: var(--body); font-weight: 700; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; font-size: .92em; white-space: nowrap; }
+.val { font-family: var(--mono); font-size: .9em; background: var(--surface-2); border-radius: 5px; padding: 1px 5px; overflow-wrap: anywhere; }
+.see { border-left: 4px solid var(--ok); padding: 4px 0 4px 12px; font-size: .92rem; }
+.see b { color: var(--ok); }
+.donebtn { align-self: flex-start; font: inherit; font-weight: 700; min-height: 44px; padding: 0 18px; border-radius: 10px; border: 2px solid var(--ok); background: var(--ok-soft); color: var(--ok); cursor: pointer; }
+.reopen { font: inherit; font-size: .85rem; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 6px 0; text-decoration: underline; display: none; }
+.step.done .reopen { display: inline; }
+
+/* Command boxes */
+.cmd { background: var(--term-bg); color: var(--term-fg); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cmd code { font-family: var(--mono); font-size: .85rem; overflow-wrap: anywhere; white-space: pre-wrap; user-select: all; }
+.copy { align-self: flex-start; font: inherit; font-size: .85rem; font-weight: 700; min-height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--term-dim); background: transparent; color: var(--term-fg); cursor: pointer; }
+
+/* Drawn screens */
+figure { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+figcaption { font-size: .8rem; color: var(--muted); }
+.shot { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); font-size: .85rem; }
+.shot-bar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; background: var(--surface-2); border-bottom: 1px solid var(--line); font-weight: 600; color: var(--muted); }
+.shot-bar::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--line); box-shadow: 14px 0 0 var(--line), 28px 0 0 var(--line); margin-right: 30px; flex: none; }
+.shot-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.path { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
+.path span { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+.path span + span::before { content: "›"; margin-right: 8px; margin-left: -4px; color: var(--muted); }
+.f { display: grid; grid-template-columns: minmax(90px, 34%) 1fr; gap: 8px; align-items: center; }
+.f > span:first-child { color: var(--muted); }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: .82rem; }
+.fake { display: inline-block; background: var(--accent); color: var(--accent-ink); font-weight: 700; border-radius: 6px; padding: 5px 12px; }
+.fake.ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line); }
+.hit { outline: 3px solid var(--hit); outline-offset: 2px; position: relative; }
+.n { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--hit); color: var(--surface); font-weight: 700; font-size: .75rem; margin-right: 6px; flex: none; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.term { background: var(--term-bg); color: var(--term-fg); font-family: var(--mono); font-size: .8rem; padding: 12px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.term .dim { color: var(--term-dim); } .term .you { color: var(--term-hit); font-weight: 700; }
+.tw { overflow-x: auto; }
+table { border-collapse: collapse; font-size: .88rem; min-width: 480px; width: 100%; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: .75rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+td .val { white-space: nowrap; }
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:8px">
+    <h3>Server "appy" · Card Vault</h3>
+    <h1>Set up your server, one click at a time</h1>
+    <p class="lead">14 steps. Each one says where you are, exactly what to click or type, and what you should see before moving on. About 90 minutes, most of it waiting.</p>
+  </header>
+
+  <div class="panel">
+    <h2>What is automatic and what is yours</h2>
+    <div class="two">
+      <div><h3>One pasted command does all this</h3>
+        <ul>
+          <li>Updates Ubuntu and closes every door to the internet</li>
+          <li>Connects the server to Cloudflare</li>
+          <li>Installs Coolify (the dashboard that runs your apps)</li>
+          <li>Security patches, log limits, weekly security check</li>
+          <li>Backup tool, alert tool, health check, help report</li>
+        </ul></div>
+      <div><h3>You click through these</h3>
+        <ul>
+          <li>Create the machine in Hyper-V and install Ubuntu</li>
+          <li>Cloudflare: one tunnel, five sign-in rules, six routes</li>
+          <li>Answer a few questions the tools ask</li>
+          <li>Coolify: add Card Vault and press Deploy</li>
+        </ul></div>
+    </div>
+    <p class="note plain"><b>About the pictures:</b> they are drawings of each screen, not photos. I cannot sign in to your Cloudflare, Hyper-V or Coolify to photograph them. Buttons are where I show them, but a label may be worded slightly differently. If a screen does not match, send me a screenshot and I will tell you what to click.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Start here: type your details once</h2>
+    <p class="lead">Every address and command below fills in with what you type. Nothing leaves this page.</p>
+    <div class="two">
+      <label for="in-domain">Your domain (no www)<input type="text" id="in-domain" placeholder="yourdomain.com" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <label for="in-email">Your email<input type="email" id="in-email" placeholder="you@example.com" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    </div>
+    <div class="progress" aria-live="polite"><div class="bar"><i id="bar"></i></div><b id="count">0 of 14 done</b></div>
+  </div>
+
+  <!-- 1 -->
+  <section class="step" data-step="1">
+    <header><div class="num">1</div><div class="head"><h2>Download Ubuntu</h2><div class="chips"><span class="chip">On your Hyper-V host</span><span class="chip">5 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <ol class="do">
+        <li>On the Hyper-V host, open a browser and go to <span class="val">ubuntu.com/download/server</span>.</li>
+        <li>Choose <span class="ui">Ubuntu Server 24.04 LTS</span> (not 26.04; the setup is built for 24.04) and download it. You get a file ending in <span class="val">.iso</span>.</li>
+      </ol>
+      <p class="see"><b>You should have:</b> a file like <span class="val">ubuntu-24.04.x-live-server-amd64.iso</span> in Downloads.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="step" data-step="2">
+    <header><div class="num">2</div><div class="head"><h2>Create the machine "appy"</h2><div class="chips"><span class="chip">Hyper-V Manager</span><span class="chip">10 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <ol class="do">
+        <li>Open <span class="ui">Hyper-V Manager</span>. On the right, click <span class="ui">New</span> then <span class="ui">Virtual Machine</span>.</li>
+        <li>Fill the wizard exactly like the picture, pressing <span class="ui">Next</span> between pages, then <span class="ui">Finish</span>.</li>
+        <li>Right-click <span class="val">appy</span>, choose <span class="ui">Settings</span>, and change the three things in the second picture. Click <span class="ui">OK</span>.</li>
+      </ol>
+      <figure><div class="shot"><div class="shot-bar">New Virtual Machine Wizard</div><div class="shot-body">
+        <div class="f"><span>Name</span><span class="box hit">appy</span></div>
+        <div class="f"><span>Generation</span><span class="box hit">Generation 2</span></div>
+        <div class="f"><span>Startup memory</span><span class="box">4096 MB</span></div>
+        <div class="f"><span>Connection</span><span class="box hit">your switch with internet</span></div>
+        <div class="f"><span>Virtual hard disk</span><span class="box">60 GB</span></div>
+        <div class="f"><span>Install from</span><span class="box hit">image file: the Ubuntu .iso</span></div>
+      </div></div><figcaption>The wizard pages, in order. Orange outlines are the ones people get wrong.</figcaption></figure>
+      <figure><div class="shot"><div class="shot-bar">Settings for appy</div><div class="shot-body">
+        <div class="f"><span><span class="n">1</span>Security</span><span class="box">Secure Boot template: <b>Microsoft UEFI Certificate Authority</b></span></div>
+        <div class="f"><span><span class="n">2</span>Processor</span><span class="box">Number of virtual processors: <b>2</b></span></div>
+        <div class="f"><span><span class="n">3</span>Automatic Start Action</span><span class="box"><b>Always start this virtual machine automatically</b></span></div>
+      </div></div><figcaption>Without change 1, Ubuntu will not start.</figcaption></figure>
+      <p class="note warn"><b>Still won't boot?</b> Turn the machine off, open <span class="ui">Settings</span>, <span class="ui">Security</span>, untick <span class="ui">Enable Secure Boot</span>, click <span class="ui">OK</span> and start it again. That is fine for appy: it has no open ports and sits behind Cloudflare.</p>
+      <p class="see"><b>You should see:</b> <span class="val">appy</span> in the list, State "Off".</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="step" data-step="3">
+    <header><div class="num">3</div><div class="head"><h2>Install Ubuntu</h2><div class="chips"><span class="chip">Hyper-V console window</span><span class="chip">15 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <ol class="do">
+        <li>Right-click <span class="val">appy</span>, <span class="ui">Connect</span>, then click <span class="ui">Start</span>. A black window opens: this is the <b>console</b>.</li>
+        <li>Press <kbd>Enter</kbd> on "Try or Install Ubuntu Server". Use arrow keys and <kbd>Enter</kbd> for everything below.</li>
+        <li>Answer each screen like this table. Where it says "Done", just move to <span class="ui">Done</span> and press <kbd>Enter</kbd>.</li>
+      </ol>
+      <div class="tw"><table>
+        <tr><th>Screen</th><th>What to do</th></tr>
+        <tr><td>Language, Keyboard</td><td>English, then Done</td></tr>
+        <tr><td>Type of installation</td><td>Leave <b>Ubuntu Server</b> selected, Done</td></tr>
+        <tr><td>Network, Proxy, Mirror</td><td>Change nothing, Done on each</td></tr>
+        <tr><td>Storage</td><td>Leave "Use an entire disk", Done, Done, then <b>Continue</b></td></tr>
+        <tr><td>Profile</td><td>Your name · Server's name: <span class="val">appy</span> · pick a username and a password. <b>Write both down.</b></td></tr>
+        <tr><td>Ubuntu Pro</td><td>Skip for now, Continue</td></tr>
+        <tr><td>SSH</td><td>Change nothing, Done</td></tr>
+        <tr><td>Featured snaps</td><td>Select nothing, Done</td></tr>
+        <tr><td>(wait 5 to 10 min)</td><td>When <b>Reboot Now</b> appears, press Enter. If it says "remove the installation medium", press Enter again.</td></tr>
+      </table></div>
+      <p class="see"><b>You should see:</b> <span class="val">appy login:</span>. Type your username, Enter, your password (nothing shows as you type), Enter. You land on a line ending in <span class="val">$</span>.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="step" data-step="4">
+    <header><div class="num">4</div><div class="head"><h2>Create the tunnel and copy its token</h2><div class="chips"><span class="chip">Cloudflare, in a browser on the Hyper-V host</span><span class="chip">5 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <p>The tunnel is the private line between Cloudflare and appy. Do this in a browser <b>on the Hyper-V host</b>, so you can paste into the console in the next step.</p>
+      <ol class="do">
+        <li>Go to <span class="val">one.dash.cloudflare.com</span> and sign in. (First time: it asks you to pick a team name and the <b>Free</b> plan.)</li>
+        <li>Left menu: <span class="ui">Networks</span> then <span class="ui">Tunnels</span>. Click <span class="ui">Create a tunnel</span>.</li>
+        <li>Choose <span class="ui">Cloudflared</span>. Name it <span class="val">appy</span>. Click <span class="ui">Save tunnel</span>.</li>
+        <li>A page shows an install command. <b>Do not run it.</b> Find the long text starting with <span class="val">eyJ</span> and copy only that. Paste it into Notepad for a minute.</li>
+        <li>Leave this browser tab open.</li>
+      </ol>
+      <figure><div class="shot"><div class="shot-bar">Cloudflare Zero Trust</div><div class="shot-body">
+        <div class="path"><span>Networks</span><span>Tunnels</span><span>appy</span><span>Install connector</span></div>
+        <div class="box">sudo cloudflared service install <span class="hit">eyJhIjoiNWY...long text...In0=</span></div>
+        <div><span class="n">1</span>Copy only the outlined part: everything after the word <b>install</b>.</div>
+      </div></div><figcaption>The token is your key to the tunnel. Treat it like a password.</figcaption></figure>
+      <p class="see"><b>You should have:</b> the token (starts with <span class="val">eyJ</span>, about 180 characters) in Notepad.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="step" data-step="5">
+    <header><div class="num">5</div><div class="head"><h2>Run the automatic setup</h2><div class="chips"><span class="chip">Hyper-V console window</span><span class="chip auto">Automated</span><span class="chip">20 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <p>This is the one command that does the heavy lifting. You cannot paste into the console with Ctrl+V; use the menu instead.</p>
+      <p class="note plain"><b>No subdomain needed yet.</b> The command only notes down the name <span class="val">appy.<span data-d></span></span>. Cloudflare creates the subdomains later, in step 7, when you save the routes.</p>
+      <ol class="do">
+        <li>Press <span class="ui">Copy</span> below.</li>
+        <li>In the console window's top menu click <span class="ui">Clipboard</span> then <span class="ui">Type clipboard text</span>. Wait while it types, then press <kbd>Enter</kbd>.</li>
+        <li>It asks for your Ubuntu password (from step 3). Type it, Enter.</li>
+        <li>Answer its questions as in the picture. To paste the token: copy it from Notepad, then <span class="ui">Clipboard</span>, <span class="ui">Type clipboard text</span>, wait about 20 seconds, Enter.</li>
+      </ol>
+      <div class="cmd"><code id="c-setup">cd ~ &amp;&amp; rm -rf crd-main &amp;&amp; curl -fsSL https://github.com/dmo18/crd/archive/refs/heads/main.tar.gz | tar xz &amp;&amp; cd crd-main/infra/ubuntu &amp;&amp; sudo bash bootstrap.sh --cloudflare appy.<span data-d></span> <span data-e></span></code><button class="copy" type="button" data-copy="c-setup">Copy</button></div>
+      <figure><div class="term"><span class="dim">Paste the Cloudflare tunnel token (it starts with eyJ) and press Enter.
+What you type stays hidden:</span> <span class="you">paste the token, Enter (nothing shows, that is normal)</span>
+
+<span class="dim">Type the email you sign in to Cloudflare with, then press Enter:</span> <span class="you"><span data-e></span></span>
+
+<span class="dim">Paste the SSH CA public key from Cloudflare ...
+No key yet? Press Enter alone to skip and add it later:</span> <span class="you">just press Enter (you add it in step 8)</span>
+
+<span class="dim">Set up alerts to Telegram or Discord now (about 3 minutes)? [y/N]</span> <span class="you">n (you do it in step 10)</span></div><figcaption>The four questions. Orange is what you do.</figcaption></figure>
+      <p class="note warn"><b>At the very end</b> it prints a temporary Coolify password. Write it down or take a phone photo of the screen. You need it in step 9.</p>
+      <p class="see"><b>You should see:</b> a summary ending with the temporary password. Back in the Cloudflare tab, the tunnel <span class="val">appy</span> shows <b>Healthy</b> (refresh the page).</p>
+      <p class="lead" style="font-size:.9rem">If it stops with "STOPPED:", the line after it says why in plain words. Fix that and run the same command again; it is safe to repeat.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="step" data-step="6">
+    <header><div class="num">6</div><div class="head"><h2>Add the five sign-in rules</h2><div class="chips"><span class="chip">Cloudflare, any browser</span><span class="chip">15 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <p>These rules decide who gets in. They come <b>before</b> the routes so nothing is ever open by accident. From here on you can use any computer.</p>
+      <p class="note warn"><b>Your domain is shared, so do this first:</b> in the main Cloudflare dashboard open your domain, <span class="ui">DNS</span>, <span class="ui">Records</span>, and write down every name with an <b>orange cloud</b> (for example <span class="val">www</span>, <span class="val">shop</span>). They all go into rule 1. Anything you leave out will ask its visitors to sign in once rule 5 is saved.</p>
+      <ol class="do">
+        <li>In Zero Trust, left menu: <span class="ui">Access</span> then <span class="ui">Applications</span>. Click <span class="ui">Add an application</span>, choose <span class="ui">Self-hosted</span>.</li>
+        <li>Fill it in from row 1 of the table, add the policy, save. Repeat for rows 2 to 5, <b>in this order</b>. Rule 5 must be last.</li>
+      </ol>
+      <figure><div class="shot"><div class="shot-bar">Add an application · Self-hosted</div><div class="shot-body">
+        <div class="f"><span><span class="n">1</span>Application name</span><span class="box">Server dashboard</span></div>
+        <div class="f"><span><span class="n">2</span>Subdomain · Domain</span><span class="box">appy · <span data-d></span></span></div>
+        <div class="f"><span>Path</span><span class="box">(empty unless the table says)</span></div>
+        <div class="f"><span>Session duration</span><span class="box">24 hours</span></div>
+        <div class="f"><span><span class="n">3</span>Policy · Action</span><span class="box">Allow</span></div>
+        <div class="f"><span><span class="n">4</span>Include</span><span class="box">Emails · <span data-e></span></span></div>
+        <div class="row"><span class="fake hit">Save</span></div>
+      </div></div><figcaption>The same form for every row, shown with row 2. Only the outlined values change. "Add public hostname" inside one application adds another subdomain to it (rule 1 needs several).</figcaption></figure>
+      <div class="tw"><table>
+        <tr><th>#</th><th>Name</th><th>Subdomain</th><th>Path</th><th>Action</th><th>Include</th></tr>
+        <tr><td>1</td><td>Public apps</td><td><span class="val">cards</span> plus every orange-cloud name you wrote down</td><td></td><td><b>Bypass</b></td><td>Everyone</td></tr>
+        <tr><td>2</td><td>Server dashboard</td><td><span class="val">appy</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
+        <tr><td>3</td><td>Browser SSH</td><td><span class="val">appy-ssh</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
+        <tr><td>4</td><td>GitHub notices</td><td><span class="val">appy</span></td><td><span class="val">webhooks/source/github/events</span></td><td><b>Bypass</b></td><td>Everyone</td></tr>
+        <tr><td>5</td><td>All apps (private)</td><td><span class="val">*</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
+      </table></div>
+      <ol class="do" start="3">
+        <li>Rule 3 only: in that application's settings find <span class="ui">Browser rendering</span> and set it to <span class="ui">SSH</span>.</li>
+      </ol>
+      <p class="note warn">Never put <span class="val">appy</span>, <span class="val">appy-ssh</span> or <span class="val">*</span> in "Public apps". Rule 1 is the list of things anyone on the internet may open. When you add a new subdomain to your domain later (for anything), add it to rule 1 too if it should stay open.</p>
+      <p class="see"><b>You should see:</b> five applications in the list.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="step" data-step="7">
+    <header><div class="num">7</div><div class="head"><h2>Add the six routes and one DNS record</h2><div class="chips"><span class="chip">Cloudflare</span><span class="chip">10 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <p>Routes tell the tunnel which address goes to which part of appy.</p>
+      <ol class="do">
+        <li><span class="ui">Networks</span>, <span class="ui">Tunnels</span>, click <span class="val">appy</span>, <span class="ui">Edit</span>, then the tab <span class="ui">Public Hostname</span> (newer screens call it <span class="ui">Routes</span>).</li>
+        <li>Click <span class="ui">Add a public hostname</span> and enter row 0. Save. Repeat for rows 1 to 5, <b>in this order</b>.</li>
+      </ol>
+      <figure><div class="shot"><div class="shot-bar">Add public hostname</div><div class="shot-body">
+        <div class="f"><span><span class="n">1</span>Subdomain</span><span class="box">appy</span></div>
+        <div class="f"><span>Domain</span><span class="box"><span data-d></span></span></div>
+        <div class="f"><span><span class="n">2</span>Path</span><span class="box">^/app/</span></div>
+        <div class="f"><span><span class="n">3</span>Service · Type</span><span class="box">HTTP</span></div>
+        <div class="f"><span><span class="n">4</span>URL</span><span class="box">127.0.0.1:6001</span></div>
+        <div class="row"><span class="fake hit">Save</span></div>
+      </div></div><figcaption>Shown with row 1's values.</figcaption></figure>
+      <div class="tw"><table>
+        <tr><th>#</th><th>Subdomain</th><th>Path</th><th>Type</th><th>URL</th></tr>
+        <tr><td>0</td><td><span class="val">appy</span></td><td><span class="val">^/webhooks/source/github/events(/manual)?$</span></td><td>HTTP</td><td><span class="val">127.0.0.1:8000</span></td></tr>
+        <tr><td>1</td><td><span class="val">appy</span></td><td><span class="val">^/app/</span></td><td>HTTP</td><td><span class="val">127.0.0.1:6001</span></td></tr>
+        <tr><td>2</td><td><span class="val">appy</span></td><td><span class="val">^/terminal/ws</span></td><td>HTTP</td><td><span class="val">127.0.0.1:6002</span></td></tr>
+        <tr><td>3</td><td><span class="val">appy</span></td><td>(empty)</td><td>HTTP</td><td><span class="val">127.0.0.1:8000</span></td></tr>
+        <tr><td>4</td><td><span class="val">appy-ssh</span></td><td>(empty)</td><td>SSH</td><td><span class="val">127.0.0.1:22</span></td></tr>
+        <tr><td>5</td><td><span class="val">*</span></td><td>(empty)</td><td>HTTP</td><td><span class="val">127.0.0.1:80</span></td></tr>
+      </table></div>
+      <ol class="do" start="3">
+        <li>Row 5 needs one DNS record. On the tunnel's overview page copy the <b>Tunnel ID</b>. Then in the main Cloudflare dashboard open your domain, <span class="ui">DNS</span>, <span class="ui">Records</span>, <span class="ui">Add record</span>: Type <span class="val">CNAME</span>, Name <span class="val">*</span>, Target <span class="val">TUNNEL-ID.cfargotunnel.com</span>, Proxy <b>on</b> (orange cloud). Save.</li>
+      </ol>
+      <p class="see"><b>You should see:</b> open <span class="val">https://appy.<span data-d></span></span>. Cloudflare asks for your email and sends you a code. After the code, a Coolify login page appears.</p>
+      <p class="lead" style="font-size:.9rem">If Cloudflare says a record for <span class="val">appy</span> or <span class="val">appy-ssh</span> already exists, delete the old record under DNS and save the route again.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="step" data-step="8">
+    <header><div class="num">8</div><div class="head"><h2>Turn on the browser terminal</h2><div class="chips"><span class="chip">Cloudflare, then the console</span><span class="chip">5 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <p>After this you can type commands to appy from any browser, with easy copy and paste, at <span class="val">https://appy-ssh.<span data-d></span></span>. No password is used: Cloudflare vouches for you.</p>
+      <ol class="do">
+        <li>Zero Trust: <span class="ui">Access</span>, <span class="ui">Service credentials</span> (some screens: Service auth), tab <span class="ui">SSH</span>.</li>
+        <li>Choose the application <span class="val">Browser SSH</span>, click <span class="ui">Generate certificate</span>. Copy the <b>public key</b> (one long line starting <span class="val">ecdsa-sha2-nistp256</span>).</li>
+        <li>In the Hyper-V console, type the command below and press Enter. When asked, paste the key with <span class="ui">Clipboard</span>, <span class="ui">Type clipboard text</span>, then Enter.</li>
+      </ol>
+      <div class="cmd"><code id="c-ca">sudo server-ssh-ca set</code><button class="copy" type="button" data-copy="c-ca">Copy</button></div>
+      <p class="see"><b>You should see:</b> open <span class="val">https://appy-ssh.<span data-d></span></span>, sign in with the email code, type your Ubuntu username: a terminal opens in the browser. Use it for every command from now on (paste works normally there).</p>
+      <p class="lead" style="font-size:.9rem">The username is the one you made in step 3 (for example <span class="val">owner</span>), even if your email starts with something else.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="step" data-step="9">
+    <header><div class="num">9</div><div class="head"><h2>Sign in to Coolify and lock it</h2><div class="chips"><span class="chip">https://appy.<span data-d></span></span><span class="chip">10 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <ol class="do">
+        <li>Open <span class="val">https://appy.<span data-d></span></span>. Sign in with your email and the <b>temporary password</b> from step 5.</li>
+        <li>Coolify shows welcome questions. When it asks about a server, choose <span class="ui">This Machine</span> (localhost). Accept the rest.</li>
+        <li>Left menu <span class="ui">Settings</span>: set the three things in the picture and save.</li>
+        <li>Top right, your <span class="ui">Profile</span>: change the password to a long one of your own, then turn on <span class="ui">Two-factor authentication</span> and <b>save the recovery codes</b>.</li>
+        <li>In the browser terminal, run the cleanup command below.</li>
+      </ol>
+      <figure><div class="shot"><div class="shot-bar">Coolify · Settings</div><div class="shot-body">
+        <div class="f"><span><span class="n">1</span>Instance's Domain</span><span class="box">https://appy.<span data-d></span></span></div>
+        <div class="f"><span><span class="n">2</span>Registration Allowed</span><span class="box">Off</span></div>
+        <div class="f"><span><span class="n">3</span>Auto Update</span><span class="box">Off (you update when you choose)</span></div>
+      </div></div></figure>
+      <div class="cmd"><code id="c-clean">sudo rm -f /root/coolify-first-login.txt &amp;&amp; sudo sed -i '/^ROOT_USER_PASSWORD=/d' /data/coolify/source/.env</code><button class="copy" type="button" data-copy="c-clean">Copy</button></div>
+      <p class="see"><b>You should see:</b> signing out and back in asks for your new password and a 6 digit code.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section class="step" data-step="10">
+    <header><div class="num">10</div><div class="head"><h2>Turn on alerts to your phone</h2><div class="chips"><span class="chip">Browser terminal</span><span class="chip auto">Guided</span><span class="chip">5 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <ol class="do">
+        <li>Decide where alerts go and get the one thing it needs:
+          <ul class="list">
+            <li><b>Telegram:</b> in Telegram, message <span class="val">@BotFather</span>, send <span class="val">/newbot</span>, follow it, copy the token it gives you. Then send your new bot any message.</li>
+            <li><b>Discord:</b> your server, <span class="ui">Server Settings</span>, <span class="ui">Integrations</span>, <span class="ui">Webhooks</span>, <span class="ui">New Webhook</span>, <span class="ui">Copy Webhook URL</span>.</li>
+          </ul></li>
+        <li>Run the command and answer its questions (1 or 2, then paste).</li>
+      </ol>
+      <div class="cmd"><code id="c-alert">sudo server-alert setup</code><button class="copy" type="button" data-copy="c-alert">Copy</button></div>
+      <p class="see"><b>You should see:</b> a test message arrive on your phone.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section class="step" data-step="11">
+    <header><div class="num">11</div><div class="head"><h2>Turn on backups</h2><div class="chips"><span class="chip">Browser terminal</span><span class="chip auto">Guided</span><span class="chip">10 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <p>Have your backup server's details ready: address, username, password, and a folder name. SFTP is best; FTPS also works.</p>
+      <ol class="do">
+        <li>Run the first command and answer its questions.</li>
+        <li>It shows a <b>backup passphrase once</b>. Save it in your password manager right then.</li>
+        <li>Run the second command to make the first backup (a few minutes).</li>
+      </ol>
+      <div class="cmd"><code id="c-b1">sudo server-backup setup</code><button class="copy" type="button" data-copy="c-b1">Copy</button></div>
+      <div class="cmd"><code id="c-b2">sudo server-backup run &amp;&amp; sudo server-backup status</code><button class="copy" type="button" data-copy="c-b2">Copy</button></div>
+      <p class="note warn">Without the passphrase, no backup can ever be opened. Not by you, not by me.</p>
+      <p class="see"><b>You should see:</b> status says the last backup worked. From now on it runs every night around 02:30.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 12 -->
+  <section class="step" data-step="12">
+    <header><div class="num">12</div><div class="head"><h2>Add Card Vault</h2><div class="chips"><span class="chip">Coolify</span><span class="chip">15 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <ol class="do">
+        <li>In Coolify: <span class="ui">Projects</span>, <span class="ui">+ Add</span>, name it <span class="val">Card Vault</span>. Open it, <span class="ui">+ New Resource</span>, <span class="ui">Public Repository</span>.</li>
+        <li>Paste <span class="val">https://github.com/dmo18/crd</span>, click <span class="ui">Check repository</span>. Set <b>Build Pack</b> to <span class="ui">Docker Compose</span>. Continue.</li>
+        <li>On the app's page set the two things in the picture, then <span class="ui">Save</span>.</li>
+        <li>Tab <span class="ui">Environment Variables</span>: add <span class="val">CLIENT_IP_HEADER</span> with the value <span class="val">cf-connecting-ip</span>.</li>
+        <li>Click <span class="ui">Deploy</span> (top right) and wait 5 to 10 minutes.</li>
+      </ol>
+      <figure><div class="shot"><div class="shot-bar">Coolify · Card Vault · Configuration</div><div class="shot-body">
+        <div class="f"><span><span class="n">1</span>Domains for cardvault</span><span class="box hit">https://cards.<span data-d></span>:3000</span></div>
+        <div class="f"><span><span class="n">2</span>Advanced · Force HTTPS</span><span class="box">Off</span></div>
+        <div class="row"><span class="fake ghost">Save</span><span class="fake hit">Deploy</span></div>
+      </div></div><figcaption>The <b>:3000</b> stays in. People still visit the normal address without it.</figcaption></figure>
+      <p class="see"><b>You should see:</b> the status turn green: "Running (healthy)".</p>
+      <p class="lead" style="font-size:.9rem">If it fails, open the <span class="ui">Logs</span> tab, copy the last lines and send them to me.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 13 -->
+  <section class="step" data-step="13">
+    <header><div class="num">13</div><div class="head"><h2>Create your Card Vault password</h2><div class="chips"><span class="chip">Coolify, then your phone</span><span class="chip">5 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <ol class="do">
+        <li>In Coolify, Card Vault, <span class="ui">Environment Variables</span>: find <span class="val">SETUP_CODE</span>, reveal it and copy the value.</li>
+        <li>On your phone open <span class="val">https://cards.<span data-d></span></span>. Tap <span class="ui">Set your password</span>.</li>
+        <li>Paste the setup code, type a password of 16 or more characters twice, save.</li>
+        <li>Tap <span class="ui">Scan</span> and photograph a card. Front and back gives the best result.</li>
+        <li>In your phone browser's menu choose <span class="ui">Add to Home Screen</span>.</li>
+      </ol>
+      <p class="see"><b>You should see:</b> your first card in <span class="ui">Inventory</span>. Under <span class="ui">More</span>, "Connection check" says the address matches.</p>
+      <button class="donebtn" type="button">Done, next step</button>
+    </div>
+  </section>
+
+  <!-- 14 -->
+  <section class="step" data-step="14">
+    <header><div class="num">14</div><div class="head"><h2>Run the health check</h2><div class="chips"><span class="chip">Browser terminal</span><span class="chip auto">Automated</span><span class="chip">2 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <div class="body">
+      <div class="cmd"><code id="c-check">sudo server-check</code><button class="copy" type="button" data-copy="c-check">Copy</button></div>
+      <p class="see"><b>You should see:</b> a list of PASS lines. A WARN line tells you in plain words what to do. If you are unsure about one, send it to me.</p>
+      <button class="donebtn" type="button">Done, all finished</button>
+    </div>
+  </section>
+
+  <div class="panel">
+    <h2>After setup: the five things you will ever need</h2>
+    <div class="tw"><table>
+      <tr><th>When</th><th>Do this</th></tr>
+      <tr><td>Something looks wrong</td><td>Run <span class="val">sudo server-support</span>, then <span class="val">sudo cat</span> the file it names, and paste the text to Claude. Passwords are removed automatically.</td></tr>
+      <tr><td>Updates are waiting (an alert tells you)</td><td><span class="val">sudo server-update</span>. It backs up first and asks before restarting. Nothing updates by itself except security patches.</td></tr>
+      <tr><td>Add another app</td><td>Coolify, + New Resource, its GitHub address, Domain <span class="val">https://name.<span data-d></span></span>, Deploy. It is private until you add <span class="val">name</span> to "Public apps" (step 6, rule 1).</td></tr>
+      <tr><td>The server is lost</td><td>Repeat steps 2, 3 and 5 on a new machine, then <span class="val">sudo server-backup restore-dr</span> with your backup passphrase.</td></tr>
+      <tr><td>Locked out of everything</td><td>The Hyper-V console (step 3) always works.</td></tr>
+    </table></div>
+    <p class="note ok">Also do once: in GitHub turn on two-factor sign-in, and on your backup server turn on snapshots or "add only" access, so a break-in on appy could not erase its own backups.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var KEY = "appy-guide-v1";
+  var state = { domain: "", email: "", done: {} };
+  try { var saved = JSON.parse(localStorage.getItem(KEY) || "null"); if (saved) state = Object.assign(state, saved); } catch (e) {}
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+  var dIn = document.getElementById("in-domain"), eIn = document.getElementById("in-email");
+  function clean(v) { return String(v || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[^a-z0-9.@_+-]/g, ""); }
+  function fill() {
+    var d = clean(state.domain) || "yourdomain.com", e = clean(state.email) || "you@example.com";
+    document.querySelectorAll("[data-d]").forEach(function (n) { n.textContent = d; });
+    document.querySelectorAll("[data-e]").forEach(function (n) { n.textContent = e; });
+  }
+  dIn.value = state.domain; eIn.value = state.email;
+  dIn.addEventListener("input", function () { state.domain = dIn.value; save(); fill(); });
+  eIn.addEventListener("input", function () { state.email = eIn.value; save(); fill(); });
+  var steps = Array.prototype.slice.call(document.querySelectorAll(".step"));
+  function paint() {
+    var n = 0;
+    steps.forEach(function (s) { var on = !!state.done[s.dataset.step]; s.classList.toggle("done", on); if (on) n++; });
+    document.getElementById("bar").style.width = (n / steps.length * 100) + "%";
+    document.getElementById("count").textContent = n + " of " + steps.length + " done";
+  }
+  steps.forEach(function (s, i) {
+    s.querySelector(".donebtn").addEventListener("click", function () {
+      state.done[s.dataset.step] = true; save(); paint();
+      var next = steps[i + 1]; if (next) next.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    s.querySelector(".reopen").addEventListener("click", function () { delete state.done[s.dataset.step]; save(); paint(); });
+  });
+  document.querySelectorAll(".copy").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var el = document.getElementById(b.dataset.copy), text = el.textContent;
+      function ok() { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1600); }
+      function fallback() { var r = document.createRange(); r.selectNodeContents(el); var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); b.textContent = "Selected: now copy"; }
+      try { navigator.clipboard.writeText(text).then(ok, fallback); } catch (e) { fallback(); }
+    });
+  });
+  fill(); paint();
+})();
+</script>

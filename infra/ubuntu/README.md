@@ -171,7 +171,7 @@ Routes (tunnel, **Routes**, **Published application**), in this order
 
 | # | Subdomain | Path | Service |
 | --- | --- | --- | --- |
-| 1 | `admin` | `^/webhooks/source/github/events` | HTTP, `127.0.0.1:8000` (GitHub tells Coolify to deploy) |
+| 1 | `admin` | `^/webhooks/source/github/events(/manual)?$` | HTTP, `127.0.0.1:8000` (GitHub tells Coolify to deploy) |
 | 2 | `admin` | `^/app/` | HTTP, `127.0.0.1:6001` (live updates) |
 | 3 | `admin` | `^/terminal/ws` | HTTP, `127.0.0.1:6002` (Coolify's terminal) |
 | 4 | `admin` | (empty) | HTTP, `127.0.0.1:8000` (Coolify dashboard) |
