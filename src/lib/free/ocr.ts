@@ -12,12 +12,21 @@ import type { Box } from "@/lib/recognition/types";
 
 export type OcrLine = { text: string; confidence: number; box: Box };
 export type OcrResult = { text: string; lines: OcrLine[]; confidence: number };
+export type ReadOptions = {
+  /**
+   * Box labels and bulk boxes: always add the automatic layout pass and keep
+   * every distinct line from all passes, since labels mix big and small text.
+   */
+  thorough?: boolean;
+};
 export interface TextReader {
-  read(image: Buffer): Promise<OcrResult>;
+  read(image: Buffer, options?: ReadOptions): Promise<OcrResult>;
 }
 
 const LONG_EDGE = 1800;
 const JOB_TIMEOUT_MS = 60_000;
+/** Below this (confidence times characters) a third, automatic layout pass is tried. */
+const LITTLE_TEXT_SCORE = 12;
 const MIN_LINE_CONFIDENCE = 0.3;
 const MIN_LINE_CHARS = 2;
 const DECODE_OPTIONS = { failOn: "error", limitInputPixels: 30_000_000 } as const;
@@ -99,30 +108,112 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 
 type Variant = { png: Buffer; width: number; height: number };
 
-/** Two versions of the photo: cleaned grayscale, and the same thresholded to black and white. */
+/** Otsu's method: the gray level that best splits a histogram into dark and light. */
+export function otsuThreshold(pixels: Uint8Array | Buffer): number {
+  const hist = new Array<number>(256).fill(0);
+  for (const v of pixels) hist[v]++;
+  const total = pixels.length;
+  let sumAll = 0;
+  for (let i = 0; i < 256; i++) sumAll += i * hist[i];
+  let sumBack = 0;
+  let weightBack = 0;
+  let best = 128;
+  let bestVar = -1;
+  for (let t = 0; t < 256; t++) {
+    weightBack += hist[t];
+    if (weightBack === 0) continue;
+    const weightFore = total - weightBack;
+    if (weightFore === 0) break;
+    sumBack += t * hist[t];
+    const meanBack = sumBack / weightBack;
+    const meanFore = (sumAll - sumBack) / weightFore;
+    const between = weightBack * weightFore * (meanBack - meanFore) ** 2;
+    if (between > bestVar) {
+      bestVar = between;
+      best = t;
+    }
+  }
+  return best;
+}
+
+/**
+ * Two versions of the photo: plain grayscale, and black and white split at
+ * the Otsu level. No contrast stretching or sharpening: on plain card
+ * backgrounds those blow up photo noise until it drowns the text.
+ */
 async function preprocess(image: Buffer): Promise<Variant[]> {
-  const gray = await sharp(image, DECODE_OPTIONS)
+  const base = sharp(image, DECODE_OPTIONS)
     .rotate()
     .grayscale()
-    .normalise()
-    .resize(LONG_EDGE, LONG_EDGE, { fit: "inside", withoutEnlargement: false })
-    .sharpen({ sigma: 0.8 })
-    .png()
-    .toBuffer({ resolveWithObject: true });
-  const { width, height } = gray.info;
+    .resize(LONG_EDGE, LONG_EDGE, { fit: "inside", withoutEnlargement: false });
+  const raw = await base.clone().raw().toBuffer({ resolveWithObject: true });
+  const { width, height } = raw.info;
+  const gray = await sharp(raw.data, { raw: { width, height, channels: 1 } }).png().toBuffer();
 
-  const stats = await sharp(gray.data).stats();
-  const mean = stats.channels[0]?.mean ?? 128;
-  // Threshold at the image's own mean so glare and tinted backgrounds fall to one side.
-  // Mostly dark images (light text on a dark card) are flipped so text ends up dark on light.
-  let bw = sharp(gray.data).threshold(Math.min(250, Math.max(5, Math.round(mean))));
-  if (mean < 128) bw = bw.negate({ alpha: false });
+  const level = otsuThreshold(raw.data);
+  let dark = 0;
+  for (const v of raw.data) if (v <= level) dark++;
+  // Text is the smaller share of the card. When most pixels are dark the card
+  // is light text on a dark background, so flip it to dark on light.
+  let bw = sharp(raw.data, { raw: { width, height, channels: 1 } }).threshold(Math.max(1, level + 1));
+  if (dark > raw.data.length / 2) bw = bw.negate({ alpha: false });
   const binary = await bw.png().toBuffer();
 
   return [
-    { png: gray.data, width, height },
+    { png: gray, width, height },
     { png: binary, width, height },
   ];
+}
+
+/**
+ * Light, solid rectangles such as box labels and stickers, as boxes in
+ * fractions. The text engine skips a label framed by a dark area, so these
+ * are read on their own. At most `max` regions, largest first.
+ */
+export async function findLabelRegions(image: Buffer, max = 6): Promise<Box[]> {
+  const SIZE = 400;
+  const { data, info } = await sharp(image, DECODE_OPTIONS)
+    .rotate()
+    .grayscale()
+    .resize(SIZE, SIZE, { fit: "inside" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width: w, height: h } = info;
+  const level = otsuThreshold(data);
+  const seen = new Uint8Array(w * h);
+  const regions: { box: Box; area: number }[] = [];
+  const stack: number[] = [];
+  for (let start = 0; start < w * h; start++) {
+    if (seen[start] || data[start] <= level) continue;
+    let minX = w, minY = h, maxX = 0, maxY = 0, area = 0;
+    stack.push(start);
+    seen[start] = 1;
+    while (stack.length) {
+      const i = stack.pop()!;
+      const x = i % w;
+      const y = (i - x) / w;
+      area++;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      const next = [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1];
+      for (const n of next) {
+        if (n >= 0 && !seen[n] && data[n] > level) {
+          seen[n] = 1;
+          stack.push(n);
+        }
+      }
+    }
+    const bw = maxX - minX + 1;
+    const bh = maxY - minY + 1;
+    const boxArea = bw * bh;
+    // Solid enough to be a label (text holes lower the fill), not the whole photo, not a speck.
+    if (boxArea < w * h * 0.01 || boxArea > w * h * 0.9) continue;
+    if (area / boxArea < 0.6) continue;
+    regions.push({ box: { x: minX / w, y: minY / h, w: bw / w, h: bh / h }, area: boxArea });
+  }
+  return regions.sort((a, b) => b.area - a.area).slice(0, max).map((r) => r.box);
 }
 
 function clamp01(v: number): number {
@@ -169,9 +260,10 @@ function summarize(lines: OcrLine[]): OcrResult {
   };
 }
 
-async function recognizeOnce(png: Buffer): Promise<Page> {
+async function recognizeOnce(png: Buffer, mode: PSM = PSM.SPARSE_TEXT): Promise<Page> {
   const worker = await getWorker();
   try {
+    await worker.setParameters({ tessedit_pageseg_mode: mode });
     const result = await withTimeout(worker.recognize(png, {}, { blocks: true, text: true }), JOB_TIMEOUT_MS);
     return result.data;
   } catch (cause) {
@@ -180,7 +272,7 @@ async function recognizeOnce(png: Buffer): Promise<Page> {
   }
 }
 
-async function readImage(image: Buffer): Promise<OcrResult> {
+async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrResult> {
   const variants = await preprocess(image);
   let best: OcrLine[] = [];
   let bestScore = -1;
@@ -193,12 +285,51 @@ async function readImage(image: Buffer): Promise<OcrResult> {
       bestScore = s;
     }
   }
+  if (options.thorough) {
+    const v = variants[0];
+    const all = [...best, ...linesFrom(await recognizeOnce(v.png, PSM.AUTO), v.width, v.height)];
+    for (const region of await findLabelRegions(image)) {
+      const left = Math.floor(region.x * v.width);
+      const top = Math.floor(region.y * v.height);
+      const width = Math.max(16, Math.min(v.width - left, Math.round(region.w * v.width)));
+      const height = Math.max(16, Math.min(v.height - top, Math.round(region.h * v.height)));
+      const crop = await sharp(v.png).extract({ left, top, width, height }).png().toBuffer();
+      // Boxes come back relative to the crop; map them onto the whole photo.
+      for (const line of linesFrom(await recognizeOnce(crop), width, height)) {
+        all.push({
+          ...line,
+          box: {
+            x: region.x + line.box.x * region.w,
+            y: region.y + line.box.y * region.h,
+            w: line.box.w * region.w,
+            h: line.box.h * region.h,
+          },
+        });
+      }
+    }
+    const seen = new Set<string>();
+    const unique = all.filter((l) => {
+      const key = l.text.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return summarize(unique);
+  }
+  // Sparse mode suits card backs with scattered text but can miss large
+  // block lettering such as box labels. When little was read, also try
+  // automatic page layout on the plain grayscale version.
+  if (bestScore < LITTLE_TEXT_SCORE) {
+    const v = variants[0];
+    const lines = linesFrom(await recognizeOnce(v.png, PSM.AUTO), v.width, v.height);
+    if (score(lines) > bestScore) best = lines;
+  }
   return summarize(best);
 }
 
 const reader: TextReader = {
-  read(image: Buffer): Promise<OcrResult> {
-    return enqueue(() => readImage(image));
+  read(image: Buffer, options?: ReadOptions): Promise<OcrResult> {
+    return enqueue(() => readImage(image, options));
   },
 };
 

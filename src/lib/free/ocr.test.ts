@@ -99,3 +99,40 @@ describe("text reader", () => {
     TIMEOUT,
   );
 });
+
+describe("otsuThreshold", () => {
+  it("splits two clear groups of gray between them", async () => {
+    const { otsuThreshold } = await import("./ocr");
+    const pixels = new Uint8Array([...Array(900).fill(230), ...Array(100).fill(30)]);
+    const t = otsuThreshold(pixels);
+    expect(t).toBeGreaterThanOrEqual(30);
+    expect(t).toBeLessThan(230);
+  });
+});
+
+describe("framed labels", () => {
+  const box = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200">
+    <rect width="100%" height="100%" fill="#55504a"/>
+    <rect x="200" y="220" width="1200" height="760" fill="#c0392b"/>
+    <rect x="200" y="220" width="1200" height="220" fill="#f6f1e1"/>
+    <text x="800" y="360" font-family="sans-serif" font-size="84" font-weight="800" text-anchor="middle" fill="#111">1990 TOPPS BASEBALL</text>
+    <rect x="420" y="600" width="760" height="180" fill="#f6f1e1"/>
+    <text x="800" y="720" font-family="sans-serif" font-size="64" font-weight="700" text-anchor="middle" fill="#111">36 PACKS  WAX BOX</text></svg>`);
+
+  it("finds light label areas", async () => {
+    const { findLabelRegions } = await import("./ocr");
+    const regions = await findLabelRegions(await sharp(box).jpeg().toBuffer());
+    expect(regions.some((r) => Math.abs(r.y - 0.5) < 0.05 && Math.abs(r.x - 0.2625) < 0.05)).toBe(true);
+  });
+
+  it("reads a label inside a dark frame when asked to be thorough", async () => {
+    const image = await sharp(box).jpeg({ quality: 90 }).toBuffer();
+    const result = await getTextReader().read(image, { thorough: true });
+    expect(result.text).toMatch(/1990 TOPPS BASEBALL/i);
+    expect(result.text).toMatch(/36 PACKS/i);
+    for (const l of result.lines) {
+      expect(l.box.x + l.box.w).toBeLessThanOrEqual(1.0001);
+      expect(l.box.y + l.box.h).toBeLessThanOrEqual(1.0001);
+    }
+  }, 60000);
+});

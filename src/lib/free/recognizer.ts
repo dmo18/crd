@@ -12,7 +12,7 @@ import {
 } from "@/lib/recognition/types";
 import { findCardBoxes } from "./find-cards";
 import { findKeyCard, keyCardsFor, type KeyCard } from "./key-cards";
-import { getTextReader, type OcrResult, type TextReader } from "./ocr";
+import { getTextReader, type OcrResult, type ReadOptions, type TextReader } from "./ocr";
 import { parseCardText, parseProductText, type ParsedCard } from "./parse";
 import { lookupPlayer, type PlayerFacts } from "./wikidata";
 
@@ -75,9 +75,9 @@ export class FreeRecognizer implements Recognizer {
     }
   }
 
-  private async read(image: Buffer): Promise<OcrResult | null> {
+  private async read(image: Buffer, options?: ReadOptions): Promise<OcrResult | null> {
     try {
-      return await this.reader.read(image);
+      return await this.reader.read(image, options);
     } catch {
       return null;
     }
@@ -191,7 +191,9 @@ export class FreeRecognizer implements Recognizer {
 
     // Confidence comes from how much was read and confirmed, then is held
     // back when the text itself was hard to read.
-    let confidence = key ? 0.9 : 0.1;
+    // Without a key card or a Wikidata match the best possible is 0.7, so it
+    // waits in Review for a quick check.
+    let confidence = key ? 0.9 : 0.05;
     if (!key) {
       if (item.year != null) confidence += 0.2;
       if (item.brand) confidence += 0.2;
@@ -206,7 +208,7 @@ export class FreeRecognizer implements Recognizer {
   }
 
   private async product(photos: RecognitionPhoto[], kind: "sealed" | "bulk"): Promise<RecognizedItem> {
-    const texts = (await Promise.all(photos.map((p) => this.read(p.data)))).filter((t): t is OcrResult => t !== null);
+    const texts = (await Promise.all(photos.map((p) => this.read(p.data, { thorough: true })))).filter((t): t is OcrResult => t !== null);
     const merged: OcrResult = {
       text: texts.map((t) => t.text).join("\n"),
       lines: texts.flatMap((t) => t.lines),
