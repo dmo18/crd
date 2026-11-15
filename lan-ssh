@@ -1,0 +1,47 @@
+#!/bin/bash
+# Lets computers on the server's own local network log in over SSH with a
+# password (for PuTTY). The internet, Coolify's containers and the Cloudflare
+# browser terminal stay key or certificate only.
+#
+#   curl -L github.com/dmo18/crd/raw/main/lan-ssh | sudo bash          turn on
+#   curl -L github.com/dmo18/crd/raw/main/lan-ssh | sudo bash -s off   turn off
+set -euo pipefail
+
+CONF=/etc/ssh/sshd_config.d/00-lan.conf
+die() { printf 'STOPPED: %s\n' "$*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "Run it with sudo: curl -L github.com/dmo18/crd/raw/main/lan-ssh | sudo bash"
+
+reload_ssh() {
+    sshd -t || return 1
+    systemctl try-reload-or-restart ssh.service
+}
+
+# The local network is the one on the network card that leads to the internet.
+iface="$(ip -4 route show default | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1) }' | sed -n 1p)"
+[ -n "$iface" ] || die "Could not find the network card with the internet connection."
+net="$(ip -4 route show dev "$iface" scope link proto kernel | awk '{ print $1 }' | sed -n 1p)"
+[ -n "$net" ] || die "Could not find the local network on $iface."
+[[ $net =~ ^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)[0-9.]+/(1[6-9]|2[0-9]|3[0-2])$ ]] ||
+    die "The local network $net is not a private home or office network, so SSH was not opened."
+
+if [ "${1:-on}" = off ]; then
+    rm -f -- "$CONF"
+    reload_ssh || die "SSH settings check failed. Nothing else changed."
+    ufw delete allow from "$net" to any port 22 proto tcp >/dev/null 2>&1 || true
+    echo "OK: password SSH from $net is off again."
+    exit 0
+fi
+
+printf '# Written by lan-ssh. Remove with: curl -L github.com/dmo18/crd/raw/main/lan-ssh | sudo bash -s off\nMatch Address %s\n    PasswordAuthentication yes\n' "$net" >"$CONF"
+chmod 0644 "$CONF"
+if ! reload_ssh; then
+    rm -f -- "$CONF"
+    die "SSH did not accept the setting, so it was removed again. Nothing changed."
+fi
+if grep -q '^\[ *1\]' <<<"$(ufw status numbered)"; then
+    ufw insert 1 allow from "$net" to any port 22 proto tcp comment 'SSH from the local network' >/dev/null
+else
+    ufw allow from "$net" to any port 22 proto tcp comment 'SSH from the local network' >/dev/null
+fi
+echo "OK: computers on $net can now log in with PuTTY (user and password)."
+echo "The internet and the browser terminal still cannot use a password."
