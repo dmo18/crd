@@ -158,6 +158,7 @@ ADMIN_PASSWORD=""
 SETUP_WINDOW_OPENED=false
 WORKDIR=""
 SUMMARY=()
+CF_TOKEN_CHANGED=false
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -413,6 +414,22 @@ check_token_file() {
     esac
 }
 
+# Save a newly pasted token at once (root-only file), so that if this run
+# stops later for any reason, the next run only needs Enter at this question.
+keep_token_for_rerun() {
+    [ "$DRY_RUN" = false ] || return 0
+    if [ -f "$CF_TOKEN_FILE" ] && [ "$(cat -- "$CF_TOKEN_FILE")" = "$CF_TOKEN" ]; then
+        return 0
+    fi
+    local tmp
+    install -d -m 0700 -o root -g root "$CF_TOKEN_DIR"
+    tmp="$(umask 077 && mktemp "${CF_TOKEN_FILE}.tmp.XXXXXX")"
+    printf '%s\n' "$CF_TOKEN" >"$tmp"
+    mv -f -- "$tmp" "$CF_TOKEN_FILE"
+    CF_TOKEN_CHANGED=true
+    info "Saved on this server, so if you run this again you only press Enter here."
+}
+
 read_tunnel_token() {
     local typed="" tries=0
     if [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
@@ -465,6 +482,7 @@ read_tunnel_token() {
         if token_is_valid "$typed"; then
             CF_TOKEN="$typed"
             ok "Tunnel token accepted (not shown)"
+            keep_token_for_rerun
             return 0
         fi
         warn "That does not look like a tunnel token. It is one long line that starts with eyJ. Try again."
@@ -2057,8 +2075,8 @@ install_cloudflare_key() {
     fi
 }
 
-# Save the token in a file only root can read. Sets CF_TOKEN_CHANGED.
-CF_TOKEN_CHANGED=false
+# Save the token in a file only root can read. Sets CF_TOKEN_CHANGED
+# (also set by keep_token_for_rerun when the token was saved early).
 save_tunnel_token() {
     if [ "$DRY_RUN" = true ]; then
         info "[dry-run] save the tunnel token (not shown) to $CF_TOKEN_FILE, mode 0600, in folder $CF_TOKEN_DIR, mode 0700"
