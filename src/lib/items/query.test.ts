@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { items, locations, type NewItem } from "@/db/schema";
 import { PAGE_SIZE, inventoryFilterSchema, listItems } from "./query";
+import { highlights } from "./stats";
 
 let db: Db;
 let box: number;
@@ -33,8 +34,14 @@ describe("inventoryFilterSchema", () => {
   });
   it("accepts valid values and the first of repeats", () => {
     const f = parse({ q: "  griffey ", kind: ["card", "bulk"], rookie: "1", yearFrom: "1980", yearTo: "2000", location: "none", sort: "player", page: "3", tier: "key" });
-    expect(f).toMatchObject({ q: "griffey", kind: "card", rookie: true, yearFrom: 1980, yearTo: 2000, location: "none", sort: "player", page: 3, tier: "key" });
+    expect(f).toMatchObject({ q: "griffey", kind: "card", rookie: true, yearFrom: 1980, yearTo: 2000, location: "none", sort: "player", page: 3, tier: ["key"] });
     expect(parse({ location: "7" }).location).toBe(7);
+  });
+  it("accepts a comma list of tiers and drops repeats", () => {
+    expect(parse({ tier: "grail,key" }).tier).toEqual(["key", "grail"]);
+    expect(parse({ tier: "key, key" }).tier).toEqual(["key"]);
+    expect(parse({ tier: "key,nope" }).tier).toBeUndefined();
+    expect(parse({ tier: "," }).tier).toBeUndefined();
   });
 });
 
@@ -44,6 +51,10 @@ describe("filters", () => {
   it("sport", () => expect(titles({ sport: "basketball" })).toEqual(["Jordan Fleer"]));
   it("status", () => expect(titles({ status: "confirmed" })).toEqual(["Griffey Rookie"]));
   it("tier", () => expect(titles({ tier: "grail" })).toEqual(["Jordan Fleer"]));
+  it("tier list matches the Key cards count on the dashboard", () => {
+    expect(titles({ tier: "key,grail", sort: "oldest" })).toEqual(["Griffey Rookie", "Jordan Fleer"]);
+    expect(highlights(db).keyCards).toBe(listItems(parse({ tier: "key,grail" }), db).total);
+  });
   it("rookie", () => expect(titles({ rookie: "1" })).toEqual(["Griffey Rookie"]));
   it("year range", () => {
     expect(titles({ yearFrom: "1989", yearTo: "1990", sort: "year_asc" })).toEqual(["Griffey Rookie", "Sealed Box"]);

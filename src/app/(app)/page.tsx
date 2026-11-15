@@ -54,7 +54,7 @@ export default async function Home() {
 
   const tiles = [
     { label: "Rookies", count: hl.rookies, href: "/items?rookie=1" },
-    { label: "Key cards", count: hl.keyCards, href: "/items?tier=key" },
+    { label: "Key cards", count: hl.keyCards, href: "/items?tier=key,grail" },
     { label: "Worth grading", count: hl.worthGrading, href: null },
     { label: "No value yet", count: hl.noValue, href: "/items?value=none" },
   ].filter((t) => t.count > 0);

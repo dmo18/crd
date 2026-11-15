@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, isNull, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { ITEM_KINDS, ITEM_STATUSES, RARITY_TIERS, SPORTS, items, type Item } from "@/db/schema";
@@ -18,7 +18,15 @@ export const inventoryFilterSchema = z.object({
   kind: z.preprocess(first, z.enum(ITEM_KINDS)).optional().catch(undefined),
   sport: z.preprocess(first, z.enum(SPORTS)).optional().catch(undefined),
   status: z.preprocess(first, z.enum(ITEM_STATUSES)).optional().catch(undefined),
-  tier: z.preprocess(first, z.enum(RARITY_TIERS)).optional().catch(undefined),
+  /** One tier or a comma list such as "key,grail". Unknown names make the whole filter "not set". */
+  tier: z.preprocess(
+    (v) => {
+      const one = first(v);
+      return typeof one === "string" ? one.split(",").map((t) => t.trim()).filter(Boolean) : one;
+    },
+    z.array(z.enum(RARITY_TIERS)).min(1).max(RARITY_TIERS.length)
+      .transform((list) => RARITY_TIERS.filter((t) => list.includes(t))),
+  ).optional().catch(undefined),
   rookie: z.preprocess(first, z.literal("1").transform(() => true as const)).optional().catch(undefined),
   yearFrom: intText(1860, 2100).optional().catch(undefined),
   yearTo: intText(1860, 2100).optional().catch(undefined),
@@ -55,7 +63,7 @@ function where(f: InventoryFilters): SQL | undefined {
   if (f.kind) conds.push(eq(items.kind, f.kind));
   if (f.sport) conds.push(eq(items.sport, f.sport));
   if (f.status) conds.push(eq(items.status, f.status));
-  if (f.tier) conds.push(eq(items.rarityTier, f.tier));
+  if (f.tier?.length) conds.push(inArray(items.rarityTier, f.tier));
   if (f.rookie) conds.push(eq(items.isRookie, true));
   if (f.yearFrom != null) conds.push(gte(items.year, f.yearFrom));
   if (f.yearTo != null) conds.push(lte(items.year, f.yearTo));
