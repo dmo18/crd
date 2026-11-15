@@ -2,10 +2,6 @@ import { z } from "zod";
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-function isLocalHost(origin: string): boolean {
-  return URL.canParse(origin) && LOCAL_HOSTS.has(new URL(origin).hostname.toLowerCase());
-}
-
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATA_DIR: z.string().min(1).default("./data"),
@@ -30,6 +26,14 @@ const schema = z.object({
       // Coolify writes the app's internal port (3000) into its generated
       // address; visitors never use it, so it is dropped for https.
       if (url.protocol === "https:" && url.port === "3000") url.port = "";
+      // TLS is terminated in front of the app (Cloudflare or Traefik); the app
+      // never serves plain HTTP to visitors. So in production an http address
+      // that is not this computer is upgraded to https. Coolify behind a
+      // Cloudflare Tunnel generates http:// addresses.
+      if (process.env.NODE_ENV === "production" && url.protocol === "http:" && !LOCAL_HOSTS.has(url.hostname.toLowerCase())) {
+        url.protocol = "https:";
+        if (url.port === "3000" || url.port === "80") url.port = "";
+      }
       return url.origin;
     }, z.string())
     .pipe(z.url({ protocol: /^https?$/ }))
@@ -37,12 +41,19 @@ const schema = z.object({
     .optional(),
   /** How many proxies in front of the app add to X-Forwarded-For (0 to 5). */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
-}).superRefine((v, ctx) => {
-  // http is accepted in production only for this computer itself (a local
-  // test of the built app), where browsers still treat the page as secure.
-  if (v.NODE_ENV === "production" && v.APP_ORIGIN && !v.APP_ORIGIN.startsWith("https://") && !isLocalHost(v.APP_ORIGIN)) {
-    ctx.addIssue({ code: "custom", path: ["APP_ORIGIN"], message: "APP_ORIGIN must start with https:// in production" });
-  }
+  /**
+   * Optional name of a request header that holds the visitor's address, for
+   * example cf-connecting-ip. When set, sign-in limits read ONLY this header
+   * and TRUST_PROXY_HOPS is ignored. Set it only when the server can be reached
+   * solely through the proxy that writes it (for example a Cloudflare Tunnel
+   * with no open ports); otherwise anyone can fake it. Empty means off.
+   */
+  CLIENT_IP_HEADER: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9-]{1,64}$/i, "CLIENT_IP_HEADER must be a header name like cf-connecting-ip")
+    .transform((v) => v.toLowerCase())
+    .optional(),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -53,7 +64,7 @@ let cached: Env | undefined;
 export function env(): Env {
   if (cached) return cached;
   const raw = { ...process.env };
-  for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "APP_ORIGIN", "TRUST_PROXY_HOPS", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE"]) {
+  for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "APP_ORIGIN", "TRUST_PROXY_HOPS", "CLIENT_IP_HEADER", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE"]) {
     if (raw[name]?.trim() === "") delete raw[name];
   }
   const parsed = schema.safeParse(raw);

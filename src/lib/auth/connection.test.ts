@@ -27,6 +27,20 @@ describe("connectionReport", () => {
     });
     expect(connectionReport(behindApache, { hops: 1, appOrigin: "http://cards.example.com" }).appOrigin).toBe("differs");
   });
+  it("treats an http last hop as a match for an https address (TLS ends at Cloudflare)", () => {
+    const tunnel = new Headers({ host: "cards.example.com", "x-forwarded-host": "cards.example.com", "x-forwarded-proto": "http" });
+    expect(connectionReport(tunnel, { hops: 1, appOrigin: "https://cards.example.com" }).appOrigin).toBe("matches");
+  });
+  it("shows CLIENT_IP_HEADER, its value on this visit, and the address used", () => {
+    const h = new Headers({ "cf-connecting-ip": "2001:db8:1:2::9", "x-forwarded-for": "6.6.6.6" });
+    expect(connectionReport(h, { hops: 1, clientIpHeader: "CF-Connecting-IP" })).toMatchObject({
+      clientIpHeader: "cf-connecting-ip", clientIpHeaderValue: "2001:db8:1:2::9", signInIp: "2001:db8:1:2::/64",
+    });
+    expect(connectionReport(h, { hops: 1 })).toMatchObject({ clientIpHeader: null, clientIpHeaderValue: null, signInIp: "6.6.6.6" });
+    expect(connectionReport(new Headers(), { hops: 1, clientIpHeader: "cf-connecting-ip" })).toMatchObject({
+      clientIpHeader: "cf-connecting-ip", clientIpHeaderValue: null, signInIp: "unknown",
+    });
+  });
   it("handles missing headers and cuts very long ones", () => {
     const r = connectionReport(new Headers({ "x-forwarded-for": "1".repeat(1000) }), { hops: 1 });
     expect(r.forwardedFor?.length).toBeLessThan(310);

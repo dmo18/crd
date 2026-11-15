@@ -11,7 +11,7 @@ services:
     environment:
       # Coolify routes the domain set for this service to port 3000 inside it.
       - SERVICE_URL_CARDVAULT_3000
-      # Public address, from the domain set in Coolify. Must be https.
+      # Public address, from the domain set in Coolify. Https, or http when behind a tunnel (upgraded to https).
       - APP_ORIGIN=${SERVICE_URL_CARDVAULT_3000}
       # 64 random letters and digits, made once by Coolify.
       - SESSION_SECRET=${SERVICE_PASSWORD_64_SESSIONSECRET}
@@ -21,6 +21,10 @@ services:
       - OWNER_PASSWORD_HASH_B64=${OWNER_PASSWORD_HASH_B64:-}
       # Coolify's proxy (Traefik) adds the visitor's address as the last entry.
       - TRUST_PROXY_HOPS=1
+      # Empty by default, so a direct deployment stays safe. Set to
+      # cf-connecting-ip only behind a Cloudflare Tunnel with no open ports.
+      # See docs/COOLIFY.md.
+      - CLIENT_IP_HEADER=${CLIENT_IP_HEADER:-}
       - RECOGNITION_MODE=auto
       - DATA_DIR=/data
     volumes:

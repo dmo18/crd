@@ -11,7 +11,7 @@ function withEnv(vars: Record<string, string | undefined>) {
 }
 
 afterEach(() => {
-  for (const k of ["APP_ORIGIN", "TRUST_PROXY_HOPS", "NODE_ENV", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE"]) {
+  for (const k of ["APP_ORIGIN", "TRUST_PROXY_HOPS", "CLIENT_IP_HEADER", "NODE_ENV", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE"]) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
   }
@@ -40,20 +40,43 @@ describe("APP_ORIGIN", () => {
       expect(() => env(), bad).toThrow(/APP_ORIGIN/);
     }
   });
-  it("must be https in production", () => {
+  it("RULE CHANGE: http is upgraded to https in production instead of rejected", () => {
     withEnv({ NODE_ENV: "production", APP_ORIGIN: "http://cards.example.com" });
-    expect(() => env()).toThrow(/https/);
+    expect(env().APP_ORIGIN).toBe("https://cards.example.com");
+    withEnv({ NODE_ENV: "production", APP_ORIGIN: "http://cards.example.com:3000" });
+    expect(env().APP_ORIGIN).toBe("https://cards.example.com");
     withEnv({ NODE_ENV: "production", APP_ORIGIN: "https://cards.example.com" });
     expect(env().APP_ORIGIN).toBe("https://cards.example.com");
+    withEnv({ NODE_ENV: "development", APP_ORIGIN: "http://cards.example.com" });
+    expect(env().APP_ORIGIN).toBe("http://cards.example.com");
   });
-  it("allows http in production only for this computer", () => {
+  it("keeps http in production for this computer only, and upgrades any other host", () => {
     for (const ok of ["http://localhost:3300", "http://127.0.0.1:3300", "http://[::1]:3300"]) {
       withEnv({ NODE_ENV: "production", APP_ORIGIN: ok });
       expect(env().APP_ORIGIN, ok).toBe(ok);
     }
-    for (const bad of ["http://localhost.example.com", "http://127.0.0.2", "http://10.0.0.1:3000"]) {
-      withEnv({ NODE_ENV: "production", APP_ORIGIN: bad });
-      expect(() => env(), bad).toThrow(/https/);
+    for (const [given, upgraded] of [["http://localhost.example.com", "https://localhost.example.com"], ["http://127.0.0.2", "https://127.0.0.2"], ["http://10.0.0.1:3000", "https://10.0.0.1"]]) {
+      withEnv({ NODE_ENV: "production", APP_ORIGIN: given });
+      expect(env().APP_ORIGIN, given).toBe(upgraded);
+    }
+  });
+});
+
+describe("CLIENT_IP_HEADER", () => {
+  it("is optional, and empty means off", () => {
+    withEnv({ CLIENT_IP_HEADER: undefined });
+    expect(env().CLIENT_IP_HEADER).toBeUndefined();
+    withEnv({ CLIENT_IP_HEADER: "  " });
+    expect(env().CLIENT_IP_HEADER).toBeUndefined();
+  });
+  it("accepts a header name and stores it lowercase", () => {
+    withEnv({ CLIENT_IP_HEADER: "CF-Connecting-IP" });
+    expect(env().CLIENT_IP_HEADER).toBe("cf-connecting-ip");
+  });
+  it("rejects anything that is not a plain header name", () => {
+    for (const bad of ["cf connecting ip", "x_real_ip", "a:b", "a".repeat(65), "1.1.1.1,x"]) {
+      withEnv({ CLIENT_IP_HEADER: bad });
+      expect(() => env(), bad).toThrow(/CLIENT_IP_HEADER/);
     }
   });
 });

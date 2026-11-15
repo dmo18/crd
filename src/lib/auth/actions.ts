@@ -32,7 +32,7 @@ function tooMany(attempt: Extract<BeginResult, { ok: false }>): string {
 
 /** Checks the limits and books a failed attempt for this visitor before any secret is checked. */
 async function book(kind: AttemptKind): Promise<BeginResult> {
-  const ip = clientIp(await headers(), env().TRUST_PROXY_HOPS);
+  const ip = clientIp(await headers(), env().TRUST_PROXY_HOPS, env().CLIENT_IP_HEADER);
   return beginAttempt(ip, getDb(), new Date(), kind);
 }
 

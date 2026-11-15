@@ -23,26 +23,83 @@ export const PRUNE_EVERY = 100;
 
 export const MAX_TRUST_PROXY_HOPS = 5;
 
+/** Header names are letters, digits and dashes, stored lowercase. */
+export const CLIENT_IP_HEADER_PATTERN = /^[a-z0-9-]{1,64}$/i;
+
+/** The 8 sixteen-bit groups of an IPv6 address (already checked by isIP), or null. */
+function ipv6Groups(addr: string): number[] | null {
+  if (addr.includes("%")) return null; // zone ids are not visitor addresses
+  let text = addr;
+  const lastColon = text.lastIndexOf(":");
+  const tail = text.slice(lastColon + 1);
+  if (tail.includes(".")) {
+    const parts = tail.split(".").map(Number);
+    if (parts.length !== 4) return null;
+    text = `${text.slice(0, lastColon + 1)}${((parts[0]! << 8) | parts[1]!).toString(16)}:${((parts[2]! << 8) | parts[3]!).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return null;
+  const groups = [...head, ...Array<string>(fill).fill("0"), ...rest].map((g) => parseInt(g, 16));
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
+}
+
+/**
+ * The key used for limits. IPv4 stays as is. An IPv4-mapped IPv6 address
+ * (::ffff:1.2.3.4) is a plain IPv4 visitor. Any other IPv6 address becomes its
+ * /64 network, like "2001:db8:1:2::/64", because one person usually controls a
+ * whole /64 and could otherwise get a fresh address for every try.
+ */
+function limitKey(addr: string): string {
+  const kind = isIP(addr);
+  if (kind === 0) return "unknown";
+  if (kind === 4) return addr;
+  const g = ipv6Groups(addr);
+  if (!g) return "unknown";
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) {
+    return `${g[6]! >> 8}.${g[6]! & 255}.${g[7]! >> 8}.${g[7]! & 255}`;
+  }
+  return `${g.slice(0, 4).map((x) => x.toString(16)).join(":")}::/64`;
+}
+
 /**
  * The address used for sign-in limits.
  *
- * hops = 0: X-Forwarded-For is not trusted at all. Next.js does not expose the
- * socket address separately (it only copies it into X-Forwarded-For when the
- * header is missing, which a visitor could fake), so the answer is "unknown".
+ * headerName set (CLIENT_IP_HEADER): ONLY that header is read, its first
+ * entry, and TRUST_PROXY_HOPS is ignored. Anyone who can reach the server
+ * directly could write that header themselves, so set it only when the server
+ * is reachable solely through the proxy that writes it (for example a
+ * Cloudflare Tunnel with no open ports, header cf-connecting-ip).
+ *
+ * Otherwise, hops = 0: X-Forwarded-For is not trusted at all. Next.js does not
+ * expose the socket address separately (it only copies it into X-Forwarded-For
+ * when the header is missing, which a visitor could fake), so the answer is
+ * "unknown".
  *
  * hops = N: each trusted proxy appends the address it received the request
  * from, so the Nth entry from the right was written by the Nth trusted proxy
  * and is the first one a visitor cannot forge. Anything further left is
  * ignored. The entry must look like an IPv4 or IPv6 address.
+ *
+ * Either way an IPv6 address is returned as its /64 network (see limitKey).
  */
-export function clientIp(headers: Headers, hops: number): string {
+export function clientIp(headers: Headers, hops: number, headerName?: string): string {
+  if (headerName) {
+    if (!CLIENT_IP_HEADER_PATTERN.test(headerName)) return "unknown";
+    const raw = headers.get(headerName.toLowerCase());
+    if (!raw || raw.length > 2000) return "unknown";
+    return limitKey(raw.split(",")[0]!.trim());
+  }
   if (!Number.isInteger(hops) || hops < 1 || hops > MAX_TRUST_PROXY_HOPS) return "unknown";
   const raw = headers.get("x-forwarded-for");
   if (!raw || raw.length > 2000) return "unknown";
   const entries = raw.split(",").map((s) => s.trim());
   const pick = entries[entries.length - hops];
-  if (!pick || isIP(pick) === 0) return "unknown";
-  return pick.toLowerCase();
+  if (!pick) return "unknown";
+  return limitKey(pick);
 }
 
 export type Lock = "short" | "long" | "global";

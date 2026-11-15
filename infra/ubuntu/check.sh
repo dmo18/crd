@@ -30,7 +30,22 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 2
 fi
 
+# direct: this server answers 80/443 itself. cloudflare: everything comes in
+# through the Cloudflare Tunnel and nothing is open to the internet.
+MODE="direct"
+if [ -r /etc/default/docker-port-guard ]; then
+    m="$(sed -n 's/^MODE="\{0,1\}\([a-z]*\)"\{0,1\}[[:space:]]*$/\1/p' /etc/default/docker-port-guard | tail -n 1)"
+    if [ -n "$m" ]; then MODE="$m"; fi
+fi
+readonly CF_METRICS="127.0.0.1:20241"
+readonly CF_TOKEN_FILE="/etc/cloudflared/tunnel-token"
+
 printf '%sServer check, %s%s\n' "$C_BOLD" "$(date '+%Y-%m-%d %H:%M')" "$C_RESET"
+if [ "$MODE" = cloudflare ]; then
+    printf 'Mode: Cloudflare Tunnel (nothing should be open to the internet)\n'
+else
+    printf 'Mode: direct (only web ports 80 and 443 open to the internet)\n'
+fi
 
 # ---------------------------------------------------------------------------
 section "Firewall (ufw)"
@@ -46,13 +61,35 @@ if have ufw; then
     else
         fail "Incoming traffic is not blocked by default"
     fi
-    # Rules that allow traffic from Anywhere, other than web ports.
-    open_rules="$(ufw status 2>/dev/null | awk '/ALLOW/ && /Anywhere/' | grep -vE '^(80|443)(/(tcp|udp))?( \(v6\))?[[:space:]]' || true)"
-    if [ -z "$open_rules" ]; then
-        pass "From the internet only web ports (80, 443) are allowed"
+    if [ "$MODE" = cloudflare ]; then
+        web_rules="$(ufw status 2>/dev/null | awk '/ALLOW/' | grep -E '^(80|443)(/(tcp|udp))?( \(v6\))?[[:space:]]' || true)"
+        if [ -z "$web_rules" ]; then
+            pass "No web ports (80, 443) are open in the firewall"
+        else
+            fail "The firewall still lets the internet reach web ports. Fix: sudo bash bootstrap.sh --cloudflare <dashboard-address>"
+            while IFS= read -r line; do note "$line"; done <<<"$web_rules"
+        fi
+        open_rules="$(ufw status 2>/dev/null | awk '/ALLOW/ && /Anywhere/' || true)"
+        if [ -z "$open_rules" ]; then
+            pass "Nothing from the internet is allowed in"
+        else
+            warn "These firewall rules allow traffic from anywhere:"
+            while IFS= read -r line; do note "$line"; done <<<"$open_rules"
+        fi
+        if iptables -w -S ufw-before-input 2>/dev/null | grep -qx -- '-A ufw-before-input -i lo -j ACCEPT'; then
+            pass "This server may connect to itself (the tunnel needs that)"
+        else
+            fail "The firewall blocks this server's own connections (loopback), so the tunnel cannot reach Coolify"
+        fi
     else
-        warn "These firewall rules allow more than web traffic from anywhere:"
-        while IFS= read -r line; do note "$line"; done <<<"$open_rules"
+        # Rules that allow traffic from Anywhere, other than web ports.
+        open_rules="$(ufw status 2>/dev/null | awk '/ALLOW/ && /Anywhere/' | grep -vE '^(80|443)(/(tcp|udp))?( \(v6\))?[[:space:]]' || true)"
+        if [ -z "$open_rules" ]; then
+            pass "From the internet only web ports (80, 443) are allowed"
+        else
+            warn "These firewall rules allow more than web traffic from anywhere:"
+            while IFS= read -r line; do note "$line"; done <<<"$open_rules"
+        fi
     fi
     if ufw status 2>/dev/null | grep -qE '^22(/tcp)? on [^ ]+ +DENY'; then
         pass "SSH (22) is refused on the internet network card"
@@ -79,6 +116,13 @@ if have iptables && iptables -w -S PORT-GUARD >/dev/null 2>&1; then
     fi
     allowed="$(iptables -w -S PORT-GUARD | sed -n 's/.*-p \([a-z]*\) .*--ctorigdstport \([0-9]*\) .*/\2\/\1/p' | tr '\n' ' ')"
     note "Ports open to the internet for containers: ${allowed:-none}"
+    if [ "$MODE" = cloudflare ]; then
+        if [ -z "${allowed// /}" ]; then
+            pass "No container port is open to the internet (Cloudflare mode)"
+        else
+            warn "In Cloudflare mode no container port should be open, but these are: $allowed (see EXTRA_ALLOWED in /etc/default/docker-port-guard)"
+        fi
+    fi
     if [[ " $allowed " == *" 8000/tcp "* ]]; then
         if [ -r /run/docker-port-guard/setup-window-until ]; then
             until="$(cat /run/docker-port-guard/setup-window-until)"
@@ -108,15 +152,32 @@ fi
 # ---------------------------------------------------------------------------
 section "Listening ports (programs waiting for connections)"
 if have ss; then
+    unexpected=""
     while read -r proto _ _ _ local_addr _ process; do
         name="$(sed -n 's/.*(("\([^"]*\)".*/\1/p' <<<"$process")"
         case "$local_addr" in
             127.* | \[::1\]:* | \[::ffff:127.*) where="this server only" ;;
-            *) where="all networks" ;;
+            *)
+                where="all networks"
+                if [ "$proto" = tcp ]; then
+                    case "${name:-?}:${local_addr##*:}" in
+                        docker-proxy:*) where="all networks, container port (port guard)" ;;
+                        sshd:22 | systemd:22) where="all networks, SSH (firewall: Docker networks only)" ;;
+                        *) unexpected="$unexpected ${local_addr}(${name:-?})" ;;
+                    esac
+                fi
+                ;;
         esac
         note "$(printf '%-4s %-28s %-18s %s' "$proto" "$local_addr" "${name:-?}" "$where")"
     done < <(ss -H -tulpn 2>/dev/null)
     note "Ports on 'all networks' are still filtered by the firewall and the port guard above."
+    if [ "$MODE" = cloudflare ]; then
+        if [ -z "$unexpected" ]; then
+            pass "No program listens on a public address except Docker's (blocked by the port guard) and SSH (firewalled)"
+        else
+            warn "These programs listen on a public address (the firewall still blocks them):$unexpected"
+        fi
+    fi
 else
     warn "Cannot list ports (ss missing)"
 fi
@@ -130,6 +191,25 @@ if have sshd; then
     else
         val() { awk -v k="$1" '$1 == k { print $2; exit }' <<<"$sshd_out"; }
         if [ "$(val passwordauthentication)" = "no" ]; then pass "Password login over SSH is off"; else fail "Password login over SSH is ON"; fi
+        if [ "$MODE" = cloudflare ]; then
+            # Password login only for connections from this server (Cloudflare's
+            # browser SSH terminal arrives through the tunnel from 127.0.0.1 or ::1).
+            match_val() { sshd -T -C "addr=$1,user=$2,host=localhost,laddr=127.0.0.1,lport=22" 2>/dev/null | awk -v k="$3" '$1 == k { print $2; exit }'; }
+            if [ "$(match_val 127.0.0.1 check passwordauthentication)" = yes ] && [ "$(match_val ::1 check passwordauthentication)" = yes ]; then
+                pass "Password login allowed for the browser SSH terminal through the tunnel"
+            else
+                warn "Password login through the tunnel is off: Cloudflare's browser SSH terminal can then only use a key"
+            fi
+            if [ "$(match_val 203.0.113.9 check passwordauthentication)" = no ]; then
+                pass "Password login refused for any other address"
+            else
+                fail "Password login is allowed from other addresses"
+            fi
+            case "$(match_val 127.0.0.1 root permitrootlogin)" in
+                without-password | prohibit-password | no) pass "Root may not log in with a password, even through the tunnel" ;;
+                *) fail "Root may log in with a password through the tunnel" ;;
+            esac
+        fi
         if [ "$(val kbdinteractiveauthentication)" = "no" ]; then pass "Keyboard-interactive login is off"; else fail "Keyboard-interactive login is ON"; fi
         case "$(val permitrootlogin)" in
             without-password | prohibit-password) pass "Root may log in only with a key (Coolify uses this)" ;;
@@ -144,7 +224,66 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-section "Automatic security updates"
+if [ "$MODE" = cloudflare ]; then
+    section "Cloudflare Tunnel (cloudflared)"
+    if systemctl is-active --quiet cloudflared.service 2>/dev/null; then
+        pass "cloudflared is running"
+    else
+        fail "cloudflared is not running ($(systemctl is-active cloudflared.service 2>/dev/null)). See: sudo journalctl -u cloudflared -n 50"
+    fi
+    if systemctl is-enabled --quiet cloudflared.service 2>/dev/null; then
+        pass "cloudflared starts automatically at boot"
+    else
+        fail "cloudflared does not start at boot. Fix: sudo systemctl enable --now cloudflared"
+    fi
+    # "cloudflared tunnel info" needs a Cloudflare login on the server, which this
+    # setup does not have; cloudflared's local ready page reports the connections.
+    ready="$(curl -fsS --max-time 3 "http://$CF_METRICS/ready" 2>/dev/null || true)"
+    conns="$(sed -n 's/.*"readyConnections":\([0-9]*\).*/\1/p' <<<"$ready")"
+    if [ "${conns:-0}" -gt 0 ]; then
+        pass "Tunnel connected to Cloudflare ($conns connections)"
+    else
+        inv="$(systemctl show -p InvocationID --value cloudflared.service 2>/dev/null || true)"
+        registered=0
+        if [ -n "$inv" ]; then
+            registered="$(journalctl -q --no-pager -o cat "_SYSTEMD_INVOCATION_ID=$inv" 2>/dev/null | grep -c 'Registered tunnel connection' || true)"
+        fi
+        if [ "${registered:-0}" -gt 0 ]; then
+            warn "The ready page does not answer, but the log shows $registered tunnel connections since cloudflared started"
+        else
+            fail "The tunnel is not connected to Cloudflare. Check the token and see: sudo journalctl -u cloudflared -n 50"
+        fi
+    fi
+    if [ -f "$CF_TOKEN_FILE" ]; then
+        perm="$(stat -c '%a %U %G' "$CF_TOKEN_FILE" 2>/dev/null)"
+        dperm="$(stat -c '%a %U' "$(dirname "$CF_TOKEN_FILE")" 2>/dev/null)"
+        if [ "$perm" = "600 root root" ] && [ "$dperm" = "700 root" ]; then
+            pass "Tunnel token is readable only by root"
+        else
+            fail "Tunnel token file permissions are $perm (folder $dperm). Fix: sudo chmod 700 $(dirname "$CF_TOKEN_FILE") && sudo chmod 600 $CF_TOKEN_FILE"
+        fi
+    else
+        fail "Tunnel token file $CF_TOKEN_FILE is missing"
+    fi
+    if systemctl cat cloudflared.service 2>/dev/null | grep -qE -- '--token[ =]|TUNNEL_TOKEN=|eyJ'; then
+        fail "The cloudflared service settings contain the token itself, which other users can read"
+    else
+        pass "The token is not in the service settings"
+    fi
+    if apt-cache policy cloudflared 2>/dev/null | grep -q 'pkg.cloudflare.com/cloudflared'; then
+        pass "cloudflared comes from Cloudflare's signed package repository"
+    else
+        warn "cloudflared is not installed from Cloudflare's package repository"
+    fi
+    if apt-config dump 2>/dev/null | grep -q 'origin=cloudflared'; then
+        pass "cloudflared updates are installed automatically"
+    else
+        warn "cloudflared is not part of the automatic updates"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+section "Automatic updates"
 if systemctl is-enabled --quiet unattended-upgrades.service 2>/dev/null; then
     pass "Automatic updates service is on"
 else
@@ -162,8 +301,70 @@ if grep -q '^Unattended-Upgrade::Automatic-Reboot "true";' <<<"$apt_dump"; then
 else
     warn "No automatic restart after updates that need one"
 fi
+for timer in apt-daily.timer apt-daily-upgrade.timer; do
+    if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+        pass "$timer is on (next: $(systemctl show -p NextElapseUSecRealtime --value "$timer" 2>/dev/null || echo unknown))"
+    else
+        fail "$timer is off. Fix: sudo systemctl enable --now $timer"
+    fi
+done
+for origin in '-security' '-updates' 'origin=Docker,label=Docker CE'; do
+    if grep -qF -- "$origin" <<<"$(apt-config dump 2>/dev/null | grep -E '^Unattended-Upgrade::(Allowed-Origins|Origins-Pattern)')"; then
+        pass "Automatic updates include: $origin"
+    else
+        warn "Automatic updates do not include: $origin (run bootstrap.sh again)"
+    fi
+done
+uu_log="/var/log/unattended-upgrades/unattended-upgrades.log"
+if [ -s "$uu_log" ]; then
+    last_run="$(grep -m1 -o '^[0-9-]* [0-9:]*' <(tac "$uu_log" | grep 'Starting unattended upgrades script') 2>/dev/null || true)"
+    note "Last automatic update run: ${last_run:-not found in $uu_log}"
+else
+    last_run=""
+    warn "Automatic updates have not run yet (no $uu_log)"
+fi
+upgradable="$(apt list --upgradable 2>/dev/null | grep -v '^Listing' || true)"
+pending="$(grep -c . <<<"$upgradable" || true)"
+[ -z "$upgradable" ] && pending=0
+sec_pkgs="$(grep -- '-security' <<<"$upgradable" | cut -d/ -f1 | tr '\n' ' ' || true)"
+note "Updates waiting: $pending (security: $(wc -w <<<"$sec_pkgs" | tr -d ' '))"
+# A security update older than 3 days is one the daily run should have installed:
+# it is in a run's "to upgrade" or "kept back" list from more than 3 days ago, or
+# automatic updates have not run for 3 days.
+if [ -n "${sec_pkgs// /}" ]; then
+    cutoff="$(date -d '3 days ago' '+%Y-%m-%d %H:%M:%S')"
+    old=""
+    for pkg in $sec_pkgs; do
+        first="$(zcat -f "$uu_log"* 2>/dev/null | grep -E "(Packages that will be upgraded|kept back)" | grep -E "[: ]${pkg}( |$)" | cut -c1-19 | sort | head -n 1)"
+        if [ -n "$first" ] && [[ $first < $cutoff ]]; then old="$old $pkg"; fi
+    done
+    if [ -n "$old" ]; then
+        warn "Security updates waiting for more than 3 days:$old. See: sudo cat $uu_log"
+    elif [ -z "$last_run" ] || [[ $last_run < $cutoff ]]; then
+        warn "Security updates are waiting and automatic updates have not run for 3 days: $sec_pkgs"
+    else
+        pass "Waiting security updates are new; the next daily run installs them"
+    fi
+else
+    pass "No security updates waiting"
+fi
+for pkg in docker-ce cloudflared; do
+    pol="$(apt-cache policy "$pkg" 2>/dev/null)"
+    inst="$(awk '/Installed:/ {print $2; exit}' <<<"$pol")"
+    cand="$(awk '/Candidate:/ {print $2; exit}' <<<"$pol")"
+    if [ -z "$inst" ] || [ "$inst" = "(none)" ]; then
+        if [ "$pkg" = cloudflared ] && [ "$MODE" != cloudflare ]; then continue; fi
+        note "$pkg: not installed"
+    elif [ "$inst" = "$cand" ]; then
+        pass "$pkg $inst is the newest version"
+    else
+        note "$pkg: installed $inst, newest $cand (installs with the next daily run)"
+    fi
+done
 if [ -f /var/run/reboot-required ]; then
-    warn "A restart is waiting (it will happen at the planned time)"
+    warn "A restart is waiting (it will happen at the planned time, 04:30)"
+else
+    pass "No restart needed"
 fi
 
 # ---------------------------------------------------------------------------

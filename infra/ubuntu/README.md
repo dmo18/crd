@@ -4,9 +4,19 @@ Two scripts for the Ubuntu 24.04 LTS server that runs Coolify and, through it,
 Card Vault. The server has its own internet address and no firewall in front of
 it, so these scripts build the protection on the server itself.
 
+There are two ways to run it:
+
+| Mode | Command | What reaches the server from the internet |
+| --- | --- | --- |
+| Direct | `sudo bash bootstrap.sh admin.example.com you@example.com` | Only 80/443 (websites). The server answers them itself. |
+| Cloudflare Tunnel | `sudo bash bootstrap.sh --cloudflare admin.example.com you@example.com` | Nothing. A program on the server (cloudflared) connects out to Cloudflare, and visitors and you come in through that connection. See [Cloudflare mode](#cloudflare-mode). |
+
+The script remembers the mode. To change it later, run it again with
+`--cloudflare` or `--direct`.
+
 | File | What it does |
 | --- | --- |
-| `bootstrap.sh` | One-time setup (safe to run again): updates, automatic security updates, swap, SSH lockdown, firewall, container port block, fail2ban, Coolify. |
+| `bootstrap.sh` | One-time setup (safe to run again): updates, automatic updates, swap, SSH lockdown, firewall, container port block, fail2ban, Cloudflare Tunnel (Cloudflare mode), Coolify. |
 | `check.sh` | Read-only check you can run any time. Prints PASS, WARN or FAIL lines. Changes nothing. |
 
 ## Before you start
@@ -61,14 +71,140 @@ can claim the dashboard during those minutes.
 
 Ran out of time? Open the window again: `sudo docker-port-guard open-setup 30`
 
+## Cloudflare mode
+
+Visitors go to Cloudflare, and Cloudflare passes them through the tunnel to
+this server. You reach the Coolify dashboard and a terminal (SSH in the browser)
+the same way, after signing in to Cloudflare Access. No port is open on the
+server at all, not even 22, 80 or 443. No Cloudflare password or API key is
+stored on the server, only the tunnel token.
+
+### 1. Create the tunnel (Cloudflare dashboard)
+
+Your domain must use Cloudflare for its DNS.
+
+1. Cloudflare dashboard, **Zero Trust**, **Networks**, **Tunnels**,
+   **Create a tunnel**, type **Cloudflared**, give it a name.
+2. On the "install connector" page Cloudflare shows a command with a long
+   token in it (starts with `eyJ`). Copy only the token. Do not run the
+   command; the script installs cloudflared itself.
+
+### 2. Run the script (Hyper-V console)
+
+```
+curl -fsSL https://raw.githubusercontent.com/dmo18/crd/main/infra/ubuntu/bootstrap.sh -o bootstrap.sh && sudo bash bootstrap.sh --cloudflare admin.example.com you@example.com
+```
+
+When it asks for the token, paste it (Clipboard, Type clipboard text) and press
+Enter. What you type stays hidden. Never put the token on the command line:
+other programs and the shell history could see it. For a run without a
+console, put it in the environment variable `CF_TUNNEL_TOKEN` instead. When
+you run the script again it offers to keep the token it already has.
+
+The token is saved in `/etc/cloudflared/tunnel-token`, readable only by root.
+At the end the script prints the Coolify login (email and a random password).
+
+### 3. Tunnel routes (Cloudflare dashboard)
+
+Your tunnel, **Routes** (older dashboards: **Public Hostname**), **Add route**,
+**Published application**. Add these rows **in this order** (Cloudflare checks
+them from top to bottom and uses the first that matches). `example.com` is your
+domain.
+
+| # | Subdomain | Domain | Path | Service |
+| --- | --- | --- | --- | --- |
+| 1 | `admin` | `example.com` | `^/app/` | HTTP, `127.0.0.1:6001` (live updates) |
+| 2 | `admin` | `example.com` | `^/terminal/ws` | HTTP, `127.0.0.1:6002` (Coolify's terminal) |
+| 3 | `admin` | `example.com` | (empty) | HTTP, `127.0.0.1:8000` (Coolify dashboard) |
+| 4 | `ssh` | `example.com` | (empty) | SSH, `127.0.0.1:22` (terminal in the browser) |
+| 5 | `*` | `example.com` | (empty) | HTTP, `127.0.0.1:80` (all apps, through Coolify's proxy) |
+
+Notes:
+
+- The path is a pattern: `^/app/` means "starts with /app/". Plain `app`
+  would also catch dashboard pages such as `/project/.../application/...`.
+- Coolify's and Cloudflare's guides write `localhost`; `127.0.0.1` is the
+  same server but avoids a known problem where `localhost` means the IPv6
+  address and Coolify's ports do not answer there (Coolify's guide gives this
+  as the fix).
+- This order was checked with cloudflared's own rule matcher
+  (`cloudflared tunnel ingress rule`): `/app/...` goes to 6001,
+  `/terminal/ws` to 6002, every other dashboard page to 8000, other names to 80.
+- Row 5 covers every future app (`cards.example.com`, `newapp.example.com`,
+  ...). Cloudflare creates the DNS records for the rows. If a record with the
+  same name already exists (for example an old A record), delete it first.
+- Coolify's newest guide also allows a single row `admin` to `localhost:80`
+  once the dashboard URL is set (step 5). Rows 1 to 3 work from the very first
+  login and do not depend on Coolify's proxy, so keep them.
+
+### 4. Keep it private (Cloudflare Access)
+
+**Zero Trust**, **Access**, **Applications**, **Add an application**,
+**Self-hosted**. For each, add a policy: Action **Allow**, Include **Emails**,
+your email address.
+
+| Application | Address | Extra setting |
+| --- | --- | --- |
+| Coolify | `admin.example.com` | |
+| Server terminal | `ssh.example.com` | Browser rendering: **SSH** |
+| All apps | `*.example.com` | New apps are then private until you decide otherwise |
+
+To make one app public (for example Card Vault, which has its own password),
+add an application for just that address (`cards.example.com`) with a
+**Bypass** policy for **Everyone**.
+
+### 5. First login and Coolify settings (browser)
+
+1. Open `https://admin.example.com`, sign in to Cloudflare Access, then log in
+   to Coolify with the email and password the script printed (also in
+   `sudo cat /root/coolify-first-login.txt`).
+2. Change the password at once, then turn on two-factor login (Profile).
+3. Follow the welcome steps and choose **This Machine** (localhost).
+4. **Settings**, **General**: URL `https://admin.example.com`, and
+   **Redirect HTTP to HTTPS**: **Disabled**. Save.
+5. Delete the saved password: `sudo rm /root/coolify-first-login.txt`
+
+**Every app behind the tunnel:** give it its domain with `https://`, for
+example `https://cards.example.com` (for Card Vault `https://cards.example.com:3000`,
+see `docs/SERVER.md`), and on the app's **Domains** page set **Redirect HTTP
+to HTTPS** to **Disabled**. Cloudflare does HTTPS for visitors; the last step
+from the tunnel to Coolify's proxy is plain HTTP on this server, so the
+redirect would loop (TOO_MANY_REDIRECTS). Card Vault also needs
+`CLIENT_IP_HEADER=cf-connecting-ip` (see `docs/COOLIFY.md`).
+
+Sources: Coolify's tunnel guides
+(https://coolify.io/docs/integrations/networking/cloudflare/tunnels/all-resource,
+.../single-resource, .../server-ssh), Coolify's instance settings
+(https://coolify.io/docs/core/instance-management/instance-settings), and
+Cloudflare's browser SSH guide
+(https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/use-cases/ssh/ssh-browser-rendering/).
+The live update and terminal addresses (rows 1 and 2) follow from Coolify's
+own code: on `https://admin...` the browser opens `wss://admin.../app/...` and
+`wss://admin.../terminal/ws`.
+
+### 6. SSH in the browser
+
+Open `https://ssh.example.com`, sign in to Cloudflare Access, then log in with
+your Ubuntu user name and password (the user created when installing Ubuntu).
+Password login is allowed only for these tunnel connections, which arrive from
+the server itself (127.0.0.1); from anywhere else SSH stays key only, and root
+can never log in with a password. The Hyper-V console keeps working as always.
+
 ## Check the server
 
 Get `check.sh` onto the server the same way as `bootstrap.sh`, then run
 `sudo bash check.sh`. It checks the firewall, the container port block, open
-ports, SSH settings, automatic updates, fail2ban, disk, memory and the Coolify
-containers. Anything marked FAIL comes with the command that fixes it.
+ports, SSH settings, the Cloudflare Tunnel (Cloudflare mode), automatic
+updates, fail2ban, disk, memory and the Coolify containers. Anything marked FAIL comes with the command that fixes it.
 
 ## What is open to the internet
+
+**Cloudflare mode:** nothing. 22, 80, 443, 8000, 6001, 6002 and every other
+port are closed to the internet, for programs on the server (ufw) and for
+containers (docker-port-guard). Everything arrives through the tunnel, which
+connects out from the server; Cloudflare Access decides who gets through.
+
+**Direct mode:**
 
 | Port | Open? | Why |
 | --- | --- | --- |
@@ -92,8 +228,29 @@ never blocks it), then run only what you need:
 | Remove the container port block for good | `sudo systemctl disable --now docker-port-guard` then the two lines above |
 | An address was banned by fail2ban | `sudo fail2ban-client unban --all` |
 | Allow SSH passwords again | `sudo rm /etc/ssh/sshd_config.d/01-server-hardening.conf && sudo systemctl restart ssh` |
+| Cloudflare mode: the tunnel is down | `sudo systemctl restart cloudflared`, then `sudo journalctl -u cloudflared -n 50` |
+| Cloudflare mode: new tunnel token | `sudo bash bootstrap.sh --cloudflare admin.example.com` and paste the new token |
+| Cloudflare mode: reach the dashboard without Cloudflare | `sudo docker-port-guard open-setup 30`, then `http://<server address>:8000` (30 minutes) |
 
 To put everything back, run `bootstrap.sh` again.
+
+## Staying up to date
+
+Everything updates itself to the latest released version:
+
+| What | How | When |
+| --- | --- | --- |
+| Ubuntu (security and regular updates) | unattended-upgrades | daily (apt-daily and apt-daily-upgrade timers) |
+| Docker (docker-ce, containerd.io, compose and buildx plugins) | unattended-upgrades, from Docker's repository that Coolify's installer adds | daily |
+| cloudflared (Cloudflare mode) | unattended-upgrades, from Cloudflare's signed repository (its own updater is off) | daily |
+| Coolify | Coolify's own auto update (Settings) | as Coolify sets it |
+| Restart of the server | only when an update needs one | 04:30 server time |
+
+A Docker update restarts Docker for a moment. Coolify's containers and the apps
+it deploys have restart policies, so they start again by themselves.
+`sudo bash check.sh` shows the waiting updates, when updates last ran, the
+installed and newest versions of docker-ce and cloudflared, whether a restart
+is waiting, and warns if a security update has been waiting for more than 3 days.
 
 ## Opening another port to the internet
 
@@ -159,9 +316,33 @@ trusting Coolify's publisher, which is the path Coolify documents
 updates rely on. The installer also installs Docker from Docker's official
 script.
 
+**Cloudflare mode details**
+
+- cloudflared comes from Cloudflare's apt repository
+  (https://pkg.cloudflare.com/). The script checks the signing key's
+  fingerprint (`CC94 B39C 77AE 7342 A68B 8962 8A68 2D30 8D4E 5E73`) before
+  trusting it, and stops if Cloudflare ever changes the key.
+- The tunnel token is base64 of `{"a": account, "t": tunnel id, "s": secret}`
+  (see `TunnelToken` in cloudflared's source); the script checks that shape.
+  It lives in `/etc/cloudflared/tunnel-token` (folder 0700, file 0600, root).
+  The service starts `cloudflared tunnel run --token-file ...`, so the token is
+  never in the service file, a command line, the environment or the log.
+  The service runs as root only to read that file, with every root power
+  (capability) dropped and the system read-only for it. cloudflared's own
+  updater is off (`--no-autoupdate`); apt updates it.
+- cloudflared's ready page is on `127.0.0.1:20241/ready` (this server only);
+  `check.sh` reads the number of tunnel connections there.
+  `cloudflared tunnel info` is not used: it needs a Cloudflare login on the server.
+- Traffic from cloudflared to Coolify (`localhost:80`, `:8000`, `:6001`,
+  `:6002`) starts on the server itself, so the container port block, which
+  only looks at traffic coming in from outside, does not get in its way.
+- fail2ban keeps watching SSH. Tunnel logins arrive from 127.0.0.1, which
+  fail2ban never bans (that would lock you out of the browser terminal too);
+  Cloudflare Access in front is what keeps strangers away from that login.
+
 **Other choices**
 
-- Automatic security updates restart the server at 04:30 server time (UTC
+- Automatic updates restart the server at 04:30 server time (UTC
   unless changed), only when an update needs a restart. Containers come back by
   themselves.
 - fail2ban watches SSH even though SSH is closed to the internet. Docker's
@@ -181,4 +362,7 @@ script.
 `/etc/systemd/system/docker-port-guard.service`,
 `/etc/systemd/system/docker.service.d/50-docker-port-guard.conf`,
 `/root/coolify-first-login.txt` (delete after first login), plus ufw rules and
-everything Coolify installs under `/data/coolify`.
+everything Coolify installs under `/data/coolify`. Cloudflare mode adds
+`/usr/share/keyrings/cloudflare-main.gpg`, `/etc/apt/sources.list.d/cloudflared.list`,
+`/etc/apt/apt.conf.d/53unattended-upgrades-cloudflared`,
+`/etc/cloudflared/tunnel-token` and `/etc/systemd/system/cloudflared.service`.
