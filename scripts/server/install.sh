@@ -80,9 +80,10 @@ NODE_ENV=production
 DATA_DIR=$SHARED/data
 PORT=3210
 APP_ORIGIN=$APP_ORIGIN_ARG
-# How many proxies in front of the app add to X-Forwarded-For. Check
-# More, Connection check after signing in, and adjust if needed.
-TRUST_PROXY_HOPS=1
+# Which X-Forwarded-For entry (counted from the right) is your visitor.
+# On Cloudways, Nginx adds the visitor and Apache adds one more entry, so 2.
+# Check More, Connection check after signing in.
+TRUST_PROXY_HOPS=2
 SESSION_SECRET=$secret
 OWNER_PASSWORD_HASH_B64=$hash_b64
 RECOGNITION_MODE=auto
