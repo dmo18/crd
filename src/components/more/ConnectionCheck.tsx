@@ -14,12 +14,12 @@ function Row({ label, value }: { label: string; value: string | null }) {
 
 /**
  * Owner only (the More page calls requireOwner first). Shows what the app
- * sees about this visit, to set TRUST_PROXY_HOPS and APP_ORIGIN correctly.
+ * sees about this visit, to set CLIENT_IP_HEADER, TRUST_PROXY_HOPS and APP_ORIGIN correctly.
  * All values are plain text; React escapes them.
  */
 export async function ConnectionCheck() {
   const e = env();
-  const r = connectionReport(await headers(), { hops: e.TRUST_PROXY_HOPS, appOrigin: e.APP_ORIGIN });
+  const r = connectionReport(await headers(), { hops: e.TRUST_PROXY_HOPS, appOrigin: e.APP_ORIGIN, clientIpHeader: e.CLIENT_IP_HEADER });
   const origin =
     r.appOrigin === "not_set"
       ? "Not set"
@@ -33,6 +33,8 @@ export async function ConnectionCheck() {
       <p className="text-sm text-muted">What this server sees about your visit. Useful when setting up hosting.</p>
       <dl className="flex flex-col gap-2">
         <Row label="IP used for sign-in limits" value={r.signInIp} />
+        <Row label="Visitor address header (CLIENT_IP_HEADER)" value={r.clientIpHeader ?? "Not set"} />
+        {r.clientIpHeader ? <Row label={`Value of ${r.clientIpHeader} on this visit`} value={r.clientIpHeaderValue} /> : null}
         <Row label="Trusted proxy hops (TRUST_PROXY_HOPS)" value={String(r.hops)} />
         <Row label="Forwarded for chain (X-Forwarded-For)" value={r.forwardedFor} />
         <Row label="Forwarded host (X-Forwarded-Host)" value={r.forwardedHost} />
@@ -41,7 +43,7 @@ export async function ConnectionCheck() {
         <Row label="Public address (APP_ORIGIN)" value={origin} />
       </dl>
       <Notice tone={r.appOrigin === "differs" || r.signInIp === "unknown" ? "warn" : "neutral"}>
-        If &apos;IP used for sign-in limits&apos; is not your phone&apos;s internet address, change TRUST_PROXY_HOPS.
+        If &apos;IP used for sign-in limits&apos; is not your phone&apos;s internet address, change CLIENT_IP_HEADER or TRUST_PROXY_HOPS. IPv6 addresses are grouped by their /64 network.
       </Notice>
     </Card>
   );

@@ -22,9 +22,9 @@ Coolify web dashboard. No terminal is needed.
 3. Domains: for the service `cardvault`, enter
    `https://cards.example.com:3000` (your own address). The `:3000` only tells
    Coolify which port inside the container gets the visits; people still use
-   the normal address without a port. It must start with `https://`: the
-   app refuses to start in production with an `http://` address (sign-in
-   cookies are HTTPS only).
+   the normal address without a port. Use `https://`. An `http://` address is
+   accepted only behind a Cloudflare Tunnel (see below); the app upgrades it
+   to `https://` because sign-in cookies are HTTPS only.
 4. Deploy. Wait for the deployment log to finish and the app to show healthy.
 
 ## Settings Coolify makes by itself
@@ -43,6 +43,7 @@ Syntax confirmed on https://coolify.io/docs/knowledge-base/docker/compose
 | `SETUP_CODE` | `${SERVICE_PASSWORD_SETUPCODE}` | 32 random letters and digits |
 | `OWNER_PASSWORD_HASH_B64` | `${OWNER_PASSWORD_HASH_B64:-}` | Empty unless you want the old way |
 | `TRUST_PROXY_HOPS` | `1` | See "Visitor address" below |
+| `CLIENT_IP_HEADER` | `${CLIENT_IP_HEADER:-}` | Empty unless behind a Cloudflare Tunnel |
 | `RECOGNITION_MODE` | `auto` | Free card reading, no keys |
 
 Per the docs, the part after the type and size must be one word with no
@@ -102,6 +103,23 @@ should be the phone's internet address. If it shows an address like
 `172.x.x.x` or `10.x.x.x`, the server's firewall or Docker is hiding real
 addresses; if a CDN such as Cloudflare is put in front, use 2.
 
+## Behind a Cloudflare Tunnel
+
+Use this when the server has no open ports and visitors arrive only through a
+Cloudflare Tunnel. Cloudflare puts the visitor's address in `CF-Connecting-IP`;
+`X-Forwarded-For` then holds only the tunnel program, so it is no use.
+
+1. In Coolify, app, Environment Variables, add `CLIENT_IP_HEADER` with the
+   value `cf-connecting-ip`. Only do this when nothing can reach the server
+   except through the tunnel, because otherwise anyone could fake the header.
+2. Set the domain with `http://cards.example.com:3000` (Cloudflare handles
+   HTTPS). The app turns the generated `http://` address into `https://`
+   for `APP_ORIGIN` by itself.
+3. Deploy, then check More, Connection check: "IP used for sign-in limits"
+   should be your phone's internet address (for IPv6, its /64 network, like
+   `2001:db8:1:2::/64`). `TRUST_PROXY_HOPS` is ignored while
+   `CLIENT_IP_HEADER` is set.
+
 ## Data and backups
 
 All data (database and photos) lives in the volume `cardvault-data`, mounted
@@ -134,8 +152,8 @@ then the files from the archive put back into `/data`.
 ## Tested locally (Docker 29.9.2)
 
 Built the image, ran it with a named volume on port 3300, `APP_ORIGIN`
-`http://localhost:3300` (production accepts `http://` only for localhost,
-127.0.0.1 and [::1]). Health 200 within 1 second, process uid 1001, setup and
+`http://localhost:3300` (production keeps `http://` only for localhost,
+127.0.0.1 and [::1]; other hosts are upgraded to `https://`). Health 200 within 1 second, process uid 1001, setup and
 sign-in through a real browser, `/setup` 404 afterwards, a free scan read
 "1990 Topps #414 Frank Thomas" in 2.9 seconds, data kept across restart and
 across a rebuilt image, a password change signed out the second browser,

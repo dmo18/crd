@@ -8,6 +8,10 @@ export type ConnectionReport = {
   forwardedProto: string | null;
   host: string | null;
   hops: number;
+  /** CLIENT_IP_HEADER as configured (lowercase), or null when off. */
+  clientIpHeader: string | null;
+  /** What that header held on this visit, or null when off or missing. */
+  clientIpHeaderValue: string | null;
   signInIp: string;
   appOrigin: "not_set" | "matches" | "differs";
   /** The public host this visit used, for the "differs" message. */
@@ -24,7 +28,7 @@ function shown(headers: Headers, name: string): string | null {
  * What the app sees about this visit, for the owner's connection check.
  * Pure, for tests. Values are shown as text only, never as markup.
  */
-export function connectionReport(headers: Headers, settings: { hops: number; appOrigin?: string }): ConnectionReport {
+export function connectionReport(headers: Headers, settings: { hops: number; appOrigin?: string; clientIpHeader?: string }): ConnectionReport {
   const visitHost = (headers.get("x-forwarded-host") ?? headers.get("host"))?.split(",")[0]?.trim().toLowerCase() || null;
   const visitProto = headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase() || null;
   let appOrigin: ConnectionReport["appOrigin"] = "not_set";
@@ -40,7 +44,9 @@ export function connectionReport(headers: Headers, settings: { hops: number; app
     forwardedProto: shown(headers, "x-forwarded-proto"),
     host: shown(headers, "host"),
     hops: settings.hops,
-    signInIp: clientIp(headers, settings.hops),
+    clientIpHeader: settings.clientIpHeader ? settings.clientIpHeader.toLowerCase() : null,
+    clientIpHeaderValue: settings.clientIpHeader ? shown(headers, settings.clientIpHeader.toLowerCase()) : null,
+    signInIp: clientIp(headers, settings.hops, settings.clientIpHeader),
     appOrigin,
     visitHost: visitHost ? visitHost.slice(0, MAX_SHOWN) : null,
   };
