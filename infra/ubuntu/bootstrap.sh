@@ -4458,7 +4458,17 @@ GRANT_EOF
 print_summary_cloudflare() {
     local item base="${DASHBOARD_HOST#*.}"
     # The browser terminal is named after the dashboard: appy.example.com -> appy-ssh.example.com
-    local ssh_host="${DASHBOARD_HOST%%.*}-ssh.$base"
+    local ssh_host="${DASHBOARD_HOST%%.*}-ssh.$base" routes
+    # Same order and spelling as the guide (docs/SERVER.md, step 7).
+    routes="$(
+        printf '       %-22s %-49s %s\n' \
+            "$DASHBOARD_HOST" 'path ^/webhooks/source/github/events(/manual)?$' 'HTTP 127.0.0.1:8000' \
+            "$DASHBOARD_HOST" 'path ^/app/' 'HTTP 127.0.0.1:6001' \
+            "$DASHBOARD_HOST" 'path ^/terminal/ws' 'HTTP 127.0.0.1:6002' \
+            "$DASHBOARD_HOST" '(no path)' 'HTTP 127.0.0.1:8000' \
+            "$ssh_host" '(no path)' 'SSH  127.0.0.1:22' \
+            "*.$base" '(no path)' 'HTTP 127.0.0.1:80'
+    )"
     printf '\n%s============================================================%s\n' "$C_BOLD" "$C_RESET"
     printf '%s Done. What this script did%s\n' "$C_BOLD" "$C_RESET"
     printf '%s============================================================%s\n' "$C_BOLD" "$C_RESET"
@@ -4479,12 +4489,7 @@ ${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (step by step: docs/SE
      Add a Bypass application for $DASHBOARD_HOST, path
      webhooks/source/github/events, so GitHub can tell Coolify to deploy.
   2. Only then, your tunnel, Routes, add these in this order:
-       $DASHBOARD_HOST   path ^/webhooks/source/github/events -> HTTP 127.0.0.1:8000
-       $DASHBOARD_HOST   path ^/app/         ->  HTTP  127.0.0.1:6001
-       $DASHBOARD_HOST   path ^/terminal/ws  ->  HTTP  127.0.0.1:6002
-       $DASHBOARD_HOST   (no path)           ->  HTTP  127.0.0.1:8000
-       $ssh_host    (no path)           ->  SSH   127.0.0.1:22
-       *.$base           (no path)           ->  HTTP  127.0.0.1:80
+$routes
   3. SSH CA for the browser terminal: Access controls, Service credentials,
      SSH, Add a certificate, application $ssh_host, Generate certificate.
 
