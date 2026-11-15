@@ -18,8 +18,13 @@ The script remembers the mode. To change it later, run it again with
 
 | File | What it does |
 | --- | --- |
-| `bootstrap.sh` | One-time setup (safe to run again): updates, automatic security patches, swap, SSH lockdown, firewall, container port block, fail2ban, Cloudflare Tunnel (Cloudflare mode), Coolify. Installs the commands below. |
-| `check.sh` | Read-only check you can run any time. Prints PASS, WARN or FAIL lines. Changes nothing. |
+| `bootstrap.sh` | One-time setup (safe to run again): updates, automatic security patches, swap, SSH lockdown, firewall, container port block, fail2ban, Cloudflare Tunnel (Cloudflare mode), Coolify, log retention, alerts, security audit, auditd, the AI agent account. Installs the commands below. |
+| `check.sh` | Read-only check you can run any time. Prints PASS, WARN or FAIL lines. Changes nothing. Installed as `server-check`. |
+| `AGENT-GUIDE.md` | The guide for the AI agent; installed as `/home/ops-agent/CLAUDE.md`. |
+| `backup/` | The backup tool `server-backup` (its own README). |
+
+Put `check.sh` and `AGENT-GUIDE.md` (same release) in the same folder as
+`bootstrap.sh` before running it; it installs them from there.
 
 Commands that `bootstrap.sh` installs in `/usr/local/sbin/`:
 
@@ -28,6 +33,13 @@ Commands that `bootstrap.sh` installs in `/usr/local/sbin/`:
 | `sudo server-update` | Installs every waiting update when you choose (see [Updates](#updates)). |
 | `sudo server-ssh-ca set` | Saves Cloudflare's SSH CA key for browser SSH (Cloudflare mode). `status` shows it. |
 | `sudo docker-port-guard ...` | The container port block: `apply`, `status`, `open-setup`, `close`, `check-config`. |
+| `sudo server-check` | The installed copy of `check.sh`. |
+| `sudo server-alert setup` | Alerts to Telegram or Discord (see [Alerts](#alerts)). Also `test`, `status`, `send`, `watch`, `digest`. |
+| `sudo server-support` | One text file with everything needed to get help, secrets removed (see [Getting help](#getting-help)). |
+| `sudo server-lynis show` | Last weekly security audit score and warnings; `run` audits now. |
+| `sudo server-logs`, `server-docker-logs`, `server-status` | Read-only log and service views with secrets removed (used by the AI agent). |
+| `sudo server-agent-grant "<command>" 30m` | Lets the AI agent run one approved change once (see [AI agent account](#ai-agent-account)). |
+| `sudo server-note "<text>"` | Adds a line to the agent's work notes, `/var/log/ops-agent-notes.log`. |
 
 ## Before you start
 
@@ -244,12 +256,128 @@ and short-lived certificates
 
 ## Check the server
 
-Get `check.sh` from the same release as `bootstrap.sh` (checked the same way),
-then run `sudo bash check.sh`. It checks the firewall, the container port
-block and its settings file, open ports, SSH settings (no passwords, the
-Cloudflare CA and who may log in with it), the Cloudflare Tunnel (Cloudflare
-mode), updates, fail2ban, disk, memory and the Coolify containers. Anything
-marked FAIL comes with the command that fixes it.
+Run `sudo server-check` (or `sudo bash check.sh` from the release). It checks
+the firewall, the container port block and its settings file, open ports, SSH
+settings (no passwords, the Cloudflare CA and who may log in with it), the
+Cloudflare Tunnel (Cloudflare mode), updates, fail2ban, disk, memory, the
+Coolify containers, log retention, alerts (set up, last check, last alert),
+the Lynis score and top warnings, auditd and its rules, the AI agent account
+(no password, not in docker or sudo, sudo rules valid and recorded, open
+permissions) and the support command. Anything marked FAIL comes with the
+command that fixes it.
+
+## Logs
+
+- System log (journald): kept on disk, at most 1 GB and 90 days
+  (`/etc/systemd/journald.conf.d/60-server-retention.conf`).
+- Container logs: `/etc/docker/daemon.json` gets `log-driver json-file`,
+  `max-size 20m`, `max-file 5`, merged with `jq` into what is there (Coolify's
+  installer writes this file; its other settings are kept, the old file is
+  saved as `daemon.json.before-bootstrap-<date>`). Docker is restarted once,
+  during `bootstrap.sh` only. **Containers that exist keep their old log
+  settings until they are recreated**; a redeploy in Coolify recreates them,
+  and `check.sh` lists those still on old settings. If Coolify's installer
+  ever runs again it may write its own values; run `bootstrap.sh` again.
+- Recorded sudo sessions of the agent (`/var/log/sudo-io`) are kept 90 days;
+  the agent's notes rotate monthly (24 kept); Lynis keeps 8 reports.
+
+## Alerts
+
+`sudo server-alert setup` asks Telegram or Discord:
+
+- **Telegram**: in Telegram open **@BotFather**, send `/newbot`, pick a name;
+  it gives a bot token. Send your new bot any message, paste the token
+  (hidden typing), and setup finds your chat by itself.
+- **Discord**: Server Settings, Integrations, Webhooks, New Webhook, choose
+  the channel, Copy Webhook URL, paste it (hidden typing).
+
+It checks the token or address with Telegram or Discord, asks whether you
+want a daily summary (08:05 server time), saves everything in
+`/etc/server-alert/config` (root only, mode 600) and sends a test message.
+The token is never printed and never on a command line (curl reads the
+address from its standard input).
+
+Every 15 minutes `server-alert watch` (a systemd timer) alerts on: last
+backup failed, or older than 36 hours; disk above 85% on `/` or
+`/var/lib/docker`; cloudflared not running (Cloudflare mode); Docker not
+running; a Coolify container unhealthy or restarting repeatedly; security
+updates waiting more than 3 days; a restart needed for more than 7 days;
+fail2ban bans (summary); sudo use by `ops-agent` (summary of commands run
+and refused). Everything found in one run goes in one message. Each problem
+is sent at most once per 6 hours, and never more than 12 messages an hour.
+Every alert is also in the system log: `journalctl -t server-alert`.
+Without setup, alerts only go to the system log.
+
+## Security audit
+
+Lynis (Ubuntu package) runs `lynis audit system --quick` every Sunday
+(`server-lynis.timer`; it only reads). Reports: `/var/log/lynis/` (last 8).
+The hardening index goes to `/var/lib/server-alert/lynis-score`; a drop of 5
+or more sends an alert. `sudo server-lynis show` shows the score and the top
+warnings.
+
+auditd logs every program the `ops-agent` account starts, and every change to
+`/etc/ssh`, `/etc/sudoers*`, `/etc/cloudflared`,
+`/etc/default/docker-port-guard` and the agent's guide
+(`/etc/audit/rules.d/60-server.rules`). Read it with
+`sudo ausearch -k ops-agent -i` (keys: `ops-agent`, `ssh-config`,
+`sudoers`, `cloudflared`, `port-guard`, `ops-agent-guide`).
+
+## AI agent account
+
+`bootstrap.sh` creates `ops-agent` (skip with `--no-agent`): no password
+(locked), SSH refused (`DenyUsers ops-agent`), no extra groups (never
+`docker`, which equals root), no cron jobs. Start a session as it on the
+server, from your own account: `sudo -iu ops-agent` (then start the agent
+there). It reads `/home/ops-agent/CLAUDE.md` (from `AGENT-GUIDE.md`, owned by
+root and locked with `chattr +i`).
+
+`/etc/sudoers.d/ops-agent` (checked with `visudo`) lets it run, without a
+password, only: `server-check`, `server-support`, `server-update --dry-run`,
+`server-backup status|list|run|check`, `server-lynis show`,
+`server-alert status|send ...`, `server-logs`, `server-docker-logs`,
+`server-status` (wrappers that only read and check every argument),
+`docker ps [-a]`, `ufw status [verbose|numbered]`,
+`fail2ban-client status [sshd]`, `docker-port-guard status` and
+`server-note`. Every session is recorded with input and output:
+`sudo sudoreplay -d /var/log/sudo-io/ops-agent -l`, then
+`sudo sudoreplay -d /var/log/sudo-io/ops-agent <TSID>`. Refused commands are
+logged and appear in the next alert summary.
+
+**Changes need you.** Either run the command yourself, or allow it once:
+
+```
+sudo server-agent-grant "server-update --yes" 30m
+```
+
+You confirm, get an id, and the agent runs `sudo server-agent-grant use <id>`.
+It works one time, ends by itself after the time (at most 4 hours, removed by
+a systemd timer), and every grant, use and expiry goes to the system log
+(`journalctl -t server-agent-grant`) and to your phone. Only these can be
+granted: `server-update`, `server-update --yes`,
+`server-backup restore-files ...`, `systemctl restart <service>`, `reboot`.
+`sudo server-agent-grant list` shows open ones, `revoke <id>|all` takes them
+back.
+
+How the agent runs is your choice. The setup assumes you start it yourself on
+the server with `sudo -iu ops-agent`. Giving it SSH would mean removing the
+`DenyUsers` line and adding a key; do not do that without thinking it through.
+
+## Getting help
+
+`sudo server-support` writes `/var/lib/server-support/support-<date>.txt`
+(root only, newest 10 kept) and prints its path and a short summary. It holds
+the check output, versions (Ubuntu, kernel, Docker, Coolify, cloudflared),
+service and timer states, the last lines of the cloudflared, docker and ssh
+logs and of Coolify's containers, backup status, whether alerts are set up
+(never the settings), firewall and port guard status, the Lynis score, audit
+and agent information, disk and memory. Secrets are removed: the exact values
+in `/etc/cloudflared/tunnel-token`, `/etc/server-alert/config`,
+`/etc/server-backup/*`, Coolify's `.env` and the first-login file, plus
+anything shaped like a password, token, key, cookie, bearer header, password
+in a web address, Telegram token or Discord webhook. Show it with
+`sudo cat <file>` (or `sudo server-support --stdout`), copy it and paste it
+to Claude.
 
 ## What is open to the internet
 
@@ -461,6 +589,9 @@ on a command line or in the process list.
   and then moved into place, so apt and sshd never see a half-written file in
   `apt.conf.d` or `sshd_config.d`.
 - `--dry-run` prints every change instead of making it.
+- What changes by itself: still only Ubuntu security patches. The timers
+  added here only read (checks, alerts, Lynis), or remove the agent's expired
+  permissions.
 
 ## Files the scripts create
 
@@ -475,7 +606,19 @@ on a command line or in the process list.
 `/etc/systemd/system/docker-port-guard.service`,
 `/etc/systemd/system/docker-port-guard-apply.service` and `.timer`,
 `/etc/systemd/system/docker.service.d/50-docker-port-guard.conf`,
-`/root/coolify-first-login.txt` (delete after first login), plus ufw rules and
+`/root/coolify-first-login.txt` (delete after first login),
+`/etc/systemd/journald.conf.d/60-server-retention.conf`, `/etc/docker/daemon.json`
+(merged), `/usr/local/sbin/server-{check,alert,support,lynis,logs,docker-logs,status,note,agent-grant}`,
+`/usr/local/lib/server-tools/redact`, `/usr/local/share/server-tools/`,
+`/etc/server-alert/config` (after setup), `/var/lib/server-alert/`,
+`/var/log/lynis/`, `/var/lib/server-support/`,
+`/etc/systemd/system/server-alert-{watch,digest}.{service,timer}`,
+`server-lynis.{service,timer}`, `server-agent-grant-expire.{service,timer}`,
+`/etc/audit/rules.d/60-server.rules`, `/etc/logrotate.d/ops-agent-notes`,
+`/etc/tmpfiles.d/server-sudo-io.conf`; with the agent: the `ops-agent` account,
+`/home/ops-agent/CLAUDE.md`, `/etc/sudoers.d/ops-agent` (and short-lived
+`ops-agent-grant-*`), `/var/log/sudo-io/`, `/var/log/ops-agent-notes.log`,
+`/var/lib/server-agent-grant/`, a line in `/etc/cron.deny`; plus ufw rules and
 everything Coolify installs under `/data/coolify`. Cloudflare mode adds
 `/usr/local/sbin/server-ssh-ca`, `/etc/ssh/ca.pub` (once the key is set),
 `/etc/ssh/principals/<your user>`,

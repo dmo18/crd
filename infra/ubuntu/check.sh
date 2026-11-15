@@ -520,6 +520,222 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+section "Logs"
+jd_cfg="$(systemd-analyze cat-config systemd/journald.conf 2>/dev/null || cat /etc/systemd/journald.conf /etc/systemd/journald.conf.d/*.conf 2>/dev/null)"
+jd_val() { sed -n "s/^[[:space:]]*$1=[[:space:]]*//p" <<<"$jd_cfg" | tail -n 1; }
+jd_storage="$(jd_val Storage)"
+if [ "$jd_storage" = persistent ] || { [ "${jd_storage:-auto}" = auto ] && [ -d /var/log/journal ]; }; then
+    pass "The system log is kept on disk (survives restarts)"
+else
+    warn "The system log is not kept on disk (Storage=${jd_storage:-auto}). Fix: run bootstrap.sh again"
+fi
+jd_max="$(jd_val SystemMaxUse)"
+jd_ret="$(jd_val MaxRetentionSec)"
+if [ -n "$jd_max" ] && [ -n "$jd_ret" ]; then
+    pass "System log limits: at most $jd_max, at most $jd_ret"
+else
+    warn "The system log has no size or age limit set (SystemMaxUse, MaxRetentionSec). Fix: run bootstrap.sh again"
+fi
+note "$(journalctl --disk-usage 2>/dev/null || echo 'Log size unknown')"
+if have docker && docker info >/dev/null 2>&1; then
+    if have jq && [ -r /etc/docker/daemon.json ] &&
+        [ "$(jq -r '.["log-driver"] // empty' /etc/docker/daemon.json 2>/dev/null)" = json-file ] &&
+        [ -n "$(jq -r '.["log-opts"]["max-size"] // empty' /etc/docker/daemon.json 2>/dev/null)" ]; then
+        pass "Container logs rotate ($(jq -r '.["log-opts"] | "\(.["max-size"]) x \(.["max-file"] // "1") files"' /etc/docker/daemon.json))"
+    else
+        warn "Container logs are not rotated in /etc/docker/daemon.json. Fix: run bootstrap.sh again"
+    fi
+    unrotated=""
+    while read -r cname ctype cmax; do
+        [ -n "$cname" ] || continue
+        case "$ctype" in
+            local) ;;
+            json-file) [ -n "$cmax" ] || unrotated="$unrotated ${cname#/}" ;;
+            *) unrotated="$unrotated ${cname#/}" ;;
+        esac
+    done < <(docker ps -aq 2>/dev/null | xargs -r docker inspect --format '{{.Name}} {{.HostConfig.LogConfig.Type}} {{index .HostConfig.LogConfig.Config "max-size"}}' 2>/dev/null)
+    if [ -n "$unrotated" ]; then
+        warn "These containers still use old log settings (a redeploy in Coolify fixes it):$unrotated"
+    else
+        pass "Every container uses rotating logs"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+section "Alerts"
+if [ -x /usr/local/sbin/server-alert ]; then
+    if [ -f /etc/server-alert/config ]; then
+        provider="$(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | head -n 1)"
+        perm="$(stat -c '%a %U' /etc/server-alert/config)"
+        if [ "$perm" = "600 root" ]; then
+            pass "Alerts go to ${provider:-?} (settings readable only by root)"
+        else
+            fail "The alert settings file is not root-only ($perm). Fix: sudo chmod 600 /etc/server-alert/config"
+        fi
+        note "Daily summary: $(sed -n 's/^DIGEST=//p' /etc/server-alert/config | head -n 1)"
+    else
+        warn "Alerts are not set up, so nobody hears about problems. Set up: sudo server-alert setup"
+    fi
+    if systemctl is-active --quiet server-alert-watch.timer 2>/dev/null; then
+        pass "Checks for alerts run every 15 minutes"
+    else
+        fail "The alert checks timer is off. Fix: sudo systemctl enable --now server-alert-watch.timer"
+    fi
+    if [ -r /var/lib/server-alert/last-watch ]; then
+        lw="$(cat /var/lib/server-alert/last-watch)"
+        if [ $(( $(date +%s) - lw )) -gt 3600 ]; then
+            warn "The last alert check ran at $(date -d "@$lw" '+%Y-%m-%d %H:%M') (more than an hour ago). See: sudo server-logs --unit server-alert-watch"
+        else
+            note "Last alert check: $(date -d "@$lw" '+%Y-%m-%d %H:%M')"
+        fi
+    fi
+    if [ -r /var/lib/server-alert/last-sent ]; then
+        ls_t="$(sed -n 's/^time=//p' /var/lib/server-alert/last-sent)"
+        note "Last alert sent: $(date -d "@${ls_t:-0}" '+%Y-%m-%d %H:%M'): $(sed -n 's/^title=//p' /var/lib/server-alert/last-sent)"
+    else
+        note "No alert sent yet"
+    fi
+else
+    warn "server-alert is not installed. Fix: run bootstrap.sh again"
+fi
+
+# ---------------------------------------------------------------------------
+section "Security audit (Lynis)"
+if have lynis; then
+    if systemctl is-enabled --quiet server-lynis.timer 2>/dev/null; then
+        pass "Lynis audits the server every week"
+    else
+        warn "The weekly Lynis audit is off. Fix: sudo systemctl enable --now server-lynis.timer"
+    fi
+    score_file=/var/lib/server-alert/lynis-score
+    if [ -r "$score_file" ]; then
+        l_score="$(sed -n 's/^score=//p' "$score_file")"
+        l_prev="$(sed -n 's/^previous=//p' "$score_file")"
+        l_time="$(sed -n 's/^time=//p' "$score_file")"
+        l_report="$(sed -n 's/^report=//p' "$score_file")"
+        if [ $(( $(date +%s) - ${l_time:-0} )) -gt $((8 * 86400)) ]; then
+            warn "Hardening index $l_score, but the last audit is from $(date -d "@${l_time:-0}" '+%Y-%m-%d') (more than 8 days). Run: sudo server-lynis run"
+        elif [[ $l_prev =~ ^[0-9]+$ ]] && [ $((l_prev - l_score)) -ge 5 ]; then
+            warn "Hardening index dropped from $l_prev to $l_score ($(date -d "@$l_time" '+%Y-%m-%d'))"
+        else
+            pass "Hardening index $l_score of 100 (previous: ${l_prev:-none}, $(date -d "@$l_time" '+%Y-%m-%d'))"
+        fi
+        if [ -r "$l_report" ]; then
+            while IFS= read -r line; do note "$line"; done < <(sed -n 's/^warning\[\]=//p' "$l_report" | awk -F'|' '{ printf "Lynis warning %s: %s\n", $1, $2 }' | head -n 5)
+        fi
+    else
+        warn "No Lynis audit has finished yet. Run one: sudo server-lynis run"
+    fi
+else
+    warn "Lynis is not installed. Fix: run bootstrap.sh again"
+fi
+
+# ---------------------------------------------------------------------------
+section "Audit log (auditd)"
+if systemctl is-active --quiet auditd.service 2>/dev/null; then
+    pass "auditd is running"
+    audit_rules="$(auditctl -l 2>/dev/null || true)"
+    for k in ssh-config sudoers port-guard; do
+        if grep -q -- "-k $k\$" <<<"$audit_rules"; then pass "Audit rule loaded: $k"; else fail "Audit rule missing: $k. Fix: sudo augenrules --load"; fi
+    done
+    if id -u ops-agent >/dev/null 2>&1; then
+        if grep -q -- "-F auid=$(id -u ops-agent) .*-k ops-agent\$" <<<"$audit_rules"; then
+            pass "Every command of the AI agent (ops-agent) is logged"
+        else
+            fail "The audit rule for ops-agent commands is missing. Fix: run bootstrap.sh again"
+        fi
+    fi
+else
+    fail "auditd is not running ($(systemctl is-active auditd.service 2>/dev/null)). Fix: sudo systemctl restart auditd"
+fi
+
+# ---------------------------------------------------------------------------
+section "AI agent account (ops-agent)"
+if id -u ops-agent >/dev/null 2>&1; then
+    pw_state="$(passwd -S ops-agent 2>/dev/null | awk '{ print $2 }')"
+    if [ "$pw_state" = L ]; then
+        pass "ops-agent has no password (locked)"
+    else
+        fail "ops-agent can log in with a password (state $pw_state). Fix: sudo usermod --lock ops-agent"
+    fi
+    agent_groups=" $(id -nG ops-agent 2>/dev/null) "
+    bad_groups=""
+    for g in docker sudo admin adm wheel root lxd disk systemd-journal; do
+        case "$agent_groups" in *" $g "*) bad_groups="$bad_groups $g" ;; esac
+    done
+    if [ -z "$bad_groups" ]; then
+        pass "ops-agent is in no powerful group (not docker, not sudo)"
+    else
+        fail "ops-agent is in these groups:$bad_groups (docker equals root). Fix: sudo usermod -G '' ops-agent"
+    fi
+    if have sshd && sshd -T -C user=ops-agent,addr=127.0.0.1,host=localhost,laddr=127.0.0.1,lport=22 2>/dev/null | grep -qx 'denyusers ops-agent'; then
+        pass "ops-agent cannot log in over SSH"
+    else
+        warn "SSH does not refuse ops-agent (DenyUsers). Fix: run bootstrap.sh again"
+    fi
+    if [ -s /home/ops-agent/.ssh/authorized_keys ]; then
+        warn "ops-agent has SSH keys (/home/ops-agent/.ssh/authorized_keys)"
+    fi
+    sf=/etc/sudoers.d/ops-agent
+    if [ -f "$sf" ]; then
+        if [ "$(stat -c '%a %U' "$sf")" = "440 root" ] && visudo -cqf "$sf" >/dev/null 2>&1; then
+            pass "The agent's sudo list is valid and belongs to root ($sf)"
+        else
+            fail "The agent's sudo list has a problem ($(stat -c '%a %U' "$sf")). Fix: run bootstrap.sh again"
+        fi
+        if grep -q '^Defaults:ops-agent log_input, log_output' "$sf"; then
+            pass "Every sudo session of the agent is recorded (sudo sudoreplay -d /var/log/sudo-io/ops-agent -l)"
+        else
+            fail "Sudo sessions of the agent are not recorded. Fix: run bootstrap.sh again"
+        fi
+    else
+        fail "The agent's sudo list ($sf) is missing. Fix: run bootstrap.sh again"
+    fi
+    if visudo -cq >/dev/null 2>&1; then pass "All of sudo's settings are valid"; else fail "sudo's settings have a mistake: sudo visudo -c"; fi
+    grants="$(find /etc/sudoers.d -maxdepth 1 -name 'ops-agent-grant-*' 2>/dev/null | grep -c . || true)"
+    if [ "$grants" -gt 0 ]; then
+        warn "$grants one-time permission(s) for the agent are open: sudo server-agent-grant list"
+    else
+        pass "No open one-time permissions for the agent"
+    fi
+    if systemctl is-active --quiet server-agent-grant-expire.timer 2>/dev/null; then
+        pass "Unused permissions are removed when their time is up"
+    else
+        fail "The timer that ends agent permissions is off. Fix: sudo systemctl enable --now server-agent-grant-expire.timer"
+    fi
+    guide=/home/ops-agent/CLAUDE.md
+    if [ -f "$guide" ] && [ "$(stat -c %U "$guide")" = root ]; then
+        if lsattr -d "$guide" 2>/dev/null | awk '{ print $1 }' | grep -q i; then
+            pass "The agent's guide ($guide) belongs to root and cannot be changed"
+        else
+            warn "The agent's guide ($guide) belongs to root but is not locked (chattr +i)"
+        fi
+        if [ -f /usr/local/share/server-tools/AGENT-GUIDE.md ] && ! cmp -s "$guide" /usr/local/share/server-tools/AGENT-GUIDE.md; then
+            warn "The agent's guide differs from the installed copy. Fix: run bootstrap.sh again"
+        fi
+    else
+        warn "The agent's guide ($guide) is missing or not owned by root. Fix: run bootstrap.sh again"
+    fi
+else
+    note "No AI agent account (ops-agent); bootstrap.sh --no-agent"
+fi
+
+# ---------------------------------------------------------------------------
+section "Getting help"
+if [ -x /usr/local/sbin/server-support ] && [ -x /usr/local/lib/server-tools/redact ]; then
+    pass "Support file with secrets removed: sudo server-support"
+    last_bundle="$(find /var/lib/server-support -maxdepth 1 -name 'support-*.txt' -printf '%f\n' 2>/dev/null | sort | tail -n 1)"
+    [ -z "$last_bundle" ] || note "Last support file: /var/lib/server-support/$last_bundle"
+else
+    warn "server-support is not installed. Fix: run bootstrap.sh again"
+fi
+if [ -x /usr/local/sbin/server-check ]; then
+    pass "This check is installed as: sudo server-check"
+else
+    warn "server-check is not installed (put check.sh next to bootstrap.sh and run it again)"
+fi
+
+# ---------------------------------------------------------------------------
 printf '\n%sResult:%s %s PASS, %s WARN, %s FAIL\n' "$C_BOLD" "$C_RESET" "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
 if [ "$FAIL_COUNT" -gt 0 ]; then
     exit 1
