@@ -523,7 +523,7 @@ read_cloudflare_identity() {
     fi
     ok "Browser SSH: a Cloudflare certificate for '$SSH_PRINCIPAL' logs in as Ubuntu user '$OWNER_USER'"
     if [ "$SSH_PRINCIPAL" != "$OWNER_USER" ]; then
-        warn "Your email starts with '$SSH_PRINCIPAL' but your Ubuntu user is '$OWNER_USER'. Cloudflare's guide says the browser terminal expects them to be the same. If the terminal refuses, type '$OWNER_USER' when it asks for the user name."
+        info "That is fine. When the browser terminal asks for a user name, type: $OWNER_USER"
     fi
 }
 
@@ -1261,8 +1261,10 @@ AuthorizedPrincipalsFile $SSH_PRINCIPALS_DIR/%u"
         write_file "$SSH_PRINCIPALS_DIR/$OWNER_USER" 0644 <<EOF
 # Written by bootstrap.sh. Cloudflare SSH certificates whose principal is on a
 # line below may log in as the Ubuntu user "$OWNER_USER". Cloudflare uses the
-# part of the sign-in email before the @, in lower case.
+# part of the sign-in email before the @, in lower case. The Ubuntu user name
+# is listed too, for certificates issued for the name typed at the login.
 $SSH_PRINCIPAL
+$( [ "$SSH_PRINCIPAL" = "$OWNER_USER" ] || printf '%s' "$OWNER_USER" )
 EOF
     fi
     {
