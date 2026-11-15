@@ -150,13 +150,19 @@ write_file() {
     mv -f -- "$tmp" "$path"
 }
 
+# True when there is a console to ask on. Testing the file is not enough: without
+# a controlling terminal /dev/tty exists but cannot be opened.
+have_tty() {
+    { : >/dev/tty; } 2>/dev/null
+}
+
 # Ask a yes/no question on the console. Default is "no".
 ask_yes_no() {
     local answer=""
     if [ "$ASSUME_YES" = true ]; then
         return 0
     fi
-    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+    if ! have_tty; then
         warn "No console to ask on. Treating the answer as 'no'. Add --yes to skip this question."
         return 1
     fi
@@ -318,7 +324,7 @@ read_tunnel_token() {
         info "Dry run: the real run asks for the tunnel token here (typing hidden)"
         return 0
     fi
-    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+    if ! have_tty; then
         if [ -s "$CF_TOKEN_FILE" ]; then
             CF_TOKEN_KEEP=true
             ok "Keeping the tunnel token already saved on this server"
@@ -495,7 +501,7 @@ preflight() {
 
     if ! coolify_installed; then
         if [ -z "$ADMIN_EMAIL" ]; then
-            if [ -r /dev/tty ] && [ -w /dev/tty ] && [ "$DRY_RUN" = false ]; then
+            if have_tty && [ "$DRY_RUN" = false ]; then
                 printf '    Type the email address you want to log in to Coolify with, then press Enter: ' >/dev/tty
                 read -r ADMIN_EMAIL </dev/tty || ADMIN_EMAIL=""
             elif [ "$DRY_RUN" = true ]; then
@@ -1188,10 +1194,10 @@ EOF
 
     save_tunnel_token
 
-    # The token is handed to cloudflared as a systemd credential: systemd reads the
-    # root-only file and gives a private copy to the service, which runs as a
-    # throwaway unprivileged user. The token is never in this unit, on a command
-    # line, or in the environment.
+    # cloudflared reads the token from the root-only file itself (--token-file),
+    # so it is never in this unit, on a command line, or in the environment. The
+    # service runs as root only to be able to read that file: every root power
+    # (capability) is dropped and the system is read-only for it.
     [ -f "$CF_UNIT" ] && unit_before="$(cat -- "$CF_UNIT")"
     write_file "$CF_UNIT" 0644 <<EOF
 # Written by bootstrap.sh. Cloudflare Tunnel: connects OUT to Cloudflare and
@@ -1205,12 +1211,10 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --metrics $CF_METRICS run --token-file %d/tunnel-token
-LoadCredential=tunnel-token:$CF_TOKEN_FILE
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --metrics $CF_METRICS run --token-file $CF_TOKEN_FILE
 Restart=always
 RestartSec=5s
 TimeoutStartSec=0
-DynamicUser=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -1222,6 +1226,7 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 CapabilityBoundingSet=
+AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 [Install]
@@ -1238,7 +1243,7 @@ EOF
     systemctl enable cloudflared.service >/dev/null 2>&1
     if ! systemctl is-active --quiet cloudflared.service; then
         systemctl reset-failed cloudflared.service >/dev/null 2>&1 || true
-        systemctl start --no-block cloudflared.service
+        systemctl restart --no-block cloudflared.service
     elif [ "$unit_changed" = true ] || [ "$CF_TOKEN_CHANGED" = true ]; then
         # Restarting the tunnel drops sessions that come through it (perhaps
         # this one), so it happens as the very last step.
@@ -1416,11 +1421,11 @@ print_summary_cloudflare() {
 
 ${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (details in README.md, "Cloudflare mode"):
   1. Your tunnel, Routes (Public hostnames), add these in this order:
-       $DASHBOARD_HOST   path ^/app/         ->  http://localhost:6001
-       $DASHBOARD_HOST   path ^/terminal/ws  ->  http://localhost:6002
-       $DASHBOARD_HOST   (no path)           ->  http://localhost:8000
-       ssh.$base         (no path)           ->  ssh://localhost:22
-       *.$base           (no path)           ->  http://localhost:80
+       $DASHBOARD_HOST   path ^/app/         ->  HTTP  127.0.0.1:6001
+       $DASHBOARD_HOST   path ^/terminal/ws  ->  HTTP  127.0.0.1:6002
+       $DASHBOARD_HOST   (no path)           ->  HTTP  127.0.0.1:8000
+       ssh.$base         (no path)           ->  SSH   127.0.0.1:22
+       *.$base           (no path)           ->  HTTP  127.0.0.1:80
   2. Zero Trust, Access, Applications: protect $DASHBOARD_HOST and ssh.$base
      (browser rendering: SSH) with your email, and also *.$base.
 

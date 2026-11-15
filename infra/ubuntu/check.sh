@@ -283,7 +283,7 @@ if [ "$MODE" = cloudflare ]; then
 fi
 
 # ---------------------------------------------------------------------------
-section "Automatic security updates"
+section "Automatic updates"
 if systemctl is-enabled --quiet unattended-upgrades.service 2>/dev/null; then
     pass "Automatic updates service is on"
 else
@@ -301,8 +301,70 @@ if grep -q '^Unattended-Upgrade::Automatic-Reboot "true";' <<<"$apt_dump"; then
 else
     warn "No automatic restart after updates that need one"
 fi
+for timer in apt-daily.timer apt-daily-upgrade.timer; do
+    if systemctl is-enabled --quiet "$timer" 2>/dev/null; then
+        pass "$timer is on (next: $(systemctl show -p NextElapseUSecRealtime --value "$timer" 2>/dev/null || echo unknown))"
+    else
+        fail "$timer is off. Fix: sudo systemctl enable --now $timer"
+    fi
+done
+for origin in '-security' '-updates' 'origin=Docker,label=Docker CE'; do
+    if grep -qF -- "$origin" <<<"$(apt-config dump 2>/dev/null | grep -E '^Unattended-Upgrade::(Allowed-Origins|Origins-Pattern)')"; then
+        pass "Automatic updates include: $origin"
+    else
+        warn "Automatic updates do not include: $origin (run bootstrap.sh again)"
+    fi
+done
+uu_log="/var/log/unattended-upgrades/unattended-upgrades.log"
+if [ -s "$uu_log" ]; then
+    last_run="$(grep -m1 -o '^[0-9-]* [0-9:]*' <(tac "$uu_log" | grep 'Starting unattended upgrades script') 2>/dev/null || true)"
+    note "Last automatic update run: ${last_run:-not found in $uu_log}"
+else
+    last_run=""
+    warn "Automatic updates have not run yet (no $uu_log)"
+fi
+upgradable="$(apt list --upgradable 2>/dev/null | grep -v '^Listing' || true)"
+pending="$(grep -c . <<<"$upgradable" || true)"
+[ -z "$upgradable" ] && pending=0
+sec_pkgs="$(grep -- '-security' <<<"$upgradable" | cut -d/ -f1 | tr '\n' ' ' || true)"
+note "Updates waiting: $pending (security: $(wc -w <<<"$sec_pkgs" | tr -d ' '))"
+# A security update older than 3 days is one the daily run should have installed:
+# it is in a run's "to upgrade" or "kept back" list from more than 3 days ago, or
+# automatic updates have not run for 3 days.
+if [ -n "${sec_pkgs// /}" ]; then
+    cutoff="$(date -d '3 days ago' '+%Y-%m-%d %H:%M:%S')"
+    old=""
+    for pkg in $sec_pkgs; do
+        first="$(zcat -f "$uu_log"* 2>/dev/null | grep -E "(Packages that will be upgraded|kept back)" | grep -E "[: ]${pkg}( |$)" | cut -c1-19 | sort | head -n 1)"
+        if [ -n "$first" ] && [[ $first < $cutoff ]]; then old="$old $pkg"; fi
+    done
+    if [ -n "$old" ]; then
+        warn "Security updates waiting for more than 3 days:$old. See: sudo cat $uu_log"
+    elif [ -z "$last_run" ] || [[ $last_run < $cutoff ]]; then
+        warn "Security updates are waiting and automatic updates have not run for 3 days: $sec_pkgs"
+    else
+        pass "Waiting security updates are new; the next daily run installs them"
+    fi
+else
+    pass "No security updates waiting"
+fi
+for pkg in docker-ce cloudflared; do
+    pol="$(apt-cache policy "$pkg" 2>/dev/null)"
+    inst="$(awk '/Installed:/ {print $2; exit}' <<<"$pol")"
+    cand="$(awk '/Candidate:/ {print $2; exit}' <<<"$pol")"
+    if [ -z "$inst" ] || [ "$inst" = "(none)" ]; then
+        if [ "$pkg" = cloudflared ] && [ "$MODE" != cloudflare ]; then continue; fi
+        note "$pkg: not installed"
+    elif [ "$inst" = "$cand" ]; then
+        pass "$pkg $inst is the newest version"
+    else
+        note "$pkg: installed $inst, newest $cand (installs with the next daily run)"
+    fi
+done
 if [ -f /var/run/reboot-required ]; then
-    warn "A restart is waiting (it will happen at the planned time)"
+    warn "A restart is waiting (it will happen at the planned time, 04:30)"
+else
+    pass "No restart needed"
 fi
 
 # ---------------------------------------------------------------------------
