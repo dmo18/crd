@@ -173,25 +173,28 @@ step() { printf '\n%s==> %s%s\n' "$C_BOLD" "$*" "$C_RESET"; }
 info() { printf '    %s\n' "$*"; }
 ok()   { printf '    %sOK%s   %s\n' "$C_GREEN" "$C_RESET" "$*"; }
 warn() { printf '    %sWARN%s %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-die()  { printf '\n%sSTOPPED:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+STOP_SAID=false
+die()  { STOP_SAID=true; printf '\n%sSTOPPED:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 done_item() { SUMMARY+=("$*"); }
 
+# Never stop silently. The ERR trap only notes where the last uncaught failure
+# happened (failures inside $(...) note it in their own subshell and are
+# forgotten). The EXIT trap speaks only when the script really ends with an
+# error that die() did not already explain.
+LAST_ERR_LINE="unknown"
+set -E
+trap 'LAST_ERR_LINE=$LINENO' ERR
 cleanup() {
+    local rc=$?
     if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
         rm -rf -- "$WORKDIR"
     fi
+    if [ "$rc" -ne 0 ] && [ "$STOP_SAID" = false ]; then
+        printf '\n%sSTOPPED:%s an unexpected error (code %s) near line %s of bootstrap.sh.\n' "$C_RED" "$C_RESET" "$rc" "$LAST_ERR_LINE" >&2
+        printf 'It is safe to run the same command again. If it stops here again, send a photo of this screen.\n' >&2
+    fi
 }
 trap cleanup EXIT
-# Never stop silently: if a command fails where nothing else catches it, say
-# where, so the owner sees a message instead of just the prompt coming back.
-set -E
-on_unexpected_error() {
-    local rc=$? line=$1
-    trap - ERR
-    printf '\n%sSTOPPED:%s an unexpected error (code %s) at line %s of bootstrap.sh.\n' "$C_RED" "$C_RESET" "$rc" "$line" >&2
-    printf 'It is safe to run the same command again. If it stops here again, send a photo of this screen.\n' >&2
-}
-trap 'on_unexpected_error "$LINENO"' ERR
 
 # One private temporary folder per run, removed at the end.
 ensure_workdir() {
