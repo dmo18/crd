@@ -1,0 +1,21 @@
+# Never send these into the image build.
+.git
+.github
+node_modules
+.next
+data
+.env*
+!.env.example
+coverage
+test-results
+playwright-report
+*.tsbuildinfo
+next-env.d.ts
+docs
+infra
+*.md
+Dockerfile
+docker-compose.yaml
+.dockerignore
+.DS_Store
+npm-debug.log*

@@ -1,5 +1,33 @@
 # Status
 
+## Milestone 6: own Ubuntu app server with Coolify (ready for the owner)
+- Cloudways dropped (needs a terminal the owner does not want). Owner's
+  Hyper-V host: Ubuntu 24.04 VM with its own public IP and no network
+  security in front, Coolify dashboard public with password and 2FA
+  (owner's informed choice), hosts Card Vault and future apps.
+- infra/ubuntu/bootstrap.sh: firewall allowing only 80/443, Docker port
+  guard (DOCKER-USER rules, loaded before Docker starts, re-applied every 5
+  minutes), SSH closed to the internet and key only, fail2ban, unattended
+  security updates, swap, Coolify with a pre-created admin and a 30 minute
+  first-login window whose closing timer is created first.
+  infra/ubuntu/check.sh audits it. Guide: docs/SERVER.md.
+- Card Vault container (non-root, pinned base image by digest, health
+  check, data volume), Coolify compose with generated secrets, a /setup
+  page protected by a generated setup code (no terminal), password change
+  that signs out other devices, nightly in-container backup.
+- Verified: container built and run here (setup, sign in, free scan,
+  restart and rebuild keep data, backup); bootstrap run in a systemd Ubuntu
+  container with the real Coolify installer (only 80/443 answered from
+  outside, window closed by itself, rules survive restart); 291 tests.
+- Not verified: the real Hyper-V machine, IPv6 (guide says A records only),
+  the Coolify dashboard end to end, Coolify's exact generated address
+  format (APP_ORIGIN now tolerates a slash, path or the internal :3000).
+- Security review: no critical or high; mediums fixed (setup window fail
+  open, Docker starting before the rules, IPv6 sharing a limit). Accepted:
+  first dashboard login is over plain HTTP during the 30 minute window;
+  backups stay on the server unless the owner adds off-site storage.
+
+
 ## Milestone 5: go live on Cloudways (ready for the owner)
 - Runs as a separate Cloudways app on the owner's existing Flexible server,
   public https link, owner password. Guide: docs/GO-LIVE.md.

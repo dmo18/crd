@@ -5,7 +5,11 @@ import { env } from "@/lib/env";
 export const SESSION_COOKIE = "crd_session";
 export const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 
-export type SessionData = { owner?: true; since?: number };
+/**
+ * `version` is the password's session version at sign-in. A password change
+ * raises it in the database, so cookies with an older number stop working.
+ */
+export type SessionData = { owner?: true; since?: number; version?: number };
 
 export function sessionOptions(): SessionOptions {
   return {

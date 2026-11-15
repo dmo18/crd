@@ -44,7 +44,8 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except the sign-in page, the public health check and static files.
-    "/((?!login|api/health|_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|icons/).*)",
+    // Everything except the sign-in page, first-run setup (it shows itself only
+    // while no password exists), the public health check and static files.
+    "/((?!login|setup|api/health|_next/static|_next/image|favicon\\.ico|manifest\\.webmanifest|icons/).*)",
   ],
 };

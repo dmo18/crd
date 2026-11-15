@@ -35,9 +35,11 @@ describe("proxy matcher", () => {
     expect(runs("/")).toBe(true);
     expect(runs("/cards/12")).toBe(true);
     expect(runs("/api/scans")).toBe(true);
+    expect(runs("/more")).toBe(true);
   });
   it("skips the sign-in page, the health check and static files", () => {
     expect(runs("/login")).toBe(false);
+    expect(runs("/setup")).toBe(false);
     expect(runs("/api/health")).toBe(false);
     expect(runs("/_next/static/chunk.js")).toBe(false);
     expect(runs("/favicon.ico")).toBe(false);
