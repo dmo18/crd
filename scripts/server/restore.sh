@@ -28,6 +28,11 @@ if printf '%s\n' "$listing" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   log "Backup contains unsafe paths. Refusing."
   exit 1
 fi
+# Only plain files and folders: no links that could point outside.
+if tar -tvzf "$file" 2>/dev/null | grep -qv '^[-d]'; then
+  log "Backup contains links or special files. Refusing."
+  exit 1
+fi
 if ! printf '%s\n' "$listing" | grep -qx 'crd.db'; then
   log "Backup has no database (crd.db). Refusing."
   exit 1
@@ -49,7 +54,7 @@ stamp="$(date '+%Y%m%d-%H%M%S')"
 incoming="$CV_SHARED/data.restoring-$stamp"
 aside="$CV_SHARED/data.before-restore-$stamp"
 mkdir -p "$incoming"
-if ! tar -xzf "$file" -C "$incoming"; then
+if ! tar --no-same-owner -xzf "$file" -C "$incoming"; then
   rm -rf "$incoming"
   log "Could not unpack the backup. Nothing was changed."
   exit 1

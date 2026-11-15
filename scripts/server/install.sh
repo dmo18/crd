@@ -26,6 +26,7 @@ echo "Using $PUBLIC_HTML"
 CV_HOME="${CV_HOME:-$HOME/cardvault}"
 SHARED="$CV_HOME/shared"
 NVM_VERSION="v0.40.3"
+NVM_SHA256="2d8359a64a3cb07c02389ad88ceecd43f2fa469c06104f92f98df5b6f315275f"
 
 echo "== Checking memory"
 if [ -r /proc/meminfo ]; then
@@ -41,9 +42,15 @@ fi
 echo "== Installing Node 22 for your user (no root needed)"
 export NVM_DIR="$HOME/.nvm"
 if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" -o /tmp/nvm-install.sh
-  PROFILE=/dev/null bash /tmp/nvm-install.sh
-  rm -f /tmp/nvm-install.sh
+  nvm_file="$(mktemp "$HOME/.nvm-install.XXXXXX")"
+  curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" -o "$nvm_file"
+  # Refuse to run it unless it is exactly the reviewed nvm installer.
+  if ! echo "$NVM_SHA256  $nvm_file" | sha256sum -c --status; then
+    rm -f "$nvm_file"
+    echo "The nvm installer did not match the expected checksum. Stopping."; exit 1
+  fi
+  PROFILE=/dev/null bash "$nvm_file"
+  rm -f "$nvm_file"
 fi
 # shellcheck disable=SC1091
 . "$NVM_DIR/nvm.sh"
@@ -60,8 +67,8 @@ if [ ! -f "$SHARED/.env.local" ]; then
   echo "Use a long passphrase, at least 16 characters, that you do not use anywhere else."
   pw=""
   while [ "${#pw}" -lt 16 ]; do
-    read -r -s -p "New password: " pw; echo
-    read -r -s -p "Same password again: " pw2; echo
+    IFS= read -r -s -p "New password: " pw; echo
+    IFS= read -r -s -p "Same password again: " pw2; echo
     [ "$pw" = "$pw2" ] || { echo "They did not match. Try again."; pw=""; continue; }
     [ "${#pw}" -ge 16 ] || echo "Too short. Use at least 16 characters."
   done
@@ -124,11 +131,25 @@ RewriteEngine On
 RewriteBase /
 RewriteRule ^(.*)?\$ http://127.0.0.1:$(read_port)/\$1 [P,L]
 HTA
+chmod 644 "$PUBLIC_HTML/.htaccess"
 
 echo "== Scheduling the keep-alive check (every minute) and the daily backup"
 cron_lines="* * * * * $CURRENT/scripts/server/watchdog.sh >/dev/null 2>&1 # cardvault
 17 3 * * * $CURRENT/scripts/server/backup.sh >/dev/null 2>&1 # cardvault"
-if command -v crontab >/dev/null 2>&1 && { crontab -l 2>/dev/null | grep -v '# cardvault$'; printf '%s\n' "$cron_lines"; } | crontab - 2>/dev/null; then
+existing_cron=""
+cron_ok=0
+if command -v crontab >/dev/null 2>&1; then
+  if existing_cron="$(crontab -l 2>&1)"; then
+    cron_ok=1
+  elif printf '%s' "$existing_cron" | grep -qi "no crontab"; then
+    existing_cron=""; cron_ok=1
+  fi
+fi
+if [ "$cron_ok" = 1 ]; then
+  # Keep a copy of your existing jobs, then add ours without touching them.
+  printf '%s\n' "$existing_cron" > "$SHARED/crontab.before-cardvault"
+fi
+if [ "$cron_ok" = 1 ] && { printf '%s\n' "$existing_cron" | grep -v '# cardvault$' | sed '/^$/d'; printf '%s\n' "$cron_lines"; } | crontab - 2>/dev/null; then
   echo "Scheduled."
   cron_note=""
 else

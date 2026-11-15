@@ -52,16 +52,19 @@ build_release() {
   stamp="$(date -u +%Y%m%d%H%M%S)"
   dir="$RELEASES/$stamp"
   mkdir -p "$RELEASES"
-  git clone --quiet --depth 1 --branch "$CV_BRANCH" "$CV_REPO" "$dir" >&2 || die "Could not download the code."
+  git clone --quiet --depth 1 --branch "$CV_BRANCH" "$CV_REPO" "$dir" >&2 || die "Could not download the code. Nothing was changed."
   sha="$(git -C "$dir" rev-parse --short HEAD)"
   mv "$dir" "$dir-$sha"
   dir="$dir-$sha"
   ln -s "$SHARED/.env.local" "$dir/.env.local"
-  (
-    cd "$dir" || exit 1
-    npm ci --no-audit --no-fund --loglevel=error >&2 || die "Installing packages failed."
-    NODE_OPTIONS="--max-old-space-size=1024" npm run build >&2 || die "Building the app failed."
-  )
+  # set -e does not apply inside $(...), so every failure is checked by hand,
+  # and a release without a finished build is never handed back.
+  if ! (cd "$dir" && npm ci --no-audit --no-fund --loglevel=error >&2); then
+    rm -rf -- "$dir"; die "Installing packages failed. Nothing was changed."
+  fi
+  if ! (cd "$dir" && NODE_OPTIONS="--max-old-space-size=1024" npm run build >&2) || [ ! -f "$dir/.next/BUILD_ID" ]; then
+    rm -rf -- "$dir"; die "Building the app failed. Nothing was changed."
+  fi
   printf '%s\n' "$dir"
 }
 

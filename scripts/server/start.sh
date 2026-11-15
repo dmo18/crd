@@ -11,7 +11,7 @@ if health_ok; then
 fi
 if [ -f "$CV_PID_FILE" ]; then
   oldpid="$(tr -d '[:space:]' <"$CV_PID_FILE")"
-  if [[ "$oldpid" =~ ^[0-9]+$ ]] && [[ "$(ps -p "$oldpid" -o args= 2>/dev/null || true)" == *next* ]]; then
+  if [[ "$oldpid" =~ ^[0-9]+$ ]] && [[ "$(ps -p "$oldpid" -o args= 2>/dev/null || true)" == *"next start -p $PORT"* ]]; then
     log "Process $oldpid is already running but not answering. Run stop.sh first."
     exit 1
   fi
