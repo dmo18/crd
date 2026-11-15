@@ -4,6 +4,7 @@ import { images, items, scans, valuations, type ImageRow, type ValueSource } fro
 import { cropStored, ImageError, readStored, type StoredImage } from "@/lib/images/store";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
+import { recordSnapshot } from "@/lib/valuation/snapshots";
 import { RecognitionError, type RecognitionPhoto, type RecognizedItem, type Recognizer } from "@/lib/recognition/types";
 
 const GENERIC_FAILURE = "Something went wrong with this scan. Try again.";
@@ -81,6 +82,11 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
       tx.update(scans).set({ status: "done", itemCount: recognized.length, recognizer: recognizer.name, finishedAt: at, error: null })
         .where(eq(scans.id, scanId)).run();
     });
+    try {
+      recordSnapshot(db, at);
+    } catch {
+      // The value chart can catch up later. It must never fail a scan.
+    }
   } catch (err) {
     // Log the kind of failure only. Never photo data, hints or keys.
     console.error(`scan ${scanId} failed: ${err instanceof Error ? err.name : "unknown error"}`);

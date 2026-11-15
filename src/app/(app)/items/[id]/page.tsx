@@ -1,5 +1,8 @@
 import { asc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
+import { GradingAdvice } from "@/components/items/GradingAdvice";
+import { SoldLinks } from "@/components/items/SoldLinks";
+import { ValueTools } from "@/components/items/ValueTools";
 import { DuplicateNotice } from "@/components/items/DuplicateNotice";
 import { DeleteItemButton } from "@/components/items/DeleteItemButton";
 import { ItemBadges } from "@/components/items/ItemRow";
@@ -7,6 +10,7 @@ import { ItemForm } from "@/components/items/ItemForm";
 import { Button, Card, Notice } from "@/components/ui";
 import { getDb } from "@/db";
 import { images, items, locations } from "@/db/schema";
+import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction } from "@/lib/items/actions";
 import { confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
 import { parsePullList } from "@/lib/items/from-recognition";
@@ -18,6 +22,7 @@ const ROLE_NAMES = { front: "Front", back: "Back", crop: "Close-up", source: "Or
 const ROLE_ORDER = { crop: 0, front: 1, back: 2, source: 3 } as const;
 
 export default async function ItemPage({ params }: { params: Promise<{ id: string }> }) {
+  await requireOwner();
   const { id: rawId } = await params;
   if (!/^\d{1,9}$/.test(rawId)) notFound();
   const id = Number(rawId);
@@ -88,7 +93,11 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
         {source ? <p className="text-sm text-muted">Source: {VALUE_SOURCE_LABELS[source]}</p> : null}
         {item.valueBasis ? <p className="text-sm">{item.valueBasis}</p> : null}
         <p className="pt-1 text-xs text-muted">Estimates are a guide, not an appraisal.</p>
+        <ValueTools itemId={item.id} />
       </Card>
+
+      <GradingAdvice item={item} />
+      <SoldLinks item={item} />
 
       {item.kind === "sealed" ? <Notice tone="accent">Keep it sealed. Sealed product is usually worth more unopened.</Notice> : null}
 
