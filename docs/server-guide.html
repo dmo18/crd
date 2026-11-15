@@ -237,7 +237,7 @@ td .val { white-space: nowrap; }
         <li>It asks for your Ubuntu password (from step 3). Type it, Enter.</li>
         <li>Answer its questions as in the picture. To paste the token: copy it from Notepad, then <span class="ui">Clipboard</span>, <span class="ui">Type clipboard text</span>, wait about 20 seconds, Enter.</li>
       </ol>
-      <div class="cmd"><code id="c-setup">curl -fsSL https://github.com/dmo18/crd/archive/refs/heads/main.tar.gz | tar xz &amp;&amp; cd crd-main/infra/ubuntu &amp;&amp; sudo bash bootstrap.sh --cloudflare appy.<span data-d></span> <span data-e></span></code><button class="copy" type="button" data-copy="c-setup">Copy</button></div>
+      <div class="cmd"><code id="c-setup">cd ~ &amp;&amp; rm -rf crd-main &amp;&amp; curl -fsSL https://github.com/dmo18/crd/archive/refs/heads/main.tar.gz | tar xz &amp;&amp; cd crd-main/infra/ubuntu &amp;&amp; sudo bash bootstrap.sh --cloudflare appy.<span data-d></span> <span data-e></span></code><button class="copy" type="button" data-copy="c-setup">Copy</button></div>
       <figure><div class="term"><span class="dim">Paste the Cloudflare tunnel token (it starts with eyJ) and press Enter.
 What you type stays hidden:</span> <span class="you">paste the token, Enter (nothing shows, that is normal)</span>
 

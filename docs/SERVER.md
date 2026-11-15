@@ -29,7 +29,7 @@ Cloudflare and Coolify.
 
 ## Step 5 command
 ```
-curl -fsSL https://github.com/dmo18/crd/archive/refs/heads/main.tar.gz | tar xz && cd crd-main/infra/ubuntu && sudo bash bootstrap.sh --cloudflare appy.yourdomain.com you@example.com
+cd ~ && rm -rf crd-main && curl -fsSL https://github.com/dmo18/crd/archive/refs/heads/main.tar.gz | tar xz && cd crd-main/infra/ubuntu && sudo bash bootstrap.sh --cloudflare appy.yourdomain.com you@example.com
 ```
 In the Hyper-V console paste with **Clipboard, Type clipboard text**.
 
