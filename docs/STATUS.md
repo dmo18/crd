@@ -1,5 +1,27 @@
 # Status
 
+## Milestone 4: free card reading, no keys (done)
+- Owner rule: never require API keys; free preferred.
+- Cards are read on the server with Tesseract (offline, bundled English
+  data), a card finder splits many-card photos, a parser pulls out year,
+  brand, number, player, team and slab details, a built-in list of 107 key
+  1980 to 1995 cards flags rookies and errors, and Wikidata (free, no key,
+  cached 90 days) confirms players and Hall of Fame status.
+- Values: one-tap sold listing links plus a quick "Price you saw" box.
+  No automatic prices (no free, keyless, allowed source exists).
+- Paid AI code kept but off unless `RECOGNITION_MODE=anthropic`.
+- Verified: 239 tests, build, phone-size walkthrough with printed-style
+  test cards: single cards identified in 2 to 4 seconds, 6 of 6 names read
+  in a many-card photo, sealed box and bulk lot labels read.
+- Not verified: real phone photos of real cards (glare, wear, busy fronts).
+  Expect more scans in Review than with paid AI.
+- Known limits: card fronts alone rarely show the year, so front-only
+  scans usually wait in Review; adding the back photo helps most. Wikidata
+  data has gaps (for example, Michael Jordan's Hall of Fame entry was not
+  found). The key card list comes from model knowledge and leaves out cards
+  it was unsure of.
+
+
 ## Done (all 17 planned tasks)
 - Milestone 1: setup, database, owner login, camera capture, AI recognition
   (real and sample), scan pipeline, scan and item screens

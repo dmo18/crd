@@ -13,9 +13,12 @@ sealed packs and boxes and bulk lots.
 5. Run `npm run set-password`, choose a password, paste the printed line too.
 6. Run `npm run dev` and open http://localhost:3000.
 
-Without an Anthropic API key the app runs in free sample mode: scans return
-made-up example cards so you can try every screen. Add `ANTHROPIC_API_KEY` to
-`.env.local` for real recognition (billed per scan by Anthropic).
+Cards are read for free on the server: no API keys, no accounts. The app
+reads the printed text (Tesseract, offline), checks a built-in list of key
+1980 to 1995 cards, and confirms players on Wikidata, a free public database.
+Values come from you: each card has one-tap links to real sold listings and a
+box to type the price you see. To try the app with made-up cards instead, set
+`RECOGNITION_MODE=sample` in `.env.local`.
 
 ## Checks
 
@@ -24,6 +27,8 @@ the production build.
 
 ## Good to know
 
-- Values are AI estimates, not appraisals. Each item links to real sold
-  listings so you can confirm before selling or insuring.
+- Values are your own entries, guided by real sold listings. They are not
+  appraisals.
+- Clear, flat, well lit photos without glare read best. Card backs (with
+  the copyright line and card number) identify cards most reliably.
 - Photos and the database are stored in the `data` folder. Back it up.

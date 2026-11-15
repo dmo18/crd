@@ -22,7 +22,10 @@ Next.js 16 (App Router, `src/`), React 19, TypeScript, Tailwind 4, SQLite
   Value lists and types come from `src/db/schema.ts`. Migrations apply on startup.
 - Money is whole US cents in integers. Use `src/lib/money.ts`.
 - Card recognition goes through the `Recognizer` contract in
-  `src/lib/recognition/types.ts`. Tests and previews use sample mode only.
+  `src/lib/recognition/types.ts`. Default is free, keyless reading in
+  `src/lib/free/` (owner rule: never require API keys). Paid AI stays off
+  unless `RECOGNITION_MODE=anthropic`. Tests use sample mode or fakes; tests
+  never touch the network.
 - Screens: phone first (360px wide), use `src/components/ui.tsx` and the color
   tokens in `globals.css` (no raw hex), 44px tap targets, labeled controls.
 - Every page and API route except `/login` requires the owner session.
