@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireOwner } from "@/lib/auth/guard";
-import { deleteStored } from "@/lib/images/store";
+import { getDb } from "@/db";
 import { mergeInto } from "./duplicates";
+import { deleteFailedScans, deletePhotoFiles } from "./remove";
 import { confirmItem, deleteItem } from "./update";
 
 const idSchema = z.coerce.number().int().positive();
@@ -21,14 +22,9 @@ export async function mergeDuplicateAction(formData: FormData): Promise<void> {
   const target = idSchema.safeParse(formData.get("targetId"));
   if (!source.success || !target.success) return;
   const result = mergeInto(source.data, target.data);
-  if (!result.ok) {
-    refresh();
-    return;
-  }
-  for (const file of result.files) {
-    try { await deleteStored(file); } catch { /* a missing file must not block the merge */ }
-  }
   refresh();
+  if (!result.ok) redirect(`/review?merge=${result.problem}`);
+  await deletePhotoFiles(result.files);
   redirect(`/items/${result.targetId}`);
 }
 
@@ -46,4 +42,12 @@ export async function deleteFromReviewAction(formData: FormData): Promise<void> 
   if (!id.success) return;
   await deleteItem(id.data);
   refresh();
+}
+
+/** Owner only: removes every failed scan and its photos. */
+export async function deleteFailedScansAction(): Promise<void> {
+  await requireOwner();
+  const removed = await deleteFailedScans(getDb());
+  refresh();
+  redirect(`/review?cleared=${removed}`);
 }

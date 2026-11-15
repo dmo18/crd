@@ -13,7 +13,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ file: strin
       headers: {
         "Content-Type": "image/jpeg",
         "Content-Length": String(data.length),
-        "Cache-Control": "private, max-age=31536000, immutable",
+        "Cache-Control": "private, max-age=86400",
         "X-Content-Type-Options": "nosniff",
       },
     });

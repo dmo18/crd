@@ -28,7 +28,7 @@ export type StoredImage = { file: string; thumbFile: string; width: number; heig
 
 const DECODE_OPTIONS = { failOn: "error", limitInputPixels: 30_000_000 } as const;
 
-function uploadsDir(): string {
+export function uploadsDir(): string {
   return path.resolve(env().DATA_DIR, "uploads");
 }
 

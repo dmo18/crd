@@ -15,12 +15,15 @@ const SORT_OPTIONS = [
   ["title", "Title A to Z"],
 ] as const;
 
+/** The dashboard's "Key cards" tile counts both of these. */
+const KEY_OR_GRAIL = "key,grail";
+
 /** Short phrases for the "Filters on" line, e.g. "Kind Card". */
 export function activeFilterLabels(f: Filters, locations: Pick<Location, "id" | "name">[]): string[] {
   const out: string[] = [];
   if (f.kind) out.push(`Kind ${KIND_LABELS[f.kind]}`);
   if (f.sport) out.push(`Sport ${SPORT_LABELS[f.sport]}`);
-  if (f.tier) out.push(`Rarity ${RARITY_LABELS[f.tier]}`);
+  if (f.tier?.length) out.push(`Rarity ${f.tier.map((t) => RARITY_LABELS[t]).join(" or ")}`);
   if (f.status) out.push(`Status ${STATUS_LABELS[f.status]}`);
   if (f.location === "none") out.push("No location");
   else if (f.location != null) out.push(`Location ${locations.find((l) => l.id === f.location)?.name ?? "Unknown"}`);
@@ -60,9 +63,13 @@ export function InventoryFilters({ filters, locations }: { filters: Filters; loc
             </select>
           </Field>
           <Field label="Rarity" htmlFor="inv-tier">
-            <select id="inv-tier" name="tier" defaultValue={filters.tier ?? ""} className={INPUT_CLASS}>
+            <select id="inv-tier" name="tier" defaultValue={filters.tier?.join(",") ?? ""} className={INPUT_CLASS}>
               <option value="">Any rarity</option>
+              <option value={KEY_OR_GRAIL}>Key card or grail</option>
               {RARITY_TIERS.map((t) => <option key={t} value={t}>{RARITY_LABELS[t]}</option>)}
+              {filters.tier && filters.tier.length > 1 && filters.tier.join(",") !== KEY_OR_GRAIL ? (
+                <option value={filters.tier.join(",")}>{filters.tier.map((t) => RARITY_LABELS[t]).join(" or ")}</option>
+              ) : null}
             </select>
           </Field>
           <Field label="Status" htmlFor="inv-status">

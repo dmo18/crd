@@ -1,11 +1,13 @@
-import { asc, eq } from "drizzle-orm";
+import { asc, count, eq } from "drizzle-orm";
+import { z } from "zod";
+import { DeleteFailedScans } from "@/components/items/DeleteFailedScans";
 import { ItemRow } from "@/components/items/ItemRow";
 import { ReviewRowActions } from "@/components/items/ReviewRowActions";
-import { Button, Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
+import { Button, Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
 import { requireOwner } from "@/lib/auth/guard";
-import { items } from "@/db/schema";
-import { findDuplicates, reviewCount } from "@/lib/items/duplicates";
+import { items, scans } from "@/db/schema";
+import { findDuplicates, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount } from "@/lib/items/duplicates";
 import { mergeDuplicateAction } from "@/lib/items/review-actions";
 import { summarize } from "@/lib/scans/view";
 
@@ -13,9 +15,20 @@ export const metadata = { title: "Review" };
 
 const LIMIT = 100;
 
-export default async function ReviewPage() {
+const noticeSchema = z.object({
+  merge: z.enum(MERGE_PROBLEMS).optional().catch(undefined),
+  cleared: z.coerce.number().int().min(0).max(1_000_000).optional().catch(undefined),
+});
+
+type Params = Record<string, string | string[] | undefined>;
+
+export default async function ReviewPage({ searchParams }: { searchParams: Promise<Params> }) {
   await requireOwner();
+  const raw = await searchParams;
+  const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+  const notice = noticeSchema.parse({ merge: one(raw.merge), cleared: one(raw.cleared) });
   const db = getDb();
+  const failedScans = db.select({ n: count() }).from(scans).where(eq(scans.status, "failed")).get()?.n ?? 0;
   const total = reviewCount(db);
   const rows = db.select().from(items).where(eq(items.status, "needs_review"))
     .orderBy(asc(items.createdAt), asc(items.id)).limit(LIMIT).all();
@@ -27,6 +40,11 @@ export default async function ReviewPage() {
         title="Review"
         subtitle={total === 0 ? "Nothing waiting" : `${total} ${total === 1 ? "item needs" : "items need"} a quick look`}
       />
+      {notice.merge ? <div role="alert"><Notice tone="danger">{MERGE_MESSAGES[notice.merge]}</Notice></div> : null}
+      {notice.cleared !== undefined ? (
+        <Notice tone="accent">{notice.cleared === 1 ? "Deleted 1 failed scan." : `Deleted ${notice.cleared} failed scans.`}</Notice>
+      ) : null}
+      {failedScans > 0 ? <Card className="p-3"><DeleteFailedScans count={failedScans} /></Card> : null}
       {total === 0 ? (
         <EmptyState
           title="All caught up"

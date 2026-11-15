@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
-import { items } from "@/db/schema";
+import { items, locations } from "@/db/schema";
 import { createLocation, deleteLocation, listLocations, renameLocation } from "./locations";
 
 let db: Db;
@@ -68,5 +68,23 @@ describe("locations", () => {
     expect(row).toBeDefined();
     expect(row!.locationId).toBeNull();
     expect(deleteLocation(id, db).ok).toBe(false);
+  });
+});
+
+describe("unique location names in the database", () => {
+  it("refuses a second name differing only in capitals, even past the early check", () => {
+    make("Box 1");
+    expect(() => db.insert(locations).values({ name: "BOX 1" }).run()).toThrow(/UNIQUE/i);
+  });
+  it("turns a constraint error from a racing save into the plain message", () => {
+    make("Box 1");
+    // The early check finds nothing, as when another save lands right after it.
+    const racing = new Proxy(db, {
+      get(target, prop, recv) {
+        if (prop === "select") return () => ({ from: () => ({ where: () => ({ get: () => undefined }) }) });
+        return Reflect.get(target, prop, recv);
+      },
+    });
+    expect(createLocation({ name: "box 1", kind: "", notes: "" }, racing)).toEqual({ ok: false, errors: { name: "You already have a location with that name." } });
   });
 });

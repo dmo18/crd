@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { check, index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /** Shared value lists. Import these instead of retyping the strings. */
 export const ITEM_KINDS = ["card", "sealed", "bulk"] as const;
@@ -40,7 +40,10 @@ export const locations = sqliteTable("locations", {
   kind: text("kind"),
   notes: text("notes"),
   createdAt: ts("created_at").notNull().default(now),
-});
+}, (t) => [
+  // "Box 1" and "box 1" are the same place, even when two saves race.
+  uniqueIndex("locations_name_lower_unique").on(sql`lower(${t.name})`),
+]);
 
 /** One scanning action: one or more photos sent for recognition. */
 export const scans = sqliteTable("scans", {
@@ -55,6 +58,8 @@ export const scans = sqliteTable("scans", {
   itemCount: integer("item_count").notNull().default(0),
   recognizer: text("recognizer"),
   createdAt: ts("created_at").notNull().default(now),
+  /** When processing last began. Null while the scan waits in the queue. */
+  startedAt: ts("started_at"),
   finishedAt: ts("finished_at"),
 }, (t) => [index("scans_status_idx").on(t.status)]);
 
@@ -190,8 +195,18 @@ export const loginAttempts = sqliteTable("login_attempts", {
   success: bool("success"),
   /** Sign-in, first-run setup or password change. Only a marker: limits count every kind. */
   kind: text("kind", { enum: ATTEMPT_KINDS }).notNull().default("login"),
+  /** The wider network for the shared limit: an IPv6 /48, or the IPv4 address itself. Null on old rows. */
+  net: text("net"),
+  /**
+   * Set when the attempt came from a trusted device (a browser that signed in
+   * before). Those attempts count only toward that device's own limit.
+   */
+  deviceId: text("device_id"),
   createdAt: ts("created_at").notNull().default(now),
-}, (t) => [index("login_attempts_ip_idx").on(t.ip, t.createdAt)]);
+}, (t) => [
+  index("login_attempts_ip_idx").on(t.ip, t.createdAt),
+  index("login_attempts_device_idx").on(t.deviceId, t.createdAt),
+]);
 
 /**
  * The owner password when it was set in the app (first-run setup) instead of
@@ -206,6 +221,18 @@ export const ownerSettings = sqliteTable("owner_settings", {
   sessionVersion: integer("session_version").notNull().default(1),
   updatedAt: ts("updated_at").notNull().default(now),
 }, () => [check("owner_settings_single_row", sql`id = 1`)]);
+
+/**
+ * Sign-in state that is not a password. At most one row, always id 1.
+ * `envSessionVersion` is the session version used while the password comes
+ * from OWNER_PASSWORD_HASH_B64; "Sign out all other devices" raises it. A
+ * missing row means version 0, which is what such sessions carried before.
+ */
+export const authState = sqliteTable("auth_state", {
+  id: integer("id").primaryKey(),
+  envSessionVersion: integer("env_session_version").notNull().default(0),
+  updatedAt: ts("updated_at").notNull().default(now),
+}, () => [check("auth_state_single_row", sql`id = 1`)]);
 
 /** Facts about players from Wikidata (free, no key), cached so each name is looked up once. */
 export const playerFacts = sqliteTable("player_facts", {

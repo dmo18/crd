@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
-import { CONDITIONS, images, items, locations, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS, valuations, type Item } from "@/db/schema";
-import { deleteStored } from "@/lib/images/store";
+import { CONDITIONS, items, locations, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS, valuations, type Item } from "@/db/schema";
+import { MAX_QUANTITY } from "@/lib/items/duplicates";
+import { deletePhotoFiles, removeItemRows } from "@/lib/items/remove";
 import { parseDollars } from "@/lib/money";
 import { buildTitle } from "@/lib/title";
 
@@ -47,7 +48,7 @@ export const itemEditSchema = z.object({
   description: text(600),
   quantity: z.union([z.number().int(), z.string().trim().regex(/^\d+$/)])
     .transform((v) => Number(v))
-    .refine((v) => v >= 1 && v <= 100_000, "Enter a whole number from 1 to 100,000."),
+    .refine((v) => v >= 1 && v <= MAX_QUANTITY, "Enter a whole number from 1 to 100,000."),
   notes: text(600),
   locationId: wholeNumber(1, 2_000_000_000, "That location no longer exists."),
   manualValue: z.string().trim().transform((v, ctx) => {
@@ -136,15 +137,13 @@ export function confirmItem(id: number, db: Db = getDb()): UpdateResult {
   return res.changes > 0 ? { ok: true } : GONE;
 }
 
+/**
+ * Deletes an item: all its rows in one transaction, then its photo files.
+ * The last item of a scan also takes the scan's own photos with it.
+ */
 export async function deleteItem(id: number, db: Db = getDb()): Promise<UpdateResult> {
-  const existing = db.select({ id: items.id }).from(items).where(eq(items.id, id)).get();
-  if (!existing) return GONE;
-  const files = db.select().from(images).where(eq(images.itemId, id)).all();
-  for (const f of files) {
-    try { await deleteStored(f.file); } catch { /* a missing file must not block deleting */ }
-  }
-  db.delete(images).where(eq(images.itemId, id)).run();
-  db.delete(valuations).where(eq(valuations.itemId, id)).run();
-  db.delete(items).where(eq(items.id, id)).run();
+  const files = db.transaction((tx) => removeItemRows(tx as unknown as Db, id), { behavior: "immediate" });
+  if (files === null) return GONE;
+  await deletePhotoFiles(files);
   return { ok: true };
 }

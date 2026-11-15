@@ -9,8 +9,8 @@ import type { RarityTier, Sport } from "@/db/schema";
  * with any doubt about the number were left out on purpose.
  *
  * Coverage:
- * - Baseball: Topps, Topps Traded, Fleer, Fleer Update, Donruss, Leaf, Bowman,
- *   Score Traded, Upper Deck and Upper Deck SP, 1980 to 1993.
+ * - Baseball: Topps, Topps Traded, Fleer, Fleer Update, Donruss, Donruss Rookies,
+ *   Leaf, Bowman, Score Traded, Upper Deck and Upper Deck SP, 1980 to 1994.
  * - Basketball: Star, Fleer, Fleer Stickers, Fleer Ultra, NBA Hoops and Upper Deck,
  *   1984 to 1992 (year is the first year of the season, so 1986 means 1986 to 87).
  * - Football: Topps, Topps USFL, Topps Traded, Score, Score Supplemental and
@@ -19,6 +19,10 @@ import type { RarityTier, Sport } from "@/db/schema";
  *   of the season).
  *
  * Card numbers are written as printed: "98T" for Topps Traded, "U-27" for Fleer Update.
+ * isRookie is false when an earlier true rookie card exists, for example a Star
+ * Company basketball card or a USFL football card.
+ * Left out for now because the card number was not certain: the 1980 Topps
+ * basketball Bird, Erving and Magic panel.
  */
 
 export type KeyCard = {
@@ -92,6 +96,9 @@ export const KEY_CARDS: readonly KeyCard[] = [
   card(B, 1983, "Fleer", "Fleer", "179", "Wade Boggs", "key", "Rookie card from the 1983 Fleer set."),
   card(B, 1983, "Donruss", "Donruss", "598", "Tony Gwynn", "key", "Rookie card from the 1983 Donruss set."),
   card(B, 1983, "Donruss", "Donruss", "586", "Wade Boggs", "key", "Rookie card from the 1983 Donruss set."),
+  card(B, 1983, "Topps", "Topps", "83", "Ryne Sandberg", "key", "Rookie card of the Cubs second baseman."),
+  card(B, 1983, "Fleer", "Fleer", "507", "Ryne Sandberg", "key", "Rookie card from the 1983 Fleer set."),
+  card(B, 1983, "Donruss", "Donruss", "277", "Ryne Sandberg", "key", "Rookie card from the 1983 Donruss set."),
   card(B, 1983, "Topps", "Topps Traded", "108T", "Darryl Strawberry", "star", "Rookie card from the 1983 Topps Traded set."),
   card(B, 1984, "Topps", "Topps", "8", "Don Mattingly", "key", "Rookie card of the Yankees first baseman."),
   card(B, 1984, "Fleer", "Fleer", "131", "Don Mattingly", "key", "Rookie card from the 1984 Fleer set."),
@@ -99,6 +106,7 @@ export const KEY_CARDS: readonly KeyCard[] = [
   card(B, 1984, "Fleer", "Fleer Update", "U-27", "Roger Clemens", "key", "Early Clemens card from the hard to find Fleer Update set."),
   card(B, 1984, "Fleer", "Fleer Update", "U-93", "Kirby Puckett", "key", "Early Puckett card from the hard to find Fleer Update set."),
   card(B, 1984, "Topps", "Topps Traded", "42T", "Dwight Gooden", "star", "Rookie card from the 1984 Topps Traded set."),
+  card(B, 1984, "Fleer", "Fleer Update", "U-43", "Dwight Gooden", "star", "Early Gooden card from the hard to find Fleer Update set."),
   card(B, 1985, "Topps", "Topps", "401", "Mark McGwire", "key", "First McGwire card, from the 1984 Olympic team subset."),
   card(B, 1985, "Topps", "Topps", "181", "Roger Clemens", "key", "Rookie card from the 1985 Topps set."),
   card(B, 1985, "Topps", "Topps", "536", "Kirby Puckett", "key", "Rookie card from the 1985 Topps set."),
@@ -108,11 +116,12 @@ export const KEY_CARDS: readonly KeyCard[] = [
   card(B, 1985, "Donruss", "Donruss", "273", "Roger Clemens", "key", "Rookie card from the 1985 Donruss set."),
   card(B, 1985, "Donruss", "Donruss", "438", "Kirby Puckett", "key", "Rookie card from the 1985 Donruss set."),
   card(B, 1986, "Donruss", "Donruss", "39", "Jose Canseco", "key", "Rated Rookie card and a hobby favorite of the 1980s."),
+  card(B, 1986, "Donruss", "Donruss Rookies", "22", "Jose Canseco", "star", "Rookie card from the boxed 1986 Donruss The Rookies set."),
   card(B, 1986, "Topps", "Topps Traded", "11T", "Barry Bonds", "key", "First Topps card of the career home run leader."),
   card(B, 1986, "Topps", "Topps Traded", "20T", "Jose Canseco", "star", "Rookie card from the 1986 Topps Traded set."),
   card(B, 1986, "Topps", "Topps Traded", "50T", "Bo Jackson", "star", "Rookie card from the 1986 Topps Traded set."),
   card(B, 1987, "Topps", "Topps", "320", "Barry Bonds", "key", "Rookie card from the 1987 Topps set."),
-  card(B, 1987, "Topps", "Topps", "366", "Mark McGwire", "key", "First regular Topps card of McGwire with the A's."),
+  card(B, 1987, "Topps", "Topps", "366", "Mark McGwire", "key", "First regular Topps card of McGwire with the A's; his 1985 Topps Olympic card came first.", { rookie: false }),
   card(B, 1987, "Topps", "Topps", "170", "Bo Jackson", "star", "Future Stars card from the 1987 Topps set."),
   card(B, 1987, "Fleer", "Fleer", "604", "Barry Bonds", "key", "Rookie card from the 1987 Fleer set."),
   card(B, 1987, "Fleer", "Fleer", "396", "Mark McGwire", "key", "Rookie card from the 1987 Fleer set."),
@@ -147,26 +156,30 @@ export const KEY_CARDS: readonly KeyCard[] = [
     variation: "No name on front",
   }),
   card(B, 1990, "Leaf", "Leaf", "300", "Frank Thomas", "key", "Rookie card from the first modern Leaf set."),
+  card(B, 1992, "Bowman", "Bowman", "302", "Mariano Rivera", "key", "Rookie card of the career saves leader."),
+  card(B, 1993, "Topps", "Topps", "98", "Derek Jeter", "key", "Draft pick rookie card from the 1993 Topps set."),
+  card(B, 1993, "Upper Deck", "Upper Deck", "449", "Derek Jeter", "key", "Rookie card from the 1993 Upper Deck set."),
   card(B, 1993, "Upper Deck", "SP", "279", "Derek Jeter", "grail", "Foil rookie card that is hard to find in clean condition."),
+  card(B, 1994, "Upper Deck", "SP", "15", "Alex Rodriguez", "key", "Foil rookie card from the 1994 SP set."),
 
   // Basketball
   card(K, 1984, "Star", "Star", "101", "Michael Jordan", "key", "First Jordan card, sold only in team bags."),
-  card(K, 1986, "Fleer", "Fleer", "57", "Michael Jordan", "grail", "The best known basketball rookie card of the era."),
-  card(K, 1986, "Fleer", "Fleer Stickers", "8", "Michael Jordan", "key", "Rookie year sticker found one per 1986 Fleer pack."),
-  card(K, 1986, "Fleer", "Fleer", "7", "Charles Barkley", "key", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "82", "Hakeem Olajuwon", "key", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "32", "Patrick Ewing", "key", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "68", "Karl Malone", "key", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "26", "Clyde Drexler", "key", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "121", "Dominique Wilkins", "key", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "109", "Isiah Thomas", "key", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "131", "James Worthy", "star", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "27", "Joe Dumars", "star", "Rookie card from the 1986 Fleer set."),
-  card(K, 1986, "Fleer", "Fleer", "77", "Chris Mullin", "star", "Rookie card from the 1986 Fleer set."),
+  card(K, 1986, "Fleer", "Fleer", "57", "Michael Jordan", "grail", "The best known basketball card of the era. First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer Stickers", "8", "Michael Jordan", "key", "Sticker found one per 1986 Fleer pack. First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "7", "Charles Barkley", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "82", "Hakeem Olajuwon", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "32", "Patrick Ewing", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "68", "Karl Malone", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "26", "Clyde Drexler", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "121", "Dominique Wilkins", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "109", "Isiah Thomas", "key", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "131", "James Worthy", "star", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "27", "Joe Dumars", "star", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
+  card(K, 1986, "Fleer", "Fleer", "77", "Chris Mullin", "star", "First major set card; earlier Star Company rookie exists.", { rookie: false }),
   card(K, 1987, "Fleer", "Fleer", "59", "Michael Jordan", "key", "Second year Fleer card of Jordan.", { rookie: false }),
   card(K, 1988, "Fleer", "Fleer", "20", "Scottie Pippen", "key", "Rookie card from the 1988 Fleer set."),
   card(K, 1988, "Fleer", "Fleer", "57", "Reggie Miller", "star", "Rookie card from the 1988 Fleer set."),
-  card(K, 1988, "Fleer", "Fleer", "42", "Dennis Rodman", "star", "Rookie card from the 1988 Fleer set."),
+  card(K, 1988, "Fleer", "Fleer", "43", "Dennis Rodman", "star", "Rookie card from the 1988 Fleer set."),
   card(K, 1989, "NBA Hoops", "NBA Hoops", "138", "David Robinson", "key", "Rookie card from the first NBA Hoops set."),
   card(K, 1992, "Upper Deck", "Upper Deck", "1", "Shaquille O'Neal", "key", "Draft pick rookie card that opens the 1992 Upper Deck set."),
   card(K, 1992, "Fleer", "Fleer", "401", "Shaquille O'Neal", "key", "Rookie card from the 1992 Fleer set."),
@@ -181,9 +194,9 @@ export const KEY_CARDS: readonly KeyCard[] = [
   card(F, 1984, "Topps", "Topps USFL", "52", "Steve Young", "key", "First Young card, from his USFL days."),
   card(F, 1984, "Topps", "Topps USFL", "58", "Reggie White", "key", "First White card, from his USFL days."),
   card(F, 1986, "Topps", "Topps", "161", "Jerry Rice", "key", "Rookie card of the career receiving leader."),
-  card(F, 1986, "Topps", "Topps", "374", "Steve Young", "star", "First NFL card of Young."),
-  card(F, 1986, "Topps", "Topps", "275", "Reggie White", "star", "First NFL card of White."),
-  card(F, 1987, "Topps", "Topps", "362", "Jim Kelly", "star", "First NFL card of Kelly."),
+  card(F, 1986, "Topps", "Topps", "374", "Steve Young", "star", "First NFL card of Young; his 1984 USFL card came first.", { rookie: false }),
+  card(F, 1986, "Topps", "Topps", "275", "Reggie White", "star", "First NFL card of White; his 1984 USFL card came first.", { rookie: false }),
+  card(F, 1987, "Topps", "Topps", "362", "Jim Kelly", "star", "First NFL card of Kelly; his 1984 USFL card came first.", { rookie: false }),
   card(F, 1988, "Topps", "Topps", "327", "Bo Jackson", "key", "Football rookie card of the two sport star."),
   card(F, 1989, "Score", "Score", "257", "Barry Sanders", "key", "Rookie card from the first Score football set."),
   card(F, 1989, "Score", "Score", "270", "Troy Aikman", "key", "Rookie card from the first Score football set."),
@@ -204,6 +217,7 @@ export const KEY_CARDS: readonly KeyCard[] = [
   card(H, 1985, "Topps", "Topps", "9", "Mario Lemieux", "key", "Rookie card from the 1985 Topps set."),
   card(H, 1986, "O-Pee-Chee", "O-Pee-Chee", "53", "Patrick Roy", "key", "Rookie card from the 1986 O-Pee-Chee set."),
   card(H, 1986, "Topps", "Topps", "53", "Patrick Roy", "star", "Rookie card from the 1986 Topps set."),
+  card(H, 1988, "O-Pee-Chee", "O-Pee-Chee", "66", "Brett Hull", "key", "Rookie card from the 1988 O-Pee-Chee set."),
   card(H, 1990, "Upper Deck", "Upper Deck", "356", "Jaromir Jagr", "star", "Rookie card from the first Upper Deck hockey set."),
 ];
 
@@ -255,7 +269,8 @@ function pickOne(matches: KeyCard[]): KeyCard | null {
 
 /**
  * Finds one listed card. Needs a year and a brand, then the card number,
- * or failing that the player. Returns null on no match or a tie.
+ * or when no number was read the player. Returns null on no match or a tie.
+ * This is a plain lookup: use matchKeyCard to check what was read against it.
  */
 export function findKeyCard(q: KeyCardQuery): KeyCard | null {
   try {
@@ -271,7 +286,8 @@ export function findKeyCard(q: KeyCardQuery): KeyCard | null {
       const num = normalizeCardNumber(q.cardNumber);
       if (num) {
         const byNumber = pool.filter((k) => normalizeCardNumber(k.cardNumber) === num);
-        if (byNumber.length > 0) return pickOne(byNumber);
+        // A number that is not listed rules out a match by name: it is a different card of that player.
+        return byNumber.length > 0 ? pickOne(byNumber) : null;
       }
     }
     if (q.player) {
@@ -282,6 +298,79 @@ export function findKeyCard(q: KeyCardQuery): KeyCard | null {
       }
     }
     return null;
+  } catch {
+    return null;
+  }
+}
+
+export type KeyCardRead = {
+  year: number | null;
+  brand: string | null;
+  setName?: string | null;
+  cardNumber: string | null;
+  /** Every name read from the card, best first. */
+  players: string[];
+  sport: Sport | null;
+};
+
+export type KeyCardMatch = {
+  card: KeyCard;
+  /**
+   * confirmed: year, brand, number and player all agree.
+   * possible: only the number or only the player agrees, so the owner checks it.
+   */
+  how: "confirmed" | "possible";
+  /** A listed error or variation of this card: the owner checks which version it is. */
+  errorCheck: KeyCard | null;
+};
+
+function errorVersionOf(card: KeyCard): KeyCard | null {
+  if (card.isError) return card;
+  return (
+    KEY_CARDS.find(
+      (k) =>
+        k !== card &&
+        k.isError &&
+        k.year === card.year &&
+        k.setName === card.setName &&
+        k.cardNumber === card.cardNumber &&
+        normalizeName(k.player) === normalizeName(card.player),
+    ) ?? null
+  );
+}
+
+/**
+ * Matches what was read against the list without trusting any one clue:
+ * - number and player both agree: confirmed;
+ * - number agrees and no player was read: possible;
+ * - a player was read and differs: no match, even when the number agrees;
+ * - player agrees and no number was read: possible; a different number read: no match;
+ * - a sport read from the card that differs from the listed card: no match.
+ */
+export function matchKeyCard(r: KeyCardRead): KeyCardMatch | null {
+  try {
+    if (r.year == null || !r.brand) return null;
+    const brand = normalizeBrand(r.brand);
+    if (!brand) return null;
+    let pool = KEY_CARDS.filter((k) => k.year === r.year && normalizeBrand(k.brand) === brand);
+    if (r.sport) pool = pool.filter((k) => k.sport === r.sport);
+    // A set name that is just the brand was not really read, so it does not narrow the list.
+    if (r.setName && normalizeBrand(r.setName) !== brand) pool = pool.filter((k) => sameText(k.setName, r.setName as string));
+    if (pool.length === 0) return null;
+    const names = new Set(r.players.map(normalizeName).filter(Boolean));
+    const done = (card: KeyCard | null, how: KeyCardMatch["how"]): KeyCardMatch | null =>
+      card ? { card, how, errorCheck: errorVersionOf(card) } : null;
+
+    const num = r.cardNumber ? normalizeCardNumber(r.cardNumber) : "";
+    if (num) {
+      const byNumber = pool.filter((k) => normalizeCardNumber(k.cardNumber) === num);
+      if (byNumber.length === 0) return null;
+      if (names.size === 0) return done(pickOne(byNumber), "possible");
+      const agree = byNumber.filter((k) => names.has(normalizeName(k.player)));
+      return agree.length > 0 ? done(pickOne(agree), "confirmed") : null;
+    }
+    const byName = pool.filter((k) => names.has(normalizeName(k.player)));
+    return byName.length > 0 ? done(pickOne(byName), "possible") : null;
   } catch {
     return null;
   }

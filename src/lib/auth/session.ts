@@ -2,8 +2,9 @@ import { cookies } from "next/headers";
 import { getIronSession, type SessionOptions } from "iron-session";
 import { env } from "@/lib/env";
 
-export const SESSION_COOKIE = "crd_session";
-export const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
+import { SESSION_COOKIE, SESSION_MAX_AGE } from "./seal";
+
+export { SESSION_COOKIE, SESSION_MAX_AGE };
 
 /**
  * `version` is the password's session version at sign-in. A password change
