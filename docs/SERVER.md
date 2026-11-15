@@ -57,12 +57,13 @@ closes by itself.
    From now on use only that address.
 3. **Profile**: change the password to a long passphrase you use nowhere
    else, then turn on **Two-factor authentication** with an
-   authenticator app.
-4. Back in the console, delete the note with the temporary password
-   (the setup output says which file).
+   authenticator app. Save the recovery codes it shows somewhere safe:
+   they are your way back in if you lose the phone.
+4. Back in the console, delete the note with the temporary password:
+   `sudo rm /root/coolify-first-login.txt`
 
-Missed the 30 minutes? Run `sudo bash bootstrap.sh admin.ssi.com` again
-in the console to reopen the window.
+Missed the 30 minutes? In the console run
+`sudo docker-port-guard open-setup 30` to reopen the window.
 
 ## 5. Protect your GitHub account
 Coolify builds your apps from GitHub, so whoever controls that account
@@ -107,8 +108,8 @@ In the dashboard:
 - Locked out of the network: the Hyper-V console always works. The
   undo steps are in `infra/ubuntu/README.md`.
 - Card Vault does not start: Coolify, the app, **Logs** shows why.
-- Dashboard 2FA device lost: in the console, `infra/ubuntu/README.md`
-  explains how to reset it.
+- Dashboard 2FA phone lost: sign in with one of the recovery codes you
+  saved in step 4.
 
 ## What is open to the internet
 Only ports 80 and 443 (web). The dashboard is protected by its password and
