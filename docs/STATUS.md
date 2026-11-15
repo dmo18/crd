@@ -1,5 +1,44 @@
 # Status
 
+## Milestone 8: blind review, owner-approved updates, backups, logging, agent-ready
+- Blind review in four areas (app, card reading, server, guides); fixes for
+  every critical, high and medium finding plus most lows.
+- Updates: only Ubuntu security patches install by themselves; no automatic
+  restarts; `server-update` backs up first and asks; Docker major version
+  pinned; Coolify auto update off.
+- Backup and DR: `server-backup` (restic, encrypted, SFTP or FTPS) with a
+  full restore onto a fresh server, tested against real Coolify 4.7.5.
+- Logging and security: app activity log (365 days) and alerts to Telegram
+  or Discord; capped system and Docker logs; server alerts; weekly Lynis;
+  auditd; certificate-only browser SSH.
+- Agent-ready: `ops-agent` account that can only check, one-time grants
+  for changes, session recording, guide at ~/CLAUDE.md; `server-support`
+  redacted help report.
+- Photos: AVIF archives, about 61 KB per card instead of 807 KB.
+- Card reading: 27 of 27 realistic test cases (4 before); on the owner's
+  13 sample screenshots, 7 give useful data, none wrongly confirmed; the
+  rest show only a signature or logo, which free text reading cannot read.
+- Not verified: everything on a real Hyper-V machine (auditd rules load,
+  Cloudflare browser SSH certificates, Access path bypass for webhooks,
+  live tunnel, Telegram/Discord delivery, AVIF display on phones).
+- Final security review: no critical or high. Fixed: the agent can no
+  longer mute or imitate system alerts (own labelled agent-send command
+  and budget; agent and grant alerts are never held back; held-back alerts
+  no longer count as sent), restore-files only into a root-owned restore
+  area, snapshot volume paths validated, a warning when the newest backup
+  looks too old, grants cannot answer restart questions, better secret
+  removal in help reports, the webhook route anchored. Accepted with
+  advice in the guide: protecting backups from a taken-over server needs
+  snapshots or add-only access on the backup server itself; the setup
+  downloads the current main branch (no release tag yet). The backup end
+  to end suite was not re-run after the restore path change (direct rule
+  check done); auditd only logs the agent's own-account commands, its
+  sudo commands are in the sudo session recordings.
+- Known issue: one full test run failed once while three builders ran heavy
+  tests in parallel; not reproduced in 8 later runs. Likely a timing
+  sensitive test under load; not yet pinned down.
+
+
 ## Milestone 7: Cloudflare Tunnel, private by default, self updating
 - Owner choices: Cloudflare (DNS already there), main site stays elsewhere,
   one subdomain per app, new apps private until marked public, Cloudflare

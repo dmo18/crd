@@ -27,6 +27,15 @@ const LONG_EDGE = 1800;
 const JOB_TIMEOUT_MS = 60_000;
 /** Below this (confidence times characters) a third, automatic layout pass is tried. */
 const LITTLE_TEXT_SCORE = 12;
+/**
+ * Below this the photo may be sideways (many 1980s backs are printed across
+ * the long side), so the photo is also read turned a quarter each way.
+ */
+const SIDEWAYS_SCORE = 60;
+/** Text read across the grain comes back as low confidence gibberish, so a low average also counts. */
+const SIDEWAYS_CONFIDENCE = 0.55;
+/** Most reading passes for one photo, in every mode. */
+export const MAX_PASSES = 6;
 const MIN_LINE_CONFIDENCE = 0.3;
 const MIN_LINE_CHARS = 2;
 const DECODE_OPTIONS = { failOn: "error", limitInputPixels: 30_000_000 } as const;
@@ -108,6 +117,12 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 type Variant = { png: Buffer; width: number; height: number };
+
+/** The same picture turned 90 or 270 degrees clockwise. */
+async function turned(v: Variant, angle: 90 | 270): Promise<Variant> {
+  const png = await sharp(v.png).rotate(angle).png().toBuffer();
+  return { png, width: v.height, height: v.width };
+}
 
 /** Otsu's method: the gray level that best splits a histogram into dark and light. */
 export function otsuThreshold(pixels: Uint8Array | Buffer): number {
@@ -277,6 +292,7 @@ async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrR
   const variants = await preprocess(image);
   let best: OcrLine[] = [];
   let bestScore = -1;
+  let bestVariant = variants[0];
   for (const v of variants) {
     const page = await recognizeOnce(v.png);
     const lines = linesFrom(page, v.width, v.height);
@@ -284,6 +300,7 @@ async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrR
     if (s > bestScore) {
       best = lines;
       bestScore = s;
+      bestVariant = v;
     }
   }
   if (options.thorough) {
@@ -327,10 +344,32 @@ async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrR
   // Sparse mode suits card backs with scattered text but can miss large
   // block lettering such as box labels. When little was read, also try
   // automatic page layout on the plain grayscale version.
+  let passes = variants.length;
   if (bestScore < LITTLE_TEXT_SCORE) {
     const v = variants[0];
     const lines = linesFrom(await recognizeOnce(v.png, PSM.AUTO), v.width, v.height);
-    if (score(lines) > bestScore) best = lines;
+    passes++;
+    const s = score(lines);
+    if (s > bestScore) {
+      best = lines;
+      bestScore = s;
+    }
+  }
+  // Still little text: the card may be sideways. Read it turned both ways and
+  // keep whichever reads best. Line boxes are then relative to the turned
+  // picture, which is the card the right way up.
+  if (bestScore < SIDEWAYS_SCORE || summarize(best).confidence < SIDEWAYS_CONFIDENCE) {
+    for (const angle of [90, 270] as const) {
+      if (passes >= MAX_PASSES) break;
+      const v = await turned(bestVariant, angle);
+      const lines = linesFrom(await recognizeOnce(v.png), v.width, v.height);
+      passes++;
+      const s = score(lines);
+      if (s > bestScore) {
+        best = lines;
+        bestScore = s;
+      }
+    }
   }
   return summarize(best);
 }

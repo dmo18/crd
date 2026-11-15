@@ -25,6 +25,10 @@ services:
       # cf-connecting-ip only behind a Cloudflare Tunnel with no open ports.
       # See docs/COOLIFY.md.
       - CLIENT_IP_HEADER=${CLIENT_IP_HEADER:-}
+      # Optional alerts to Telegram or Discord. Empty means off. See .env.example.
+      - ALERT_TELEGRAM_BOT_TOKEN=${ALERT_TELEGRAM_BOT_TOKEN:-}
+      - ALERT_TELEGRAM_CHAT_ID=${ALERT_TELEGRAM_CHAT_ID:-}
+      - ALERT_DISCORD_WEBHOOK_URL=${ALERT_DISCORD_WEBHOOK_URL:-}
       - RECOGNITION_MODE=auto
       - DATA_DIR=/data
     volumes:

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, type Item, type Scan } from "@/db/schema";
 import { effectiveValueCents } from "@/lib/money";
@@ -26,8 +26,31 @@ export type ScanView = {
   error: string | null;
   itemCount: number;
   createdAt: number;
+  /** When processing began (ms), or null while it waits in line. */
+  startedAt: number | null;
+  /** While queued: its place in line, 1 meaning it runs next. Null otherwise. */
+  queuePosition: number | null;
+  /** The server's clock when this was read (ms), so the browser can time a scan without trusting its own clock. */
+  serverTime: number;
   items: ItemSummary[];
 };
+
+/**
+ * Place in line for a queued scan. Uses this server's queue order when the
+ * scan is in it (a retried scan joins at the back), otherwise counts older
+ * unfinished scans.
+ */
+function queuePositionOf(scan: Scan, order: number[], db: Db): number {
+  const at = order.indexOf(scan.id);
+  if (at >= 0) {
+    // The scan at the head of the queue may already be running; it does not count as "in line".
+    const head = at > 0 ? db.select({ status: scans.status }).from(scans).where(eq(scans.id, order[0]!)).get() : undefined;
+    return at + 1 - (head?.status === "processing" ? 1 : 0);
+  }
+  const ahead = db.select({ n: count() }).from(scans)
+    .where(and(lt(scans.id, scan.id), or(eq(scans.status, "queued"), eq(scans.status, "processing")))).get()?.n ?? 0;
+  return ahead + 1;
+}
 
 /** Best small picture for each item: the crop or front photo first. */
 export function thumbsFor(itemIds: number[], db: Db = getDb()): Map<number, string> {
@@ -50,20 +73,23 @@ export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {
   }));
 }
 
-export function getScanView(scanId: number, db: Db = getDb()): ScanView | null {
+export function getScanView(scanId: number, db: Db = getDb(), order: number[] = [], now: number = Date.now()): ScanView | null {
   const scan = db.select().from(scans).where(eq(scans.id, scanId)).get();
   if (!scan) return null;
   const rows = db.select().from(items).where(eq(items.scanId, scanId)).orderBy(asc(items.id)).all();
   return {
     id: scan.id, mode: scan.mode, status: scan.status, error: scan.error, itemCount: scan.itemCount,
-    createdAt: scan.createdAt.getTime(), items: summarize(rows, db),
+    createdAt: scan.createdAt.getTime(), startedAt: scan.startedAt?.getTime() ?? null,
+    queuePosition: scan.status === "queued" ? queuePositionOf(scan, order, db) : null,
+    serverTime: now,
+    items: summarize(rows, db),
   };
 }
 
 /** The most recent scans, newest first, for the rapid-fire queue list. */
-export function recentScans(limit = 20, db: Db = getDb()): ScanView[] {
+export function recentScans(limit = 20, db: Db = getDb(), order: number[] = []): ScanView[] {
   const rows = db.select({ id: scans.id }).from(scans).orderBy(desc(scans.id)).limit(Math.min(Math.max(limit, 1), 50)).all();
-  return rows.map((r) => getScanView(r.id, db)).filter((v): v is ScanView => v !== null);
+  return rows.map((r) => getScanView(r.id, db, order)).filter((v): v is ScanView => v !== null);
 }
 
 /** Photos that belong to the scan as a whole (the uncropped originals). */

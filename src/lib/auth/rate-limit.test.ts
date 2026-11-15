@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { loginAttempts } from "@/db/schema";
 import {
-  beginAttempt, clientIp, currentLock, isRateLimited, markAttemptSucceeded, MAX_FAILS_GLOBAL,
-  pruneLoginAttempts, PRUNE_EVERY, recordAttempt, resetPruneCounter,
+  beginAttempt, clientIp, currentLock, globalFailures, isRateLimited, markAttemptSucceeded, MAX_FAILS_GLOBAL,
+  MAX_FAILS_PER_DEVICE, networkKey, pruneLoginAttempts, PRUNE_EVERY, recordAttempt, resetPruneCounter, succeedAttempt,
 } from "./rate-limit";
 
 const T0 = new Date("2026-01-01T12:00:00Z");
@@ -234,5 +234,89 @@ describe("beginAttempt", () => {
     expect(beginAttempt("1.1.1.1", db, T0)).toEqual({ ok: false, lock: "short" });
     const kinds = db.select({ kind: loginAttempts.kind }).from(loginAttempts).all().map((r) => r.kind);
     expect(kinds).toEqual(["setup", "change_password", "login", "login", "login"]);
+  });
+});
+
+describe("networkKey", () => {
+  it("widens an IPv6 /64 key to its /48 and leaves the rest alone", () => {
+    expect(networkKey("2001:db8:1:2::/64")).toBe("2001:db8:1::/48");
+    expect(networkKey(clientIp(new Headers({ "x-forwarded-for": "2001:db8:1:ffff::9" }), 1))).toBe("2001:db8:1::/48");
+    expect(networkKey("203.0.113.9")).toBe("203.0.113.9");
+    expect(networkKey("unknown")).toBe("unknown");
+  });
+});
+
+describe("global pause counts IPv6 by /48", () => {
+  it("one person rotating through many /64s in a /48 cannot pause everyone", () => {
+    const db = createDb(":memory:");
+    for (let i = 0; i < 400; i++) recordAttempt(`2001:db8:1:${i.toString(16)}::/64`, false, db, T0);
+    expect(globalFailures(db, T0)).toBe(5);
+    expect(currentLock("9.9.9.9", db, T0)).toBeNull();
+    // The per-address limit still uses the /64.
+    expect(currentLock("2001:db8:1:0::/64", db, T0)).toBeNull();
+    fail(db, "2001:db8:1:0::/64", 4);
+    expect(currentLock("2001:db8:1:0::/64", db, T0)).toBe("short");
+  });
+  it("many different networks still pause everyone", () => {
+    const db = createDb(":memory:");
+    for (let i = 0; i < MAX_FAILS_GLOBAL / 5; i++) fail(db, `2001:db8:${i.toString(16)}:1::/64`, 5);
+    expect(currentLock("9.9.9.9", db, T0)).toBe("global");
+  });
+});
+
+describe("trusted devices", () => {
+  beforeEach(() => resetPruneCounter());
+  const DEVICE = "a".repeat(32);
+
+  it("skip the address and global locks that strangers caused", () => {
+    const db = createDb(":memory:");
+    // Strangers lock the shared "unknown" address and pause everyone.
+    for (let i = 0; i < 5; i++) beginAttempt("unknown", db, T0);
+    for (let i = 0; i < MAX_FAILS_GLOBAL / 5; i++) fail(db, `10.1.${i}.1`, 5);
+    expect(beginAttempt("unknown", db, T0)).toEqual({ ok: false, lock: "short" });
+    expect(currentLock("9.9.9.9", db, T0)).toBe("global");
+    // The owner's phone, which signed in before, still gets in.
+    expect(beginAttempt("unknown", db, T0, "login", DEVICE).ok).toBe(true);
+  });
+
+  it("have their own limit of 10 failures in 15 minutes", () => {
+    const db = createDb(":memory:");
+    for (let i = 0; i < MAX_FAILS_PER_DEVICE; i++) expect(beginAttempt("1.1.1.1", db, T0, "login", DEVICE).ok).toBe(true);
+    expect(beginAttempt("1.1.1.1", db, at(MIN), "login", DEVICE)).toEqual({ ok: false, lock: "device" });
+    expect(beginAttempt("1.1.1.1", db, at(16 * MIN), "login", DEVICE).ok).toBe(true);
+    // The device's failures do not count against the address or everyone.
+    expect(currentLock("1.1.1.1", db, at(MIN))).toBeNull();
+    expect(globalFailures(db, at(MIN))).toBe(0);
+    expect(beginAttempt("1.1.1.1", db, at(MIN), "login", "b".repeat(32)).ok).toBe(true);
+  });
+});
+
+describe("succeedAttempt", () => {
+  beforeEach(() => resetPruneCounter());
+
+  it("clears that address's earlier failures, and only that address's", () => {
+    const db = createDb(":memory:");
+    for (let i = 0; i < 4; i++) beginAttempt("1.1.1.1", db, T0);
+    fail(db, "2.2.2.2", 3);
+    const ok = beginAttempt("1.1.1.1", db, T0);
+    if (!ok.ok) throw new Error("should be allowed");
+    succeedAttempt(ok.id, db);
+    const rows = db.select().from(loginAttempts).all();
+    expect(rows.filter((r) => r.ip === "1.1.1.1")).toMatchObject([{ success: true }]);
+    expect(rows.filter((r) => r.ip === "2.2.2.2")).toHaveLength(3);
+    for (let i = 0; i < 5; i++) expect(beginAttempt("1.1.1.1", db, T0).ok).toBe(true);
+  });
+
+  it("keeps failures under the shared unknown address, and clears the device's own", () => {
+    const db = createDb(":memory:");
+    const DEVICE = "c".repeat(32);
+    fail(db, "unknown", 3);
+    for (let i = 0; i < 3; i++) beginAttempt("unknown", db, T0, "login", DEVICE);
+    const ok = beginAttempt("unknown", db, T0, "login", DEVICE);
+    if (!ok.ok) throw new Error("should be allowed");
+    succeedAttempt(ok.id, db);
+    const rows = db.select().from(loginAttempts).all();
+    expect(rows.filter((r) => r.deviceId === null)).toHaveLength(3);
+    expect(rows.filter((r) => r.deviceId === DEVICE)).toMatchObject([{ success: true }]);
   });
 });

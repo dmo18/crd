@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { Card, Notice } from "@/components/ui";
-import { connectionReport } from "@/lib/auth/connection";
+import { addressAlwaysUnknown, connectionReport, UNKNOWN_ADDRESS_WARNING } from "@/lib/auth/connection";
 import { env } from "@/lib/env";
 
 function Row({ label, value }: { label: string; value: string | null }) {
@@ -31,6 +31,9 @@ export async function ConnectionCheck() {
     <Card className="flex flex-col gap-3">
       <h2 className="text-lg font-semibold">Connection check</h2>
       <p className="text-sm text-muted">What this server sees about your visit. Useful when setting up hosting.</p>
+      {addressAlwaysUnknown({ nodeEnv: e.NODE_ENV, hops: e.TRUST_PROXY_HOPS, clientIpHeader: e.CLIENT_IP_HEADER }) ? (
+        <div role="alert"><Notice tone="danger">{UNKNOWN_ADDRESS_WARNING}</Notice></div>
+      ) : null}
       <dl className="flex flex-col gap-2">
         <Row label="IP used for sign-in limits" value={r.signInIp} />
         <Row label="Visitor address header (CLIENT_IP_HEADER)" value={r.clientIpHeader ?? "Not set"} />

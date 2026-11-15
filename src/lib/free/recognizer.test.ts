@@ -83,6 +83,21 @@ describe("FreeRecognizer with fake parts", () => {
     expect(whole[0].box).toBeNull();
   });
 
+  it("straightens a tilted card crop before reading it", async () => {
+    const source = await sharp({ create: { width: 1000, height: 1400, channels: 3, background: "#225533" } }).jpeg().toBuffer();
+    const sizes: { width?: number; height?: number }[] = [];
+    const r = new FreeRecognizer({
+      reader: { read: async (image) => { sizes.push(await sharp(image).metadata()); return { text: "", lines: [], confidence: 0 }; } },
+      findBoxes: async () => [{ x: 0.1, y: 0.1, w: 0.4, h: 0.4 }, { x: 0.5, y: 0.5, w: 0.3, h: 0.4 }],
+      tilt: async (image) => ((await sharp(image).metadata()).width === 400 ? 30 : 2),
+      lookup: async () => null,
+    });
+    await r.recognize({ mode: "multi", photos: [{ role: "source", data: source, width: 1000, height: 1400 }] });
+    // 400 x 560 turned 30 degrees needs a wider canvas; a 2 degree tilt is read as it is.
+    expect(sizes[0].width).toBeGreaterThan(600);
+    expect(sizes[1].width).toBe(300);
+  });
+
   it("reads sealed product and bulk labels and suggests key cards to look for", async () => {
     const r = new FreeRecognizer({ reader: reader({ 5: "1990 TOPPS BASEBALL\n36 PACKS\nWAX BOX", 6: "1989 UPPER DECK\n800 COUNT" }), lookup: async () => null });
     const [sealed] = await r.recognize({ mode: "sealed", photos: [photo(5, "source")] });

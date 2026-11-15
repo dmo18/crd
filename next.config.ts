@@ -2,22 +2,9 @@ import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV !== "production";
 
-// No third-party scripts, styles or images are used, so everything is limited
-// to this site. Inline script and style are needed by the framework itself.
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' blob: data:",
-  "connect-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-].join("; ");
-
+// The Content Security Policy is set per request in src/proxy.ts, because it
+// carries a fresh script nonce each time.
 const securityHeaders = [
-  { key: "Content-Security-Policy", value: contentSecurityPolicy },
   ...(isDev ? [] : [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]),
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
@@ -48,7 +35,8 @@ const nextConfig: NextConfig = {
   // newer static-shell caching features are deliberately left off.
   poweredByHeader: false,
   // Scans upload several photos in one request. Must stay in step with
-  // MAX_BODY_BYTES in src/app/api/scans/route.ts.
+  // MAX_BODY_BYTES in src/app/api/scans/route.ts. Only signed-in requests get
+  // this far: src/proxy.ts checks the session cookie's signature first.
   experimental: {
     proxyClientMaxBodySize: "64mb",
     serverActions: { allowedOrigins: appOriginHosts() },

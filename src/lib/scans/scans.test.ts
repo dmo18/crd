@@ -3,10 +3,11 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, locations, scans, valuations } from "@/db/schema";
-import { readStored } from "@/lib/images/store";
+import { readPhoto } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan, ScanInputError } from "./create";
-import { enqueueScan, processScan, queueIdle, RECOGNITION_DEADLINE_MS, recoverScans, TOO_SLOW } from "./process";
+import { enqueueScan, processScan, queueIdle, queueOrder, RECOGNITION_DEADLINE_MS, recoverScans, retryScan, TOO_SLOW } from "./process";
+import { getScanView } from "./view";
 
 async function photo(color = "#336699"): Promise<Buffer> {
   return sharp({ create: { width: 900, height: 1200, channels: 3, background: color } }).jpeg().toBuffer();
@@ -95,7 +96,7 @@ describe("processScan", () => {
     const crops = db.select().from(images).where(eq(images.role, "crop")).all();
     expect(crops).toHaveLength(2);
     expect(new Set(crops.map((c) => c.itemId)).size).toBe(2);
-    expect((await readStored(crops[0].file)).length).toBeGreaterThan(0);
+    expect((await readPhoto(crops[0].file)).data.length).toBeGreaterThan(0);
     // The original photo stays with the scan, not with any one card.
     expect(db.select().from(images).where(eq(images.role, "source")).get()!.itemId).toBeNull();
   });
@@ -185,5 +186,71 @@ describe("queue", () => {
     expect(db.select().from(scans).all().map((s) => s.status)).toEqual(["done", "done", "done"]);
     expect(db.select().from(items).all()).toHaveLength(3);
     expect(b.scanId).toBeGreaterThan(a.scanId);
+  });
+});
+
+describe("scan view timing and place in line", () => {
+  it("records when processing started and shows the place in line while queued", async () => {
+    const p = await photo();
+    const a = await createScan({ mode: "single", photos: [{ role: "front", data: p }] }, db);
+    const b = await createScan({ mode: "single", photos: [{ role: "front", data: p }] }, db);
+    expect(getScanView(a.scanId, db)).toMatchObject({ status: "queued", startedAt: null, queuePosition: 1 });
+    expect(getScanView(b.scanId, db)).toMatchObject({ queuePosition: 2 });
+
+    const at = new Date("2026-03-01T10:00:00Z");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const slow: Recognizer = { name: "slow", async recognize() { await gate; return [recognizedItemSchema.parse(griffey)]; } };
+    const deps = { db, recognizer: slow, now: () => at };
+    enqueueScan(a.scanId, deps);
+    enqueueScan(b.scanId, deps);
+    await vi.waitFor(() => expect(db.select().from(scans).where(eq(scans.id, a.scanId)).get()?.status).toBe("processing"));
+    expect(queueOrder()).toEqual([a.scanId, b.scanId]);
+    expect(getScanView(a.scanId, db, queueOrder())).toMatchObject({ status: "processing", startedAt: at.getTime(), queuePosition: null });
+    // Scan b runs next, after the one being read now.
+    expect(getScanView(b.scanId, db, queueOrder())).toMatchObject({ status: "queued", startedAt: null, queuePosition: 1 });
+    release();
+    await queueIdle();
+    expect(getScanView(b.scanId, db)).toMatchObject({ status: "done", startedAt: at.getTime(), queuePosition: null });
+  });
+
+  it("recovers a scan only when it started long ago, not when it was merely created long ago", async () => {
+    const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+    db.update(scans).set({ status: "processing", createdAt: longAgo, startedAt: new Date() }).where(eq(scans.id, scanId)).run();
+    recoverScans({ db, recognizer: fake([griffey]) });
+    await queueIdle();
+    expect(db.select().from(scans).get()?.status).toBe("processing");
+    db.update(scans).set({ startedAt: longAgo }).where(eq(scans.id, scanId)).run();
+    recoverScans({ db, recognizer: fake([griffey]) });
+    await queueIdle();
+    expect(db.select().from(scans).get()?.status).toBe("done");
+  });
+});
+
+describe("retryScan", () => {
+  it("re-runs a failed scan with the photos it already has", async () => {
+    const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    await processScan(scanId, { db, recognizer: fake(new RecognitionError("Busy.")) });
+    expect(db.select().from(scans).get()).toMatchObject({ status: "failed", error: "Busy." });
+    const photosBefore = db.select().from(images).all();
+
+    expect(retryScan(scanId, db)).toEqual({ ok: true });
+    expect(db.select().from(scans).get()).toMatchObject({ status: "queued", error: null, startedAt: null, finishedAt: null });
+    await processScan(scanId, { db, recognizer: fake([griffey]) });
+    expect(db.select().from(scans).all()).toHaveLength(1);
+    expect(db.select().from(scans).get()).toMatchObject({ status: "done", itemCount: 1 });
+    // The same photos, not a new upload.
+    expect(db.select({ file: images.file }).from(images).all()).toEqual(photosBefore.map((p) => ({ file: p.file })));
+  });
+
+  it("refuses scans that did not fail, are missing, or lost their photos", async () => {
+    const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    expect(retryScan(scanId, db)).toMatchObject({ ok: false, status: 409 });
+    expect(retryScan(9999, db)).toMatchObject({ ok: false, status: 404 });
+    db.update(scans).set({ status: "failed" }).where(eq(scans.id, scanId)).run();
+    db.delete(images).run();
+    expect(retryScan(scanId, db)).toMatchObject({ ok: false, status: 410 });
+    expect(db.select().from(scans).get()?.status).toBe("failed");
   });
 });

@@ -236,8 +236,15 @@ describe("parseCardText", () => {
     const p = parseCardText(null, ocr([["NO. 36", 0.03], ["©1987 Leaf, Inc.", 0.95]]));
     expect(p.year).toBe(1987);
     expect(p.brand).toBe("Donruss");
-    const leaf = parseCardText(null, ocr([["NO. 300", 0.03], ["© 1990 LEAF, INC.", 0.95]]));
+    // From 1990 Leaf, Inc. made both brands, so the line alone settles nothing.
+    const leafInc = parseCardText(null, ocr([["NO. 300", 0.03], ["© 1990 LEAF, INC.", 0.95]]));
+    expect(leafInc.brand).toBeNull();
+    expect(leafInc.year).toBe(1990);
+    expect(leafInc.evidence.some((e) => e.includes("Leaf, Inc."))).toBe(true);
+    const leaf = parseCardText(ocr([["Leaf", 0.04, 0.05, 0.2]]), ocr([["NO. 300", 0.03], ["© 1990 LEAF, INC.", 0.95]]));
     expect(leaf.brand).toBe("Leaf");
+    const donruss = parseCardText(ocr([["Donruss '90", 0.04, 0.05, 0.3]]), ocr([["NO. 300", 0.03], ["© 1990 LEAF, INC.", 0.95]]));
+    expect(donruss.brand).toBe("Donruss");
   });
 
   it("reads brand variants and subsets", () => {
@@ -275,6 +282,8 @@ describe("parseCardText", () => {
       grade: null,
       certNumber: null,
       serialNumber: null,
+      isAutograph: false,
+      isReprint: false,
       evidence: [],
     };
     expect(parseCardText(null, null)).toEqual(empty);
@@ -289,6 +298,51 @@ describe("parseCardText", () => {
     expect(p.year).toBe(1986);
     expect(p.brand).toBe("Fleer");
     expect(p.cardNumber).toBe("57");
+  });
+});
+
+describe("parseCardText regressions from real scans", () => {
+  it("prefers the corner number and skips draft and pick markers", () => {
+    const p = parseCardText(null, ocr([
+      ["DRAFTED: WHITE SOX #1, JUNE 1989", 0.02, 0.1, 0.8, 0.03],
+      ["414", 0.04, 0.86, 0.08, 0.04],
+      ["\u00a9 1990 THE TOPPS COMPANY, INC.", 0.95],
+    ]));
+    expect(p.cardNumber).toBe("414");
+    for (const line of ["the No. 1 pick in the 1987 draft", "his #1 draft choice", "No. 2 starter in the rotation", "a No. 3 selection overall", "1st round #4"]) {
+      expect(parseCardText(null, ocr([[line, 0.4], ["\u00a9 1990 FLEER CORP.", 0.95]])).cardNumber).toBeNull();
+    }
+    expect(parseCardText(null, ocr([["1B", 0.03, 0.86, 0.06, 0.04], ["NO. 77", 0.06]])).cardNumber).toBe("77");
+  });
+
+  it("reads Major League Marketing as Score without calling it baseball", () => {
+    const p = parseCardText(null, ocr([["(C) 1988 MAJOR LEAGUE MARKETING, INC.", 0.95]]));
+    expect(p).toMatchObject({ brand: "Score", year: 1988, sport: null });
+  });
+
+  it("reads NBA Properties as NBA Hoops only when no other brand is read", () => {
+    expect(parseCardText(null, ocr([["\u00a9 1990 NBA PROPERTIES, INC.", 0.95]]))).toMatchObject({ brand: "NBA Hoops", year: 1990, sport: "basketball" });
+    const fleer = parseCardText(null, ocr([["\u00a9 1990 FLEER CORP.", 0.93], ["\u00a9 1990 NBA PROPERTIES, INC.", 0.95]]));
+    expect(fleer.brand).toBe("Fleer");
+  });
+
+  it("reads F1EER, a split traded number and two digit years", () => {
+    expect(parseCardText(null, ocr([["\u00a9 1987 F1EER CORP.", 0.95]])).brand).toBe("Fleer");
+    expect(parseCardText(null, ocr([["NO. 70 T", 0.03], ["\u00a9 1987 TOPPS CHEWING GUM, INC.", 0.95]])).cardNumber).toBe("70T");
+    expect(parseCardText(ocr([["Donruss \u201987", 0.04]]), null).year).toBe(1987);
+    expect(parseCardText(ocr([["'89 Fleer", 0.04]]), null).year).toBe(1989);
+    expect(parseCardText(ocr([["He hit .300 in '87", 0.5]]), null).year).toBeNull();
+  });
+
+  it("does not read school names as players", () => {
+    const p = parseCardText(null, ocr([["OKLAHOMA STATE", 0.1], ["TEXAS TECH", 0.2], ["TEXAS A&M", 0.3], ["BARRY SANDERS", 0.05]]));
+    expect(p.playerCandidates).toEqual(["Barry Sanders"]);
+  });
+
+  it("reads a slab label line with a grade but no grader or cert, and ignores a grade word in a bio", () => {
+    const p = parseCardText(ocr([["1986 FLEER #57 MICHAEL JORDAN NM-MT 8", 0.05]]), null);
+    expect(p).toMatchObject({ grader: null, grade: "8", certNumber: null });
+    expect(parseCardText(ocr([["Kept his rookie card in MINT 9 shape", 0.5]]), null).grade).toBeNull();
   });
 });
 
@@ -354,3 +408,23 @@ describe("parseProductText", () => {
     expect(() => parseProductText(null as unknown as OcrResult)).not.toThrow();
   });
 });
+
+describe("real card fronts and holder labels (from the owner's sample photos)", () => {
+  it("does not take OCR noise or card words as a player name", () => {
+    for (const noise of ["IN ERT ARN EN", "HEROES FV", "CERTIFIED AUTO GRADE", "SIGNATURES"]) {
+      expect(parseCardText(ocr([[noise, 0.6]]), null).playerCandidates, noise).toEqual([]);
+    }
+    expect(parseCardText(ocr([["BO JACKSON", 0.8]]), null).playerCandidates[0]).toBe("Bo Jackson");
+    expect(parseCardText(ocr([["BILLY BEANE", 0.8]]), null).playerCandidates[0]).toBe("Billy Beane");
+  });
+  it("reads year, brand, autograph and grader from a holder label", () => {
+    const p = parseCardText(ocr([["#422 ALEX RODRIGUEZ GML SP 1997 UPPER AUT BECKETT", 0.8]]), null);
+    expect(p).toMatchObject({ year: 1997, brand: "Upper Deck", cardNumber: "422", grader: "Beckett" });
+    expect(p.playerCandidates[0]).toBe("Alex Rodriguez");
+    const aut = parseCardText(ocr([["#422 ALEX RODRIGUEZ GML SP 1997 UPPER AUT BECKETTs", 0.8]]), null);
+    expect(aut).toMatchObject({ grader: "Beckett", isAutograph: true });
+    const dna = parseCardText(ocr([["REPRINT CARD J KOOSMAN N. RYAN GEM MT 10 PSADNA CERTIFIED AUTO GRADE", 0.8]]), null);
+    expect(dna).toMatchObject({ grader: "PSA/DNA", grade: "10", isAutograph: true, isReprint: true });
+  });
+});
+

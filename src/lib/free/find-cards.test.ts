@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import type { Box } from "@/lib/recognition/types";
-import { findCardBoxes } from "./find-cards";
+import { cardTilt, findCardBoxes } from "./find-cards";
 
 const COLORS = ["#c0392b", "#2471a3", "#d4ac0d", "#7d3c98", "#1e8449", "#ca6f1e", "#566573", "#a93226", "#17a589"];
 
@@ -109,5 +109,97 @@ describe("findCardBoxes", () => {
     expect(Math.abs(b.y + b.h / 2 - cy)).toBeLessThan(0.03);
     expect(b.w).toBeGreaterThan(drawn.w / W);
     expect(b.h).toBeGreaterThan(drawn.h / H);
+  });
+
+  it("splits two touching cards side by side", async () => {
+    const W = 1600;
+    const H = 1200;
+    const drawn: Drawn[] = [{ x: 400, y: 300, w: 400, h: 560 }, { x: 800, y: 300, w: 400, h: 560 }];
+    const img = await render(W, H, "#1d4d2b", drawn.map((d, i) => card(d, COLORS[i], "#f2efe6")).join(""));
+    const boxes = await findCardBoxes(img);
+    expect(boxes).toHaveLength(2);
+    boxes.forEach((b, i) => expectNear(b, drawn[i], W, H));
+  });
+
+  it("splits two touching cards end to end", async () => {
+    const W = 1200;
+    const H = 1600;
+    const drawn: Drawn[] = [{ x: 450, y: 200, w: 330, h: 462 }, { x: 450, y: 662, w: 330, h: 462 }];
+    const img = await render(W, H, "#1d4d2b", drawn.map((d, i) => card(d, COLORS[i + 2], "#f2efe6")).join(""));
+    const boxes = await findCardBoxes(img);
+    expect(boxes).toHaveLength(2);
+    boxes.forEach((b, i) => expectNear(b, drawn[i], W, H));
+  });
+
+  it("splits a pair that is twice the size of the other cards, even when the two look different", async () => {
+    const W = 1600;
+    const H = 1200;
+    const single: Drawn = { x: 120, y: 320, w: 360, h: 504 };
+    const pair: Drawn[] = [{ x: 700, y: 320, w: 360, h: 504 }, { x: 1060, y: 320, w: 360, h: 504 }];
+    const body = card(single, COLORS[0], "#f2efe6") + card(pair[0], COLORS[1], "#f2efe6") + card(pair[1], "#111111", "#ddd8cc");
+    const boxes = await findCardBoxes(await render(W, H, "#1d4d2b", body));
+    expect(boxes).toHaveLength(3);
+    expectNear(boxes[1], pair[0], W, H);
+    expectNear(boxes[2], pair[1], W, H);
+  });
+
+  it("does not cut a landscape card in two", async () => {
+    const W = 1600;
+    const H = 1200;
+    const drawn: Drawn[] = [{ x: 150, y: 350, w: 560, h: 400 }, { x: 900, y: 300, w: 400, h: 560 }];
+    const body = card(drawn[0], COLORS[3], "#f2efe6") + card(drawn[1], COLORS[4], "#f2efe6");
+    const boxes = await findCardBoxes(await render(W, H, "#1d4d2b", body));
+    expect(boxes).toHaveLength(2);
+    expectNear(boxes[0], drawn[0], W, H);
+  });
+
+  it("finds a touching 3x3 grid that covers most of the photo", async () => {
+    const W = 1200;
+    const H = 1600;
+    const cw = 340;
+    const ch = 476;
+    const x0 = (W - 3 * cw) / 2;
+    const y0 = (H - 3 * ch) / 2;
+    const drawn: Drawn[] = [];
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) drawn.push({ x: x0 + c * cw, y: y0 + r * ch, w: cw, h: ch });
+    const img = await render(W, H, "#1d4d2b", drawn.map((d, i) => card(d, COLORS[i], "#f2efe6")).join(""));
+    const boxes = await findCardBoxes(img);
+    expect(boxes).toHaveLength(9);
+    boxes.forEach((b, i) => expectNear(b, drawn[i], W, H));
+  });
+
+  it("finds cards turned about 45 degrees and reports the turn on a crop", async () => {
+    const W = 1600;
+    const H = 1200;
+    const drawn: Drawn[] = [{ x: 250, y: 320, w: 380, h: 532 }, { x: 970, y: 320, w: 380, h: 532 }];
+    const img = await render(W, H, "#1d4d2b", card(drawn[0], COLORS[0], "#f2efe6", 45) + card(drawn[1], COLORS[1], "#f2efe6", -40));
+    const boxes = await findCardBoxes(img);
+    expect(boxes).toHaveLength(2);
+    expectValid(boxes);
+    const crop = async (b: Box) =>
+      sharp(img).extract({ left: Math.round(b.x * W), top: Math.round(b.y * H), width: Math.round(b.w * W), height: Math.round(b.h * H) }).jpeg().toBuffer();
+    expect(Math.abs(Math.abs(await cardTilt(await crop(boxes[0]))) - 45)).toBeLessThan(4);
+    expect(Math.abs((await cardTilt(await crop(boxes[1]))) + 40)).toBeLessThan(4);
+  });
+
+  it("reports a small turn with its direction and none for an upright card", async () => {
+    const W = 800;
+    const H = 1000;
+    const d: Drawn = { x: 200, y: 200, w: 400, h: 560 };
+    expect(Math.abs((await cardTilt(await render(W, H, "#1d4d2b", card(d, COLORS[0], "#f2efe6", 12)))) - 12)).toBeLessThan(2);
+    expect(Math.abs(await cardTilt(await render(W, H, "#1d4d2b", card(d, COLORS[0], "#f2efe6"))))).toBeLessThan(1.5);
+  });
+
+  it("finds white cards on a white table from their edges", async () => {
+    const W = 1600;
+    const H = 1200;
+    const drawn = grid(2, 1, W, H, 400, 560);
+    const whiteCard = (d: Drawn) => `<rect x="${d.x}" y="${d.y}" width="${d.w}" height="${d.h}" fill="#fcfcfc" stroke="#c8c8c8" stroke-width="3"/>
+      <rect x="${d.x + 40}" y="${d.y + 60}" width="${d.w - 80}" height="14" fill="#e6e6e6"/>
+      <rect x="${d.x + 40}" y="${d.y + 100}" width="${d.w - 160}" height="14" fill="#e6e6e6"/>`;
+    const img = await render(W, H, "#f6f6f6", drawn.map(whiteCard).join(""));
+    const boxes = await findCardBoxes(img);
+    expect(boxes).toHaveLength(2);
+    boxes.forEach((b, i) => expectNear(b, drawn[i], W, H));
   });
 });

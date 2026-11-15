@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, valuations, type NewItem } from "@/db/schema";
-import { findDuplicates, mergeInto, reviewCount } from "./duplicates";
+import { findDuplicates, MAX_QUANTITY, mergeInto, reviewCount } from "./duplicates";
 
 let db: Db;
 beforeEach(() => { db = createDb(":memory:"); });
@@ -75,10 +75,42 @@ describe("mergeInto", () => {
   it("refuses non-duplicates, self and missing items", () => {
     const a = add({ status: "needs_review" });
     const b = add({ cardNumber: "9" });
-    expect(mergeInto(a, b, db)).toEqual({ ok: false, error: "These are not the same card." });
-    expect(mergeInto(a, a, db)).toEqual({ ok: false, error: "These are not the same card." });
-    expect(mergeInto(a, 9999, db)).toEqual({ ok: false, error: "That item no longer exists." });
+    expect(mergeInto(a, b, db)).toMatchObject({ ok: false, error: "These are not the same card." });
+    expect(mergeInto(a, a, db)).toMatchObject({ ok: false, error: "These are not the same card." });
+    expect(mergeInto(a, 9999, db)).toMatchObject({ ok: false, error: "That item no longer exists." });
     expect(db.select().from(items).all()).toHaveLength(2);
+  });
+
+  it("refuses to go above the form's maximum and changes nothing", () => {
+    const source = add({ status: "needs_review", quantity: 2 });
+    const target = add({ quantity: MAX_QUANTITY - 1 });
+    const r = mergeInto(source, target, db);
+    expect(r).toMatchObject({ ok: false, problem: "too_many" });
+    if (!r.ok) expect(r.error).toMatch(/100,000/);
+    expect(db.select().from(items).where(eq(items.id, target)).get()?.quantity).toBe(MAX_QUANTITY - 1);
+    expect(db.select().from(items).all()).toHaveLength(2);
+    // Exactly the maximum is fine.
+    const s2 = add({ status: "needs_review", quantity: 1 });
+    expect(mergeInto(s2, target, db).ok).toBe(true);
+    expect(db.select().from(items).where(eq(items.id, target)).get()?.quantity).toBe(MAX_QUANTITY);
+  });
+
+  it("keeps the source's value and history when the target has none", () => {
+    const source = add({ status: "needs_review", estLowCents: 400, estHighCents: 800, estValueCents: 600, valueSource: "ai_estimate", valueBasis: "AI." });
+    const target = add();
+    db.insert(valuations).values({ itemId: source, source: "ai_estimate", valueCents: 600 }).run();
+    expect(mergeInto(source, target, db).ok).toBe(true);
+    expect(db.select().from(items).where(eq(items.id, target)).get()).toMatchObject({
+      estLowCents: 400, estHighCents: 800, estValueCents: 600, valueSource: "ai_estimate", valueBasis: "AI.", quantity: 2,
+    });
+    expect(db.select().from(valuations).all()).toMatchObject([{ itemId: target, valueCents: 600 }]);
+  });
+
+  it("keeps the target's own value when it has one", () => {
+    const source = add({ status: "needs_review", estValueCents: 600 });
+    const target = add({ manualValueCents: 100 });
+    expect(mergeInto(source, target, db).ok).toBe(true);
+    expect(db.select().from(items).where(eq(items.id, target)).get()).toMatchObject({ manualValueCents: 100, estValueCents: null });
   });
 });
 

@@ -3,14 +3,22 @@ import bcrypt from "bcryptjs";
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
-import { ownerSettings } from "@/db/schema";
+import { authState, ownerSettings } from "@/db/schema";
 import { env } from "@/lib/env";
 
 export const MAX_PASSWORD_LENGTH = 200;
 export const MIN_NEW_PASSWORD_LENGTH = 16;
 export const BCRYPT_COST = 12;
-/** Session version for a password kept in the server settings. Database versions start at 1. */
+/**
+ * Starting session version for a password kept in the server settings, used
+ * until "Sign out all other devices" first raises it. Database versions start at 1.
+ */
 export const ENV_SESSION_VERSION = 0;
+
+/** Session version for a password in the server settings: kept in auth_state, 0 when no row exists yet. */
+function envSessionVersion(db: Db): number {
+  return db.select({ v: authState.envSessionVersion }).from(authState).where(eq(authState.id, 1)).get()?.v ?? ENV_SESSION_VERSION;
+}
 
 export type PasswordSource =
   | { source: "env"; hash: string; version: number }
@@ -25,7 +33,7 @@ export type PasswordSource =
 export function passwordSource(db: Db = getDb()): PasswordSource {
   const fromEnv = env().OWNER_PASSWORD_HASH_B64;
   if (fromEnv) {
-    return { source: "env", hash: Buffer.from(fromEnv, "base64").toString("utf8"), version: ENV_SESSION_VERSION };
+    return { source: "env", hash: Buffer.from(fromEnv, "base64").toString("utf8"), version: envSessionVersion(db) };
   }
   const row = db
     .select({ hash: ownerSettings.passwordHash, version: ownerSettings.sessionVersion })
@@ -118,6 +126,29 @@ export function changeOwnerPassword(expectedVersion: number, hash: string, db: D
     .returning({ version: ownerSettings.sessionVersion })
     .get();
   return row?.version ?? null;
+}
+
+/**
+ * Raises the session version without changing the password, which signs out
+ * every device still holding the old one, wherever the password lives. Only
+ * succeeds when the version is still `expectedVersion`. Returns the new
+ * version, or null.
+ */
+export function bumpSessionVersion(expectedVersion: number, db: Db = getDb(), now: Date = new Date()): number | null {
+  return db.transaction((tx) => {
+    const t = tx as unknown as Db;
+    const s = passwordSource(t);
+    if (s.source === "none" || s.version !== expectedVersion) return null;
+    if (s.source === "db") {
+      return t.update(ownerSettings)
+        .set({ sessionVersion: sql`${ownerSettings.sessionVersion} + 1`, updatedAt: now })
+        .where(and(eq(ownerSettings.id, 1), eq(ownerSettings.sessionVersion, expectedVersion)))
+        .returning({ version: ownerSettings.sessionVersion }).get()?.version ?? null;
+    }
+    return t.insert(authState).values({ id: 1, envSessionVersion: expectedVersion + 1, updatedAt: now })
+      .onConflictDoUpdate({ target: authState.id, set: { envSessionVersion: expectedVersion + 1, updatedAt: now } })
+      .returning({ version: authState.envSessionVersion }).get().version;
+  }, { behavior: "immediate" });
 }
 
 const SHORT = `Use at least ${MIN_NEW_PASSWORD_LENGTH} characters.`;

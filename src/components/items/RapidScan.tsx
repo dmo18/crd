@@ -4,8 +4,8 @@ import { useEffect, useReducer, useRef } from "react";
 import { shrinkPhoto } from "@/components/capture/shrink";
 import { ItemRow } from "@/components/items/ItemRow";
 import {
-  atCap, emptyQueue, GIVE_UP_MS, MAX_PARALLEL, MAX_QUEUE, nextToSend, queueReducer, summary, summaryText,
-  type QueueEntry,
+  atCap, emptyQueue, MAX_PARALLEL, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
+  waitingText, type QueueEntry,
 } from "@/components/items/scan-queue";
 import { Button, Card, LinkButton, Notice } from "@/components/ui";
 import type { ScanView } from "@/lib/scans/view";
@@ -91,7 +91,9 @@ export function RapidScan({ hint, locationId }: { hint: string; locationId: stri
     const timer = setInterval(() => {
       for (const e of stateRef.current.entries) {
         if (e.status !== "reading" || e.scanId === null) continue;
-        if (Date.now() - (e.uploadedAt ?? Date.now()) > GIVE_UP_MS) {
+        // Only a scan the server has been reading for too long is given up on;
+        // one waiting in line keeps being checked.
+        if (scanTimedOut(e.scan)) {
           dispatch({ type: "timeout", key: e.key });
           continue;
         }
@@ -114,6 +116,24 @@ export function RapidScan({ hint, locationId }: { hint: string; locationId: stri
       clearInterval(timer);
     };
   }, [polling]);
+
+  /** Retry: upload again only if the server never got the photo; otherwise run the same scan again on the server. */
+  async function retry(entry: QueueEntry) {
+    const kind = retryKind(entry);
+    if (kind === "upload") {
+      dispatch({ type: "retry", key: entry.key });
+      return;
+    }
+    if (kind !== "server" || entry.scanId === null) return;
+    try {
+      const res = await fetch(`/api/scans/${entry.scanId}/retry`, { method: "POST" });
+      const data = (await res.json().catch(() => null)) as (ScanView & { error?: string }) | null;
+      if (res.ok) dispatch({ type: "requeued", key: entry.key, scan: data });
+      else dispatch({ type: "retryError", key: entry.key, message: data?.error ?? "Could not try again. Please try later." });
+    } catch {
+      dispatch({ type: "retryError", key: entry.key, message: NETWORK_ERROR });
+    }
+  }
 
   async function take(picked: File[]) {
     for (const original of picked) {
@@ -179,11 +199,7 @@ export function RapidScan({ hint, locationId }: { hint: string; locationId: stri
         <ul className="flex flex-col gap-3">
           {list.map((e) => (
             <li key={e.key}>
-              <QueueRow
-                entry={e}
-                canRetry={e.previewUrl !== null}
-                onRetry={() => dispatch({ type: "retry", key: e.key })}
-              />
+              <QueueRow entry={e} onRetry={() => void retry(e)} />
             </li>
           ))}
         </ul>
@@ -196,7 +212,9 @@ export function RapidScan({ hint, locationId }: { hint: string; locationId: stri
   );
 }
 
-function QueueRow({ entry, canRetry, onRetry }: { entry: QueueEntry; canRetry: boolean; onRetry: () => void }) {
+function QueueRow({ entry, onRetry }: { entry: QueueEntry; onRetry: () => void }) {
+  const kind = retryKind(entry);
+  const line = entry.status === "reading" ? waitingText(entry.scan) : null;
   if (entry.status === "done" && entry.scan) {
     if (entry.scan.items.length === 0) {
       return <Notice tone="warn">No card found</Notice>;
@@ -217,15 +235,16 @@ function QueueRow({ entry, canRetry, onRetry }: { entry: QueueEntry; canRetry: b
         <div aria-hidden="true" className="size-16 shrink-0 rounded-lg bg-surface-2" />
       )}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <p className="font-semibold">{STATUS_LABEL[entry.status]}</p>
+        <p className="font-semibold">{entry.status === "reading" && entry.scan?.status === "queued" ? "Waiting" : STATUS_LABEL[entry.status]}</p>
+        {line ? <p className="text-sm text-muted">{line}</p> : null}
         {entry.status === "failed" ? (
           <>
             <p role="alert" className="text-sm break-words text-danger">{entry.error}</p>
-            {canRetry ? (
-              <Button variant="secondary" onClick={onRetry} aria-label={`Retry sending ${entry.name}`}>Retry</Button>
-            ) : (
+            {kind ? (
+              <Button variant="secondary" onClick={onRetry} aria-label={`Retry ${entry.name}`}>Retry</Button>
+            ) : entry.scanId === null ? (
               <p className="text-sm text-muted">Take the photo again to retry.</p>
-            )}
+            ) : null}
           </>
         ) : null}
       </div>

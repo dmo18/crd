@@ -2,6 +2,7 @@ import { eq, lt } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { playerFacts, SPORTS, type Sport } from "@/db/schema";
+import { errorKind, log } from "@/lib/log";
 
 /**
  * Player facts from Wikidata: free, no key, API use allowed.
@@ -11,7 +12,12 @@ import { playerFacts, SPORTS, type Sport } from "@/db/schema";
 
 const API_URL = "https://www.wikidata.org/w/api.php";
 const SPARQL_URL = "https://query.wikidata.org/sparql";
-const USER_AGENT = "CardVault/1.0 (personal sports card collection app)";
+/** Wikimedia asks every client to name a way to contact its operator. */
+const DEFAULT_CONTACT = "https://github.com/dmo18/crd";
+const MAX_CANDIDATES = 7;
+/** How long to pause after a 429 that gives no usable Retry-After, and the longest pause honoured. */
+const DEFAULT_PAUSE_MS = 60_000;
+const MAX_PAUSE_MS = 60 * 60 * 1000;
 export const CACHE_MS = 90 * 24 * 60 * 60 * 1000;
 /** Old cache rows are deleted on the first cache write and then every this many writes. */
 export const PRUNE_EVERY = 100;
@@ -42,6 +48,28 @@ export type LookupOptions = {
 
 export type RankQuery = { name: string; sport?: Sport | null; year?: number | null };
 
+/**
+ * The User-Agent sent to Wikidata, with a contact as Wikimedia's policy asks.
+ * WIKIDATA_CONTACT may hold an email address or a web address; anything else
+ * falls back to the project page.
+ */
+export function userAgent(): string {
+  const raw = (process.env.WIKIDATA_CONTACT ?? "").trim();
+  const email = /^[^\s@()<>,;"]+@[^\s@()<>,;"]+\.[A-Za-z]{2,}$/;
+  const web = /^https?:\/\/[^\s()<>"]+$/;
+  const contact = raw.length > 0 && raw.length <= 200 && (email.test(raw) || web.test(raw)) ? raw : DEFAULT_CONTACT;
+  return `CardVault/1.0 (${contact}) personal sports card collection app`;
+}
+
+const SUFFIX_WORDS = ["jr", "sr", "ii", "iii", "iv"];
+
+/** "jr" for "Ken Griffey Jr.", null when the name has no suffix. */
+function suffixOf(name: string): string | null {
+  const tokens = name.normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ");
+  const last = tokens[tokens.length - 1];
+  return tokens.length > 1 && SUFFIX_WORDS.includes(last) ? last : null;
+}
+
 /** Lowercase, accents stripped, punctuation removed, "jr", "sr" and numerals dropped. */
 export function normalizeName(name: string): string {
   return name
@@ -50,7 +78,7 @@ export function normalizeName(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .split(" ")
-    .filter((t) => t && !["jr", "sr", "ii", "iii", "iv"].includes(t))
+    .filter((t) => t && !SUFFIX_WORDS.includes(t))
     .join(" ");
 }
 
@@ -141,6 +169,8 @@ function toFacts(row: z.infer<typeof rowSchema>, fallbackName?: string): PlayerF
   }
   const hallOfFame = list(row.awards?.value).some((award) => {
     if (!/hall of fame/i.test(award)) return false;
+    // College and school halls of fame say nothing about a pro career.
+    if (/college|collegiate|university|high school|ncaa|amateur/i.test(award)) return false;
     const s = mapSport(award);
     return s !== null && (sports.length === 0 || sports.includes(s));
   });
@@ -169,6 +199,7 @@ export function rankCandidates(candidates: PlayerFacts[], query: RankQuery): Pla
   const wantTokens = want.split(" ").filter(Boolean);
   if (wantTokens.length === 0) return [];
   const year = query.year ?? null;
+  const wantSuffix = suffixOf(query.name);
 
   const scored: { c: PlayerFacts; score: number; order: number }[] = [];
   candidates.forEach((c, order) => {
@@ -180,6 +211,12 @@ export function rankCandidates(candidates: PlayerFacts[], query: RankQuery): Pla
       const haveTokens = new Set(have.split(" "));
       if (wantTokens.every((t) => haveTokens.has(t))) score += 20;
       else return;
+    }
+    // "Jr." and "Sr." are different people: father and son often share a name and an era.
+    const haveSuffix = suffixOf(c.name);
+    if (wantSuffix && haveSuffix) {
+      if (wantSuffix !== haveSuffix) return;
+      score += 40;
     }
     if (query.sport) {
       if (c.sports.includes(query.sport)) score += 50;
@@ -199,6 +236,28 @@ export function rankCandidates(candidates: PlayerFacts[], query: RankQuery): Pla
 
 let chain: Promise<unknown> = Promise.resolve();
 let lastRequestEnd = 0;
+/** After a 429, no requests until this time (ms since epoch). */
+let pausedUntil = 0;
+
+/** For tests only: forget an earlier "too many requests" pause. */
+export function resetWikidataPause(): void {
+  pausedUntil = 0;
+}
+
+function paused(): boolean {
+  return Date.now() < pausedUntil;
+}
+
+/** Retry-After is either seconds or an HTTP date. */
+function retryAfterMs(value: string | null): number {
+  if (value) {
+    const v = value.trim();
+    if (/^\d+$/.test(v)) return Math.min(MAX_PAUSE_MS, Math.max(1000, Number(v) * 1000));
+    const at = Date.parse(v);
+    if (Number.isFinite(at)) return Math.min(MAX_PAUSE_MS, Math.max(1000, at - Date.now()));
+  }
+  return DEFAULT_PAUSE_MS;
+}
 
 /** One job at a time across the process. */
 function enqueue<T>(job: () => Promise<T>): Promise<T> {
@@ -218,13 +277,18 @@ function aborted(signal: AbortSignal): Promise<never> {
 }
 
 async function getJson(fetchImpl: typeof fetch, url: string, signal: AbortSignal): Promise<unknown> {
+  if (paused()) throw Object.assign(new Error("paused"), { name: "RateLimited" });
   const wait = lastRequestEnd + MIN_GAP_MS - Date.now();
   if (wait > 0) await Promise.race([sleep(wait), aborted(signal)]);
   try {
     const res = await Promise.race([
-      fetchImpl(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" }, signal }),
+      fetchImpl(url, { headers: { "User-Agent": userAgent(), Accept: "application/json" }, signal }),
       aborted(signal),
     ]);
+    if (res.status === 429 || (res.status === 503 && res.headers.get("Retry-After"))) {
+      pausedUntil = Date.now() + retryAfterMs(res.headers.get("Retry-After"));
+      throw Object.assign(new Error("too many requests"), { name: "RateLimited" });
+    }
     if (res.status !== 200) throw new Error("HttpError");
     return await Promise.race([res.json(), aborted(signal)]);
   } finally {
@@ -289,11 +353,13 @@ export async function lookupPlayer(name: string, opts: LookupOptions = {}): Prom
     const year = opts.year ?? null;
     const pick = (found: PlayerFacts[]) => rankCandidates(found, { name, sport, year })[0] ?? null;
 
-    // The cache holds the ranked-by-sport answer for this name and sport. A year
-    // can differ between cards, so cached entries are filtered again with it.
+    // The cache holds every candidate for this name and sport, so each card's
+    // year and the name's suffix ("Jr.", "Sr.") pick between them again on a hit.
     const cached = readCache(db, key, now);
-    if (cached !== undefined) return cached === null ? null : pick([cached]);
+    if (cached !== undefined) return cached === null ? null : pick(cached);
 
+    // Wikidata asked us to slow down: skip lookups until the pause ends.
+    if (paused()) return null;
     const fetchImpl = opts.fetchImpl ?? fetch;
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const candidates = await enqueue(async () => {
@@ -306,25 +372,28 @@ export async function lookupPlayer(name: string, opts: LookupOptions = {}): Prom
       }
     });
 
-    // Cache the best match for the name and sport alone (no year), then apply the year.
-    const best = rankCandidates(candidates, { name, sport })[0] ?? null;
-    writeCache(db, key, best, now);
-    return best ? pick(candidates) : null;
+    // Cache every candidate whose name matches, then apply this card's year.
+    const keep = rankCandidates(candidates, { name: normalized, sport }).slice(0, MAX_CANDIDATES);
+    writeCache(db, key, keep.length ? keep : null, now);
+    return pick(keep);
   } catch (e) {
-    console.warn(`wikidata lookup failed: ${e instanceof Error ? e.name : "Error"}`);
+    log.warn("wikidata_lookup_failed", { error: errorKind(e) });
     return null;
   }
 }
 
-/** undefined means "not cached or too old"; null means a cached miss. */
-function readCache(db: Db, key: string, now: Date): PlayerFacts | null | undefined {
+/**
+ * undefined means "not cached or too old"; null means a cached miss.
+ * Rows from before candidates were cached hold a single object and are fetched again.
+ */
+function readCache(db: Db, key: string, now: Date): PlayerFacts[] | null | undefined {
   try {
     const row = db.select().from(playerFacts).where(eq(playerFacts.key, key)).get();
     if (!row) return undefined;
     if (now.getTime() - row.fetchedAt.getTime() >= CACHE_MS) return undefined;
     if (row.facts === null) return null;
-    const parsed = factsSchema.parse(JSON.parse(row.facts));
-    return { ...parsed, sports: parsed.sports.filter((s): s is Sport => (SPORTS as readonly string[]).includes(s)) };
+    const parsed = z.array(factsSchema).min(1).max(MAX_CANDIDATES).parse(JSON.parse(row.facts));
+    return parsed.map((p) => ({ ...p, sports: p.sports.filter((s): s is Sport => (SPORTS as readonly string[]).includes(s)) }));
   } catch {
     return undefined;
   }
@@ -342,7 +411,7 @@ export function resetFactsPruneCounter(): void {
   counter.__crdFactWrites = 0;
 }
 
-function writeCache(db: Db, key: string, facts: PlayerFacts | null, now: Date) {
+function writeCache(db: Db, key: string, facts: PlayerFacts[] | null, now: Date) {
   try {
     counter.__crdFactWrites = ((counter.__crdFactWrites ?? 0) + 1) % PRUNE_EVERY;
     if (counter.__crdFactWrites === 1) prunePlayerFacts(db, now);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectionReport } from "./connection";
+import { addressAlwaysUnknown, connectionReport, UNKNOWN_ADDRESS_WARNING } from "./connection";
 
 const behindApache = new Headers({
   host: "127.0.0.1:3210",
@@ -45,5 +45,19 @@ describe("connectionReport", () => {
     const r = connectionReport(new Headers({ "x-forwarded-for": "1".repeat(1000) }), { hops: 1 });
     expect(r.forwardedFor?.length).toBeLessThan(310);
     expect(r).toMatchObject({ forwardedHost: null, forwardedProto: null, host: null, signInIp: "unknown", visitHost: null });
+  });
+});
+
+describe("addressAlwaysUnknown", () => {
+  it("is true only in production with no hops and no header", () => {
+    expect(addressAlwaysUnknown({ nodeEnv: "production", hops: 0 })).toBe(true);
+    expect(addressAlwaysUnknown({ nodeEnv: "production", hops: 1 })).toBe(false);
+    expect(addressAlwaysUnknown({ nodeEnv: "production", hops: 0, clientIpHeader: "cf-connecting-ip" })).toBe(false);
+    expect(addressAlwaysUnknown({ nodeEnv: "development", hops: 0 })).toBe(false);
+  });
+  it("has a warning that names both settings and no dashes", () => {
+    expect(UNKNOWN_ADDRESS_WARNING).toMatch(/TRUST_PROXY_HOPS/);
+    expect(UNKNOWN_ADDRESS_WARNING).toMatch(/CLIENT_IP_HEADER/);
+    expect(UNKNOWN_ADDRESS_WARNING).not.toMatch(/[\u2013\u2014]/);
   });
 });

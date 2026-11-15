@@ -100,6 +100,34 @@ describe("text reader", () => {
   );
 });
 
+describe("sideways cards", () => {
+  // Many 1980s backs are printed across the long side, so a phone photo of
+  // the back held upright shows the text turned a quarter.
+  const landscapeBack = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="750">
+    <rect width="100%" height="100%" fill="#f1e7cf"/>
+    <g font-family="DejaVu Sans, Arial, sans-serif" fill="#2a2a2a">
+    <text x="40" y="70" font-size="40" font-weight="bold">616</text>
+    <text x="200" y="70" font-size="40" font-weight="bold">BILL RIPKEN</text>
+    <text x="200" y="120" font-size="26">BALTIMORE ORIOLES  2B</text>
+    <text x="40" y="200" font-size="22">HT: 6'1" WT: 185 BATS: RIGHT THROWS: RIGHT</text>
+    <text x="40" y="300" font-size="22">1987 ORIOLES 58 234 27 72 9 0 2 20 .308</text>
+    <text x="40" y="700" font-size="20">\u00a9 1989 FLEER CORP. PRINTED IN U.S.A.</text></g></svg>`);
+
+  it(
+    "reads a back turned a quarter either way",
+    async () => {
+      for (const angle of [90, 270]) {
+        const image = await sharp(landscapeBack).rotate(angle).jpeg({ quality: 90 }).toBuffer();
+        const result = await getTextReader().read(image);
+        expectWords(result, ["BILL", "RIPKEN", "1989", "FLEER"]);
+        expect(result.confidence).toBeGreaterThan(0.6);
+        expectBoxes(result);
+      }
+    },
+    TIMEOUT,
+  );
+});
+
 describe("otsuThreshold", () => {
   it("splits two clear groups of gray between them", async () => {
     const { otsuThreshold } = await import("./ocr");

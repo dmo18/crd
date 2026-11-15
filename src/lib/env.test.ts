@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { appOriginHost, env, resetEnvCache } from "./env";
+import { alertChannels, appOriginHost, env, resetEnvCache } from "./env";
 
 const saved = { ...process.env };
 function withEnv(vars: Record<string, string | undefined>) {
@@ -11,7 +11,8 @@ function withEnv(vars: Record<string, string | undefined>) {
 }
 
 afterEach(() => {
-  for (const k of ["APP_ORIGIN", "TRUST_PROXY_HOPS", "CLIENT_IP_HEADER", "NODE_ENV", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE"]) {
+  for (const k of ["APP_ORIGIN", "TRUST_PROXY_HOPS", "CLIENT_IP_HEADER", "NODE_ENV", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE",
+    "ALERT_TELEGRAM_BOT_TOKEN", "ALERT_TELEGRAM_CHAT_ID", "ALERT_DISCORD_WEBHOOK_URL"]) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
   }
@@ -130,3 +131,51 @@ describe("APP_ORIGIN from a hosting panel", () => {
   });
 });
 
+
+describe("alert settings", () => {
+  const TOKEN = "123456789:AAHfakeTokenForTestsOnly_abcdefghijklmnop";
+  const HOOK = "https://discord.com/api/webhooks/123456789012345678/fakeWebhookTokenForTestsOnly_abcdefghijkl";
+  const off = { ALERT_TELEGRAM_BOT_TOKEN: "", ALERT_TELEGRAM_CHAT_ID: "", ALERT_DISCORD_WEBHOOK_URL: "" };
+
+  it("are optional, and empty means off", () => {
+    withEnv(off);
+    expect(alertChannels()).toEqual([]);
+    expect(env().ALERT_TELEGRAM_BOT_TOKEN).toBeUndefined();
+  });
+  it("accept a Telegram bot token with a chat id, and a Discord webhook", () => {
+    withEnv({ ...off, ALERT_TELEGRAM_BOT_TOKEN: TOKEN, ALERT_TELEGRAM_CHAT_ID: "-1001234567890" });
+    expect(alertChannels()).toEqual(["telegram"]);
+    withEnv({ ...off, ALERT_DISCORD_WEBHOOK_URL: HOOK });
+    expect(alertChannels()).toEqual(["discord"]);
+    withEnv({ ...off, ALERT_DISCORD_WEBHOOK_URL: HOOK.replace("discord.com", "discordapp.com") });
+    expect(alertChannels()).toEqual(["discord"]);
+  });
+  it("reject a token or chat id that does not look right, without showing it", () => {
+    for (const bad of ["abc", "123456789", "123:short", "123456789:has spaces in it but is long enough"]) {
+      withEnv({ ...off, ALERT_TELEGRAM_BOT_TOKEN: bad, ALERT_TELEGRAM_CHAT_ID: "1" });
+      expect(() => env(), bad).toThrow(/ALERT_TELEGRAM_BOT_TOKEN/);
+      try { env(); } catch (e) { expect(String(e)).not.toContain(bad); }
+    }
+    withEnv({ ...off, ALERT_TELEGRAM_BOT_TOKEN: TOKEN, ALERT_TELEGRAM_CHAT_ID: "@channel" });
+    expect(() => env()).toThrow(/ALERT_TELEGRAM_CHAT_ID/);
+  });
+  it("need both Telegram settings together", () => {
+    withEnv({ ...off, ALERT_TELEGRAM_BOT_TOKEN: TOKEN });
+    expect(() => env()).toThrow(/ALERT_TELEGRAM_CHAT_ID/);
+    withEnv({ ...off, ALERT_TELEGRAM_CHAT_ID: "123" });
+    expect(() => env()).toThrow(/ALERT_TELEGRAM_BOT_TOKEN/);
+  });
+  it("accept only Discord's own https webhook addresses", () => {
+    for (const bad of [
+      HOOK.replace("https:", "http:"),
+      "https://evil.example.com/api/webhooks/123456789012345678/fakeWebhookTokenForTestsOnly_abcdefghijkl",
+      "https://discord.com.evil.example/api/webhooks/123456789012345678/fakeWebhookTokenForTestsOnly_abcdefghijkl",
+      "https://discord.com/api/other/123456789012345678/fakeWebhookTokenForTestsOnly_abcdefghijkl",
+      `${HOOK}?wait=true`,
+      "https://user@discord.com/api/webhooks/123456789012345678/fakeWebhookTokenForTestsOnly_abcdefghijkl",
+    ]) {
+      withEnv({ ...off, ALERT_DISCORD_WEBHOOK_URL: bad });
+      expect(() => env(), bad).toThrow(/ALERT_DISCORD_WEBHOOK_URL/);
+    }
+  });
+});

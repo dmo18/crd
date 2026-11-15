@@ -1,0 +1,10 @@
+# Test "server": Ubuntu 24.04 with systemd and Docker inside (run --privileged).
+# Starts from bootstrap-test-dind (Ubuntu 24.04 + docker.io + systemd), adds the
+# Ubuntu packages server-backup uses plus sqlite3 and Docker Compose for checks.
+FROM bootstrap-test-dind
+ARG APT_PROXY=""
+COPY apt-ca.crt /usr/local/share/ca-certificates/apt-ca.crt
+RUN if [ -n "$APT_PROXY" ]; then \
+      printf 'Acquire::https::CaInfo "/usr/local/share/ca-certificates/apt-ca.crt";\nAcquire::https::Proxy "%s";\n' "$APT_PROXY" > /etc/apt/apt.conf.d/99proxy; fi \
+ && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y restic rclone sqlite3 openssh-client docker-compose-v2 openssl jq \
+ && apt-get clean && rm -f /etc/apt/apt.conf.d/99proxy /etc/apt/apt.conf.d/99proxy

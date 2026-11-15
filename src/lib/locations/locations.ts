@@ -64,12 +64,30 @@ function nameTaken(db: Db, name: string, exceptId?: number): boolean {
   return db.select({ id: locations.id }).from(locations).where(where).get() !== undefined;
 }
 
+/** True for the database refusing a second location with the same name (any capitals). */
+function isDuplicateName(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return err instanceof Error && (code === "SQLITE_CONSTRAINT_UNIQUE" || /UNIQUE constraint failed/i.test(err.message));
+}
+
+/**
+ * Runs a write that may hit the unique name index. The early check above
+ * gives the message in the normal case; this catches two saves that race.
+ */
+function guardDuplicate(write: () => LocationResult): LocationResult {
+  try {
+    return write();
+  } catch (err) {
+    if (isDuplicateName(err)) return { ok: false, errors: { name: DUPLICATE } };
+    throw err;
+  }
+}
+
 export function createLocation(input: unknown, db: Db = getDb()): LocationResult {
   const r = parse(input);
   if ("errors" in r) return { ok: false, errors: r.errors };
   if (nameTaken(db, r.data.name)) return { ok: false, errors: { name: DUPLICATE } };
-  const row = db.insert(locations).values(r.data).returning({ id: locations.id }).get();
-  return { ok: true, id: row.id };
+  return guardDuplicate(() => ({ ok: true, id: db.insert(locations).values(r.data).returning({ id: locations.id }).get().id }));
 }
 
 export function renameLocation(id: number, input: unknown, db: Db = getDb()): LocationResult {
@@ -78,8 +96,10 @@ export function renameLocation(id: number, input: unknown, db: Db = getDb()): Lo
   const existing = db.select({ id: locations.id }).from(locations).where(eq(locations.id, id)).get();
   if (!existing) return { ok: false, errors: { form: "That location no longer exists." } };
   if (nameTaken(db, r.data.name, id)) return { ok: false, errors: { name: DUPLICATE } };
-  db.update(locations).set(r.data).where(eq(locations.id, id)).run();
-  return { ok: true, id };
+  return guardDuplicate(() => {
+    db.update(locations).set(r.data).where(eq(locations.id, id)).run();
+    return { ok: true, id };
+  });
 }
 
 /** Items in the location are kept; the database sets their location to none. */

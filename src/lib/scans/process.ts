@@ -1,14 +1,17 @@
-import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, valuations, type ImageRow, type ValueSource } from "@/db/schema";
-import { cropStored, ImageError, readStored, type StoredImage } from "@/lib/images/store";
+import { startPhotoArchiver } from "@/lib/images/archive";
+import { cropStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
+import { checkScanStreak } from "@/lib/audit/alert-rules";
+import { errorKind, log } from "@/lib/log";
 import { recordSnapshot } from "@/lib/valuation/snapshots";
 import { RecognitionError, type RecognitionPhoto, type RecognizedItem, type Recognizer } from "@/lib/recognition/types";
 
 const GENERIC_FAILURE = "Something went wrong with this scan. Try again.";
-/** A scan still "processing" after this long was interrupted by a restart. */
+/** A scan still "processing" this long after it started was interrupted by a restart. */
 const STUCK_AFTER_MS = 5 * 60 * 1000;
 
 /** Longest time recognition may take for one scan. */
@@ -49,7 +52,7 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
   const now = deps.now ?? (() => new Date());
 
   // Claim the scan. If it is not queued (already running or finished) do nothing.
-  const scan = db.update(scans).set({ status: "processing" })
+  const scan = db.update(scans).set({ status: "processing", startedAt: now() })
     .where(and(eq(scans.id, scanId), eq(scans.status, "queued"))).returning().get();
   if (!scan) return;
 
@@ -60,9 +63,10 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
       .orderBy(asc(images.id)).all();
     if (photoRows.length === 0) throw new RecognitionError("This scan has no photos. Try again.");
 
+    // Always the full quality working copy when it exists, never the small archive.
     const photos: RecognitionPhoto[] = [];
     for (const row of photoRows) {
-      photos.push({ role: row.role as RecognitionPhoto["role"], data: await readStored(row.file), width: row.width, height: row.height });
+      photos.push({ role: row.role as RecognitionPhoto["role"], ...(await readForRecognition(row)) });
     }
 
     const work = recognizer.recognize({ mode: scan.mode, photos, hint: scan.hint });
@@ -70,14 +74,16 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     work.catch(() => undefined);
     const recognized = await withDeadline(work, deps.deadlineMs ?? RECOGNITION_DEADLINE_MS);
 
-    // Cut each card out of a multi-card photo before touching the database.
+    // Cut each card out of a multi-card photo before touching the database,
+    // from the working copy. The archive copies are made afterwards by the
+    // background converter (startPhotoArchiver), once no scan is waiting.
     const crops = new Map<number, StoredImage>();
     if (scan.mode === "multi") {
       for (const [i, r] of recognized.entries()) {
         const source: ImageRow | undefined = photoRows[r.sourceIndex];
         if (!r.box || !source) continue;
         try {
-          crops.set(i, await cropStored(source.file, r.box));
+          crops.set(i, await cropStored(source, r.box));
         } catch {
           // A bad box only costs this item its own picture.
         }
@@ -114,8 +120,9 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     }
   } catch (err) {
     // Log the kind of failure only. Never photo data, hints or keys.
-    console.error(`scan ${scanId} failed: ${err instanceof Error ? err.name : "unknown error"}`);
+    log.error("scan_failed", { scanId, error: errorKind(err) });
     db.update(scans).set({ status: "failed", error: safeMessage(err), finishedAt: now() }).where(eq(scans.id, scanId)).run();
+    await checkScanStreak(db);
   }
 }
 
@@ -131,7 +138,45 @@ export function enqueueScan(scanId: number, deps: ProcessDeps = {}): void {
   const q = queue();
   if (q.pending.has(scanId)) return;
   q.pending.add(scanId);
-  q.tail = q.tail.then(() => processScan(scanId, deps)).catch(() => undefined).finally(() => { q.pending.delete(scanId); });
+  q.tail = q.tail.then(() => processScan(scanId, deps)).catch(() => undefined).finally(() => {
+    q.pending.delete(scanId);
+    // Turn this scan's photos into their small archive form once the queue is
+    // empty. Tests pass their own database and convert explicitly.
+    if (!deps.db) void startPhotoArchiver({ busy: scanQueueBusy });
+  });
+}
+
+/**
+ * Scan ids in this server's queue, in the order they will run. The first one
+ * is being processed (or about to be).
+ */
+export function queueOrder(): number[] {
+  return [...queue().pending];
+}
+
+export type RetryResult = { ok: true } | { ok: false; status: 404 | 409 | 410; error: string };
+
+/**
+ * Puts a failed scan back in the queue with the photos it already has, so a
+ * retry never uploads a second copy. Call enqueueScan after it succeeds.
+ */
+export function retryScan(scanId: number, db: Db = getDb()): RetryResult {
+  return db.transaction((tx): RetryResult => {
+    const scan = tx.select({ status: scans.status }).from(scans).where(eq(scans.id, scanId)).get();
+    if (!scan) return { ok: false, status: 404, error: "Scan not found." };
+    if (scan.status !== "failed") return { ok: false, status: 409, error: "This scan is still going or already finished." };
+    const photo = tx.select({ id: images.id }).from(images)
+      .where(and(eq(images.scanId, scanId), inArray(images.role, ["front", "back", "source"]), isNull(images.itemId))).get();
+    if (!photo) return { ok: false, status: 410, error: "The photos for this scan are gone. Take them again." };
+    tx.update(scans).set({ status: "queued", error: null, startedAt: null, finishedAt: null })
+      .where(and(eq(scans.id, scanId), eq(scans.status, "failed"))).run();
+    return { ok: true };
+  }, { behavior: "immediate" });
+}
+
+/** True while any scan waits in or is being read by this server's queue. */
+export function scanQueueBusy(): boolean {
+  return queue().pending.size > 0;
 }
 
 /** Resolves when everything queued so far has finished. Used by tests. */
@@ -149,10 +194,10 @@ export function recoverScans(deps: ProcessDeps = {}): void {
   const q = queue();
   const stuckBefore = new Date(now.getTime() - STUCK_AFTER_MS);
   const stuck = db.select({ id: scans.id }).from(scans)
-    .where(and(eq(scans.status, "processing"), lt(scans.createdAt, stuckBefore))).all()
+    .where(and(eq(scans.status, "processing"), lt(sql`coalesce(${scans.startedAt}, ${scans.createdAt})`, stuckBefore.getTime()))).all()
     .filter((s) => !q.pending.has(s.id));
   if (stuck.length) {
-    db.update(scans).set({ status: "queued" }).where(inArray(scans.id, stuck.map((s) => s.id))).run();
+    db.update(scans).set({ status: "queued", startedAt: null }).where(inArray(scans.id, stuck.map((s) => s.id))).run();
   }
   const waiting = db.select({ id: scans.id }).from(scans).where(eq(scans.status, "queued")).orderBy(asc(scans.id)).all();
   for (const s of waiting) enqueueScan(s.id, deps);
