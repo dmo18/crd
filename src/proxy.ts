@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE, sessionCookieLooksValid } from "@/lib/auth/seal";
 import { env } from "@/lib/env";
+import { REQUEST_ID_HEADER } from "@/lib/log";
 
 const HOST_PATTERN = /^(?:[a-z0-9.-]{1,253}|\[[0-9a-f:.]{2,45}\])(?::\d{1,5})?$/i;
 
@@ -72,6 +73,7 @@ function newNonce(): string {
  *    Node.js, so iron-session works); the session version is still checked
  *    against the database by requireOwner and guardApi.
  * 2. Sets a fresh CSP nonce for every page.
+ * 3. Gives every request a fresh id (x-request-id) for the log.
  */
 export async function proxy(request: NextRequest) {
   const e = env();
@@ -91,6 +93,8 @@ export async function proxy(request: NextRequest) {
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
+  // Always replaced, so a visitor cannot choose the id their log lines carry.
+  requestHeaders.set(REQUEST_ID_HEADER, crypto.randomUUID());
   requestHeaders.set("Content-Security-Policy", csp);
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set("Content-Security-Policy", csp);

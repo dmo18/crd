@@ -26,6 +26,10 @@ export type ParsedCard = {
   certNumber: string | null;
   /** "045/100" style. */
   serialNumber: string | null;
+  /** Autograph wording read (AUTO, SIGNATURES, PSA/DNA, CERTIFIED AUTOGRAPH). */
+  isAutograph: boolean;
+  /** The card says REPRINT: it is not the original card. */
+  isReprint: boolean;
   /** Short plain notes of what was read, for the item's notes. */
   evidence: string[];
 };
@@ -766,6 +770,11 @@ const STOP_WORDS = new Set(
   [
     // Brands and sets
     "TOPPS", "FLEER", "DONRUSS", "SCORE", "UPPER", "DECK", "BOWMAN", "OPEECHEE", "OPC", "PEE", "CHEE", "LEAF", "PRO", "SET",
+    // Autograph, slab and product words seen on real card fronts and labels
+    "AUTO", "AUTOS", "AUTOGRAPH", "AUTOGRAPHED", "AUTOGRAPHS", "AUTHENTICATED", "SIGNATURE", "SIGNATURES", "SIGNED",
+    "CERTIFIED", "GRADE", "GRADED", "REPRINT", "DNA", "HEROES", "PRESENTS", "CHAMPIONS", "COLLECTION", "EDITION",
+    "LIMITED", "SPECIAL", "INSERT", "PARALLEL", "REFRACTOR", "VINTAGE", "SWEET", "SPOT", "GOODWIN", "BASEBALL",
+    "BASKETBALL", "FOOTBALL", "HOCKEY", "ROOKIES", "SERIES",
     "HOOPS", "SKYBOX", "SKY", "BOX", "STADIUM", "CLUB", "ULTRA", "PINNACLE", "CLASSIC", "STAR", "STARS", "PACIFIC",
     "ACTION", "PACKED", "CARDS", "KELLOGGS", "DRAKES", "PARKHURST", "TRADED", "UPDATE", "ROOKIE", "ROOKIES", "TIFFANY",
     "GLOSSY", "SUPPLEMENTAL", "SP", "MINOR", "STICKER", "STICKERS",
@@ -805,6 +814,20 @@ const CITY_KEYS = new Set(TEAMS.map((t) => normalizeName(t.city)));
 const KEY_PLAYERS = new Map<string, string>(KEY_CARDS.map((k) => [normalizeName(k.player), k.player]));
 
 type NameWord = { word: string; key: string; initials: boolean };
+
+/**
+ * OCR on busy fronts produces short letter groups ("Ert Arn", "Heroes Fv").
+ * A real name has a vowel in every word and at least one word of 4 or more
+ * letters ("Bo Jackson", "Cal Ripken").
+ */
+function looksLikeName(core: NameWord[]): boolean {
+  const words = core.filter((w) => !w.initials).map((w) => w.key);
+  if (words.length === 0) return false;
+  if (!words.every((w) => /[AEIOUY]/.test(w))) return false;
+  if (!words.some((w) => w.length >= 4)) return false;
+  // Two consonants and nothing else, or a doubled junk tail, are OCR noise.
+  return words.every((w) => !/^[^AEIOUY]{3,}$/.test(w) && !/(.)\1\1/.test(w));
+}
 
 function nameWord(tok: string): NameWord | null {
   let s = tok.replace(/^[^A-Za-z0-9]+/, "").replace(/[^A-Za-z0-9.']+$/, "");
@@ -867,8 +890,11 @@ function findPlayers(front: Line[], back: Line[]): { names: string[]; keyMatch: 
     let run: NameWord[] = [];
     let suffix: string | null = null;
     const flush = () => {
-      const core = run;
-      if (core.length >= 2 && core.length <= 3 && !core.every((w) => w.initials)) {
+      // Drop vowel-less OCR scraps at either end ("ALEX RODRIGUEZ GML").
+      let core = run;
+      while (core.length > 0 && !core[core.length - 1].initials && !/[AEIOUY]/.test(core[core.length - 1].key)) core = core.slice(0, -1);
+      while (core.length > 0 && !core[0].initials && !/[AEIOUY]/.test(core[0].key)) core = core.slice(1);
+      if (core.length >= 2 && core.length <= 3 && !core.every((w) => w.initials) && looksLikeName(core)) {
         const plainKey = normalizeName(core.map((w) => w.word).join(" "));
         if (!CITY_KEYS.has(plainKey)) {
           const words = core.map((w) => titleWord(w.word));
@@ -935,8 +961,10 @@ type SlabFind = { grader: string | null; grade: string | null; certNumber: strin
 function findSlab(lines: Line[]): SlabFind | null {
   const all = lines.map((l) => l.up).join("\n");
   let grader: string | null = null;
-  if (/\bPSA\b/.test(all)) grader = "PSA";
+  if (/\bPSA\s*\/?\s*DNA\b/.test(all)) grader = "PSA/DNA";
+  else if (/\bPSA\b/.test(all)) grader = "PSA";
   else if (/\bBGS\b|\bBECKETT\s*GRADING\b/.test(all)) grader = "BGS";
+  else if (/\bBECKETT/.test(all)) grader = "Beckett";
   else if (/\bSGC\b/.test(all)) grader = "SGC";
   else if (/\bCGC\b/.test(all)) grader = "CGC";
   let grade: string | null = null;
@@ -965,6 +993,24 @@ function findSlab(lines: Line[]): SlabFind | null {
     if (!labelLine) return null;
   }
   return { grader, grade, certNumber };
+}
+
+const LABEL_BRANDS: [RegExp, string][] = [
+  [/^UPPER(?:\s*DECK)?$/, "Upper Deck"], [/^TOPPS$/, "Topps"], [/^FLEER$/, "Fleer"], [/^DONRUSS$/, "Donruss"],
+  [/^BOWMAN$/, "Bowman"], [/^SCORE$/, "Score"], [/^SKYBOX$/, "SkyBox"], [/^HOOPS$/, "NBA Hoops"],
+];
+
+/** Holder labels print "1997 UPPER DECK ..." on one line; OCR often keeps only "1997 UPPER". */
+function slabLabelYearBrand(lines: Line[]): { year: number; brand: string } | null {
+  for (const l of lines) {
+    // Copyright lines are read by findYear with their own rules (Leaf, Inc. and Donruss).
+    if (isCopyrightLine(l)) continue;
+    const m = /\b(19[5-9]\d|20[0-3]\d)\s+(UPPER(?:\s*DECK)?|TOPPS|FLEER|DONRUSS|BOWMAN|SCORE|SKYBOX|HOOPS)\b/.exec(l.up);
+    if (!m) continue;
+    const brand = LABEL_BRANDS.find(([re]) => re.test(m[2]))?.[1];
+    if (brand) return { year: Number(m[1]), brand };
+  }
+  return null;
 }
 
 function findSerial(lines: Line[]): string | null {
@@ -998,6 +1044,8 @@ function emptyCard(): ParsedCard {
     grade: null,
     certNumber: null,
     serialNumber: null,
+    isAutograph: false,
+    isReprint: false,
     evidence: [],
   };
 }
@@ -1018,10 +1066,12 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   const ev = out.evidence;
 
   const hits = brandHits(lines);
+  const slabLabel = slabLabelYearBrand(lines);
   const yearFind = findYear(lines, new Set(hits.map((h) => h.line)));
-  out.year = yearFind?.year ?? null;
+  out.year = yearFind?.year ?? slabLabel?.year ?? null;
   const pick = pickBrand(hits, out.year);
-  out.brand = pick?.brand ?? null;
+  out.brand = pick?.brand ?? slabLabel?.brand ?? null;
+  if (!yearFind && slabLabel) ev.push(`Read ${slabLabel.year} ${slabLabel.brand} on the holder label`);
 
   if (yearFind?.how === "copyright") {
     ev.push(out.brand ? `Read copyright line: ${yearFind.year} ${out.brand}` : `Read copyright line: ${yearFind.year}`);
@@ -1052,6 +1102,18 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
 
   out.serialNumber = findSerial(lines);
   if (out.serialNumber) ev.push(`Read serial number ${out.serialNumber}`);
+
+  const allUp = lines.map((l) => l.up).join(" ");
+  // "AUT" is the short form on Beckett and PSA/DNA authentication labels.
+  const labelAut = /\bAUT\b/.test(allUp) && /\bBECKETT|\bPSA\b|\bBAS\b|\bJSA\b/.test(allUp);
+  if (labelAut || /\bAUTO(?:GRAPH(?:ED|S)?)?\b|\bSIGNATURES?\b|\bSIGNED\b|\bPSA\s*\/?\s*DNA\b|\bAUTHENTIC\s+AUTOGRAPH/.test(allUp)) {
+    out.isAutograph = true;
+    ev.push("Autograph wording read on the card or label");
+  }
+  if (/\bREPRINT\b/.test(allUp)) {
+    out.isReprint = true;
+    ev.push("The card says REPRINT: it is a later copy, not the original card");
+  }
 
   // Sport clues other than the team, so they can settle a team name used in two sports.
   const votes: Votes = new Map();

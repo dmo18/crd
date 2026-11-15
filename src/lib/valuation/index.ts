@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items, valuations } from "@/db/schema";
 import { env, recognitionMode } from "@/lib/env";
+import { errorKind, log } from "@/lib/log";
 import { AiPriceSource } from "./ai-source";
 import { SampleSource } from "./sample-source";
 import { ValuationError, type PriceQuote, type PriceSource } from "./types";
@@ -42,7 +43,7 @@ export async function revalueItem(itemId: number, deps: RevalueDeps = {}): Promi
     quote = await source.quote(item);
   } catch (err) {
     // Log the kind of failure only, never item text or keys.
-    console.error(`valuation of item ${itemId} failed: ${err instanceof Error ? err.name : "unknown error"}`);
+    log.error("valuation_failed", { itemId, error: errorKind(err) });
     return { ok: false, error: err instanceof ValuationError ? err.userMessage : REVALUE_MESSAGES.generic };
   }
   if (!quote) return { ok: false, error: REVALUE_MESSAGES.noValue };

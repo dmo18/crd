@@ -4,6 +4,8 @@ import { images, items, scans, valuations, type ImageRow, type ValueSource } fro
 import { cropStored, ImageError, readStored, type StoredImage } from "@/lib/images/store";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
+import { checkScanStreak } from "@/lib/audit/alert-rules";
+import { errorKind, log } from "@/lib/log";
 import { recordSnapshot } from "@/lib/valuation/snapshots";
 import { RecognitionError, type RecognitionPhoto, type RecognizedItem, type Recognizer } from "@/lib/recognition/types";
 
@@ -114,8 +116,9 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     }
   } catch (err) {
     // Log the kind of failure only. Never photo data, hints or keys.
-    console.error(`scan ${scanId} failed: ${err instanceof Error ? err.name : "unknown error"}`);
+    log.error("scan_failed", { scanId, error: errorKind(err) });
     db.update(scans).set({ status: "failed", error: safeMessage(err), finishedAt: now() }).where(eq(scans.id, scanId)).run();
+    await checkScanStreak(db);
   }
 }
 

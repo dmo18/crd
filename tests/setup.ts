@@ -13,4 +13,8 @@ Object.assign(process.env, {
   OWNER_PASSWORD_HASH_B64: Buffer.from(bcrypt.hashSync("test-password", 4)).toString("base64"),
   RECOGNITION_MODE: "sample",
   ANTHROPIC_API_KEY: "",
+  // Alerts off, so no test can reach Telegram or Discord.
+  ALERT_TELEGRAM_BOT_TOKEN: "",
+  ALERT_TELEGRAM_CHAT_ID: "",
+  ALERT_DISCORD_WEBHOOK_URL: "",
 });

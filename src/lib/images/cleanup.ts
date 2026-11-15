@@ -4,6 +4,7 @@ import { eq, or } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images } from "@/db/schema";
 import { env } from "@/lib/env";
+import { log } from "@/lib/log";
 import { isValidImageName, uploadsDir } from "./store";
 
 const HOUR = 60 * 60 * 1000;
@@ -76,7 +77,7 @@ export function maybeCleanupPhotos(deps: { db?: Db; now?: Date; marker?: string;
       }
       await fs.writeFile(/*turbopackIgnore: true*/ marker, String(now.getTime()));
       const removed = await removeOrphanPhotos(deps.db ?? getDb(), deps.dir ?? uploadsDir(), now);
-      if (removed > 0) console.info(`photo cleanup removed ${removed} unused files`);
+      if (removed > 0) log.info("photo_cleanup", { removed });
       return removed;
     } catch {
       return 0;

@@ -2,6 +2,7 @@ import { eq, lt } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { playerFacts, SPORTS, type Sport } from "@/db/schema";
+import { errorKind, log } from "@/lib/log";
 
 /**
  * Player facts from Wikidata: free, no key, API use allowed.
@@ -376,7 +377,7 @@ export async function lookupPlayer(name: string, opts: LookupOptions = {}): Prom
     writeCache(db, key, keep.length ? keep : null, now);
     return pick(keep);
   } catch (e) {
-    console.warn(`wikidata lookup failed: ${e instanceof Error ? e.name : "Error"}`);
+    log.warn("wikidata_lookup_failed", { error: errorKind(e) });
     return null;
   }
 }

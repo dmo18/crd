@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { SCAN_MODES } from "@/db/schema";
 import { guardApi } from "@/lib/auth/guard";
+import { errorKind, log, requestIdFrom } from "@/lib/log";
 import { MAX_PHOTOS_PER_SCAN, MAX_UPLOAD_BYTES } from "@/lib/images/store";
 import { createScan, ScanInputError, type ScanPhotoInput, type ScanPhotoRole } from "@/lib/scans/create";
 import { enqueueScan, queueOrder, recoverScans } from "@/lib/scans/process";
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
     return Response.json({ scanId }, { status: 201 });
   } catch (err) {
     if (err instanceof ScanInputError) return bad(err.userMessage);
-    console.error(`create scan failed: ${err instanceof Error ? err.name : "unknown error"}`);
+    log.error("scan_create_failed", { requestId: requestIdFrom(request.headers), error: errorKind(err) });
     return bad("Could not start the scan. Try again.", 500);
   }
 }

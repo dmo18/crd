@@ -5,8 +5,14 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getDb } from "@/db";
-import type { AttemptKind } from "@/db/schema";
+import type { AttemptKind, AuditEvent, AuditOutcome } from "@/db/schema";
+import { queueAlert, type Alert } from "@/lib/alerts";
+import {
+  ALERT_RULES, manyFailedAlert, newDeviceAlert, passwordChangedAlert, pausedAlert, setupDoneAlert, type AlertRule,
+} from "@/lib/audit/alert-rules";
+import { recordAudit } from "@/lib/audit/store";
 import { env } from "@/lib/env";
+import { log, requestIdFrom } from "@/lib/log";
 import { isOwner } from "./guard";
 import {
   bumpSessionVersion, changeOwnerPassword, checkOwnerPassword, createOwnerPassword, currentSessionVersion, hashNewPassword,
@@ -39,29 +45,67 @@ async function trustedDevice(): Promise<string | null> {
   return readDevice(raw, env().SESSION_SECRET, currentSessionVersion());
 }
 
+type Visit = { ip: string; deviceId: string | null; requestId?: string };
+type Booked = Visit & { attempt: BeginResult };
+
 /**
  * Checks the limits and books a failed attempt for this visitor before any
  * secret is checked. A browser that signed in before (trusted-device cookie)
  * has only its own limit, so strangers cannot lock the owner out.
  */
-async function book(kind: AttemptKind): Promise<BeginResult> {
-  const ip = clientIp(await headers(), env().TRUST_PROXY_HOPS, env().CLIENT_IP_HEADER);
-  return beginAttempt(ip, getDb(), new Date(), kind, await trustedDevice());
+async function book(kind: AttemptKind): Promise<Booked> {
+  const visit = await thisVisit();
+  const attempt = beginAttempt(visit.ip, getDb(), new Date(), kind, visit.deviceId);
+  if (!attempt.ok) {
+    // At most one row per address every 5 minutes, so a flood cannot fill the log.
+    const everyone = attempt.lock === "global";
+    audit(visit, "sign_in_blocked", "blocked", everyone ? "everyone" : kind, { onceWithinMs: 5 * 60 * 1000 });
+    log.warn("sign_in_blocked", { requestId: visit.requestId, lock: attempt.lock, kind });
+    if (everyone) alert("paused", pausedAlert(visit.ip));
+  }
+  return { ...visit, attempt };
 }
 
-/** Gives this browser a trusted-device cookie for 180 days, bound to `version`. Keeps its id when it had one. */
-async function trustThisDevice(version: number): Promise<void> {
+async function thisVisit(): Promise<Visit> {
+  const h = await headers();
+  const ip = clientIp(h, env().TRUST_PROXY_HOPS, env().CLIENT_IP_HEADER);
+  return { ip, deviceId: await trustedDevice(), requestId: requestIdFrom(h) };
+}
+
+function audit(visit: Visit, event: AuditEvent, outcome: AuditOutcome, detail?: string, opts?: { onceWithinMs?: number }): void {
+  recordAudit({ event, outcome, ip: visit.ip, deviceId: visit.deviceId, detail }, opts);
+}
+
+function alert(rule: AlertRule, message: Alert): void {
+  const { key, cooldownMs } = ALERT_RULES[rule];
+  queueAlert(key, cooldownMs, message);
+}
+
+/** A failed sign-in or setup code: logged, and an alert once many pile up. */
+function failed(visit: Visit, event: "sign_in_failed" | "setup_failed", detail?: string): void {
+  audit(visit, event, "failed", detail);
+  log.info(event, { requestId: visit.requestId });
+  const many = manyFailedAlert(getDb());
+  if (many) alert("manyFailed", many);
+}
+
+/**
+ * Gives this browser a trusted-device cookie for 180 days, bound to `version`.
+ * Keeps its id when it had one. Returns the id.
+ */
+async function trustThisDevice(version: number): Promise<string> {
   const jar = await cookies();
   const raw = jar.get(DEVICE_COOKIE)?.value;
   // Reuse the id even from a cookie of an older version, so the per-device limit follows the browser.
-  const known = raw ? await readAnyDevice(raw) : null;
-  jar.set(DEVICE_COOKIE, await sealDevice(known ?? newDeviceId(), version, env().SESSION_SECRET), {
+  const id = (raw ? await readAnyDevice(raw) : null) ?? newDeviceId();
+  jar.set(DEVICE_COOKIE, await sealDevice(id, version, env().SESSION_SECRET), {
     httpOnly: true,
     sameSite: "lax",
     secure: env().NODE_ENV === "production",
     maxAge: DEVICE_MAX_AGE,
     path: "/",
   });
+  return id;
 }
 
 async function readAnyDevice(raw: string): Promise<string | null> {
@@ -71,33 +115,46 @@ async function readAnyDevice(raw: string): Promise<string | null> {
   return (await readDevice(raw, env().SESSION_SECRET, version)) ?? (await readDevice(raw, env().SESSION_SECRET, version - 1));
 }
 
-async function signIn(version: number): Promise<void> {
+/** Signs this browser in. Returns its trusted-device id. */
+async function signIn(version: number): Promise<string> {
   const session = await getSession();
   session.owner = true;
   session.since = Date.now();
   session.version = version;
   await session.save();
-  await trustThisDevice(version);
+  return trustThisDevice(version);
 }
 
 const text = z.string().max(MAX_PASSWORD_LENGTH);
 
 export async function login(_prev: LoginState, formData: FormData): Promise<LoginState> {
   // Booked as a failure first; only a correct password turns it into a success.
-  const attempt = await book("login");
+  const visit = await book("login");
+  const { attempt } = visit;
   if (!attempt.ok) return { error: tooMany(attempt) };
-  if (passwordSource().source === "none") return { error: NO_PASSWORD_YET };
+  if (passwordSource().source === "none") {
+    failed(visit, "sign_in_failed", "no password yet");
+    return { error: NO_PASSWORD_YET };
+  }
 
   const version = await checkOwnerPassword(formData.get("password"));
-  if (version === null) return { error: WRONG_PASSWORD };
+  if (version === null) {
+    failed(visit, "sign_in_failed");
+    return { error: WRONG_PASSWORD };
+  }
   succeedAttempt(attempt.id);
-  await signIn(version);
+  const deviceId = await signIn(version);
+  const isNew = visit.deviceId === null;
+  audit({ ...visit, deviceId }, "sign_in_ok", "ok", isNew ? "new device" : undefined);
+  log.info("sign_in_ok", { requestId: visit.requestId, newDevice: isNew });
+  if (isNew) alert("newDevice", newDeviceAlert(visit.ip));
   redirect("/");
 }
 
 /** Signs out this browser. Its trusted-device cookie stays, so it is still recognized next time. */
 export async function logout(): Promise<void> {
   const session = await getSession();
+  if (session.owner === true) audit(await thisVisit(), "signed_out", "ok");
   session.destroy();
   redirect("/login");
 }
@@ -115,16 +172,23 @@ export async function setupOwner(_prev: SetupState, formData: FormData): Promise
   const problem = newPasswordProblem(parsed.data);
   if (problem) return { error: problem };
 
-  const attempt = await book("setup");
+  const visit = await book("setup");
+  const { attempt } = visit;
   if (!attempt.ok) return { error: tooMany(attempt) };
   const expected = env().SETUP_CODE;
-  if (!expected || !setupCodeMatches(parsed.data.code, expected)) return { error: WRONG_CODE };
+  if (!expected || !setupCodeMatches(parsed.data.code, expected)) {
+    failed(visit, "setup_failed");
+    return { error: WRONG_CODE };
+  }
 
   const hash = await hashNewPassword(parsed.data.password);
   const version = createOwnerPassword(hash);
   if (version === null) return { error: SETUP_DONE };
   succeedAttempt(attempt.id);
-  await signIn(version);
+  const deviceId = await signIn(version);
+  audit({ ...visit, deviceId }, "setup_done", "ok");
+  log.info("setup_done", { requestId: visit.requestId });
+  alert("setupDone", setupDoneAlert(visit.ip));
   redirect("/");
 }
 
@@ -145,7 +209,8 @@ export async function changePassword(_prev: ChangePasswordState, formData: FormD
   const problem = newPasswordProblem(parsed.data);
   if (problem) return { error: problem, done: false };
 
-  const attempt = await book("change_password");
+  const visit = await book("change_password");
+  const { attempt } = visit;
   if (!attempt.ok) return { error: tooMany(attempt), done: false };
   const currentOk = parsed.data.current.length > 0 && (await bcrypt.compare(parsed.data.current, source.hash));
   if (!currentOk) return { error: "Your current password is not right.", done: false };
@@ -153,7 +218,10 @@ export async function changePassword(_prev: ChangePasswordState, formData: FormD
   const version = changeOwnerPassword(source.version, await hashNewPassword(parsed.data.password));
   if (version === null) return { error: "The password was changed somewhere else. Sign in again and retry.", done: false };
   succeedAttempt(attempt.id);
-  await signIn(version);
+  const deviceId = await signIn(version);
+  audit({ ...visit, deviceId }, "password_changed", "ok");
+  log.info("password_changed", { requestId: visit.requestId });
+  alert("passwordChanged", passwordChangedAlert(visit.ip));
   return { error: null, done: true };
 }
 
@@ -167,8 +235,11 @@ export async function signOutOtherDevices(): Promise<SignOutOthersState> {
   if (!(await isOwner())) return { error: "Please sign in again.", done: false };
   const current = currentSessionVersion();
   if (current === null) return { error: "Please sign in again.", done: false };
+  const visit = await thisVisit();
   const version = bumpSessionVersion(current);
   if (version === null) return { error: "Something changed at the same time. Try again.", done: false };
-  await signIn(version);
+  const deviceId = await signIn(version);
+  audit({ ...visit, deviceId }, "signed_out_others", "ok");
+  log.info("signed_out_others", { requestId: visit.requestId });
   return { error: null, done: true };
 }

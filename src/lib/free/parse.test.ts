@@ -282,6 +282,8 @@ describe("parseCardText", () => {
       grade: null,
       certNumber: null,
       serialNumber: null,
+      isAutograph: false,
+      isReprint: false,
       evidence: [],
     };
     expect(parseCardText(null, null)).toEqual(empty);
@@ -406,3 +408,23 @@ describe("parseProductText", () => {
     expect(() => parseProductText(null as unknown as OcrResult)).not.toThrow();
   });
 });
+
+describe("real card fronts and holder labels (from the owner's sample photos)", () => {
+  it("does not take OCR noise or card words as a player name", () => {
+    for (const noise of ["IN ERT ARN EN", "HEROES FV", "CERTIFIED AUTO GRADE", "SIGNATURES"]) {
+      expect(parseCardText(ocr([[noise, 0.6]]), null).playerCandidates, noise).toEqual([]);
+    }
+    expect(parseCardText(ocr([["BO JACKSON", 0.8]]), null).playerCandidates[0]).toBe("Bo Jackson");
+    expect(parseCardText(ocr([["BILLY BEANE", 0.8]]), null).playerCandidates[0]).toBe("Billy Beane");
+  });
+  it("reads year, brand, autograph and grader from a holder label", () => {
+    const p = parseCardText(ocr([["#422 ALEX RODRIGUEZ GML SP 1997 UPPER AUT BECKETT", 0.8]]), null);
+    expect(p).toMatchObject({ year: 1997, brand: "Upper Deck", cardNumber: "422", grader: "Beckett" });
+    expect(p.playerCandidates[0]).toBe("Alex Rodriguez");
+    const aut = parseCardText(ocr([["#422 ALEX RODRIGUEZ GML SP 1997 UPPER AUT BECKETTs", 0.8]]), null);
+    expect(aut).toMatchObject({ grader: "Beckett", isAutograph: true });
+    const dna = parseCardText(ocr([["REPRINT CARD J KOOSMAN N. RYAN GEM MT 10 PSADNA CERTIFIED AUTO GRADE", 0.8]]), null);
+    expect(dna).toMatchObject({ grader: "PSA/DNA", grade: "10", isAutograph: true, isReprint: true });
+  });
+});
+

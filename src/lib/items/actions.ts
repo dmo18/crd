@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { auditThisRequest } from "@/lib/audit/request";
+import { itemLabel } from "@/lib/audit/subjects";
 import { requireOwner } from "@/lib/auth/guard";
 import { confirmItem, deleteItem, updateItem } from "./update";
 
@@ -51,7 +53,9 @@ export async function deleteItemAction(formData: FormData): Promise<void> {
   await requireOwner();
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) redirect("/items");
-  await deleteItem(id.data);
+  const title = itemLabel(id.data);
+  const result = await deleteItem(id.data);
+  if (result.ok) await auditThisRequest("item_deleted", "ok", title);
   revalidateItem(id.data);
   redirect("/items");
 }

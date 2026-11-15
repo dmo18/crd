@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { auditThisRequest } from "@/lib/audit/request";
+import { locationLabel } from "@/lib/audit/subjects";
 import { requireOwner } from "@/lib/auth/guard";
 import { createLocation, deleteLocation, renameLocation } from "./locations";
 
@@ -45,6 +47,7 @@ export async function deleteLocationAction(formData: FormData): Promise<void> {
   await requireOwner();
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) return;
-  deleteLocation(id.data);
+  const name = locationLabel(id.data);
+  if (deleteLocation(id.data).ok) await auditThisRequest("location_deleted", "ok", name);
   revalidateAll();
 }

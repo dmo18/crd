@@ -213,6 +213,7 @@ export class FreeRecognizer implements Recognizer {
       isRookie: key?.isRookie ?? false,
       isError: false,
       serialNumber: parsed.serialNumber,
+      isAutograph: parsed.isAutograph,
       grader: parsed.grader,
       grade: parsed.grade,
       certNumber: parsed.certNumber,
@@ -275,6 +276,12 @@ export class FreeRecognizer implements Recognizer {
       if (match) confidence = Math.min(confidence, CHECK_CONFIDENCE);
     }
     if (textConfidence < 0.5) confidence = Math.min(confidence, 0.6);
+    // A reprint is never the valuable original: always let the owner check it.
+    if (parsed.isReprint) {
+      confidence = Math.min(confidence, 0.6);
+      item.rarityTier = null;
+      item.rarityNotes = "Marked REPRINT: a later copy, usually worth far less than the original card.";
+    }
     item.confidence = Math.min(0.95, confidence);
     return recognizedItemSchema.parse(item);
   }

@@ -1,9 +1,10 @@
+import { Alerts } from "@/components/more/Alerts";
 import { ChangePassword } from "@/components/more/ChangePassword";
 import { ConnectionCheck } from "@/components/more/ConnectionCheck";
 import { SignOutOthers } from "@/components/more/SignOutOthers";
 import { SignOutButton } from "@/components/nav/SignOutButton";
 import { Card, LinkButton, Notice, PageHeader } from "@/components/ui";
-import { recognitionMode } from "@/lib/env";
+import { alertChannels, recognitionMode } from "@/lib/env";
 import { requireOwner } from "@/lib/auth/guard";
 
 export const metadata = { title: "More" };
@@ -11,6 +12,7 @@ export const metadata = { title: "More" };
 export default async function MorePage() {
   await requireOwner();
   const mode = recognitionMode();
+  const channels = alertChannels().map((c) => (c === "telegram" ? "Telegram" : "Discord"));
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="More" />
@@ -51,6 +53,14 @@ export default async function MorePage() {
           If you enter your own value for an item, your value always wins.
         </p>
       </Card>
+
+      <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Activity</h2>
+        <p className="text-sm text-muted">Sign-ins, wrong passwords and deletions from the last year.</p>
+        <LinkButton href="/more/activity" variant="secondary">See activity</LinkButton>
+      </Card>
+
+      <Alerts channels={channels} />
 
       <ChangePassword />
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDb } from "@/db";
 import { playerFacts } from "@/db/schema";
+import { setLogSink } from "@/lib/log";
 import {
   CACHE_MS, lookupPlayer, normalizeName, prunePlayerFacts, PRUNE_EVERY, rankCandidates, resetFactsPruneCounter, resetWikidataPause,
   userAgent, type PlayerFacts,
@@ -103,7 +104,8 @@ describe("lookupPlayer", () => {
   });
 
   it("returns null and does not cache when the network fails", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const lines: string[] = [];
+    setLogSink((line) => lines.push(line));
     const cases: Record<string, typeof fetch> = {
       network: asFetch(vi.fn(async () => { throw new TypeError("fetch failed"); })),
       http500: asFetch(vi.fn(async () => new Response("oops", { status: 500 }))),
@@ -115,19 +117,19 @@ describe("lookupPlayer", () => {
       expect(await lookupPlayer("Frank Thomas", { db, fetchImpl })).toBeNull();
       expect(db.select().from(playerFacts).all()).toHaveLength(0);
     }
-    for (const call of warn.mock.calls) expect(String(call[0])).toMatch(/^wikidata lookup failed: \w+$/);
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("Frank");
-    warn.mockRestore();
+    for (const line of lines) expect(JSON.parse(line)).toMatchObject({ level: "warn", event: "wikidata_lookup_failed", error: expect.stringMatching(/^\w+$/) });
+    expect(lines.join("\n")).not.toContain("Frank");
+    setLogSink();
   });
 
   it("times out, returns null and does not cache", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setLogSink(() => undefined);
     const db = createDb(":memory:");
     const hang = vi.fn((_u: unknown, init?: RequestInit) =>
       new Promise<Response>((_res, rej) => init?.signal?.addEventListener("abort", () => rej(new Error("aborted")))));
     expect(await lookupPlayer("Frank Thomas", { db, timeoutMs: 40, fetchImpl: asFetch(hang) })).toBeNull();
     expect(db.select().from(playerFacts).all()).toHaveLength(0);
-    warn.mockRestore();
+    setLogSink();
   });
 
   it("ignores people who are not athletes", async () => {
@@ -276,7 +278,7 @@ describe("Hall of Fame", () => {
 
 describe("rate limits", () => {
   it("stops looking up for as long as Retry-After asks after a 429", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    setLogSink(() => undefined);
     resetWikidataPause();
     const limited = vi.fn(async () => new Response("slow down", { status: 429, headers: { "Retry-After": "120" } }));
     expect(await lookupPlayer("Frank Thomas", { db: createDb(":memory:"), fetchImpl: asFetch(limited) })).toBeNull();
@@ -288,6 +290,6 @@ describe("rate limits", () => {
     expect(db.select().from(playerFacts).all()).toHaveLength(0);
     resetWikidataPause();
     expect(await lookupPlayer("Frank Thomas", { db, fetchImpl: asFetch(ok) })).toMatchObject({ wikidataId: "Q1" });
-    warn.mockRestore();
+    setLogSink();
   });
 });
