@@ -112,9 +112,11 @@ Cloudflare Tunnel. Cloudflare puts the visitor's address in `CF-Connecting-IP`;
 1. In Coolify, app, Environment Variables, add `CLIENT_IP_HEADER` with the
    value `cf-connecting-ip`. Only do this when nothing can reach the server
    except through the tunnel, because otherwise anyone could fake the header.
-2. Set the domain with `http://cards.example.com:3000` (Cloudflare handles
-   HTTPS). The app turns the generated `http://` address into `https://`
-   for `APP_ORIGIN` by itself.
+2. Set the domain with `https://cards.example.com:3000` and, in the app's
+   Advanced settings, turn **Redirect HTTP to HTTPS** off (Cloudflare handles
+   HTTPS; the tunnel talks plain HTTP to Traefik on the server, as Coolify's
+   Cloudflare Tunnel guide describes). If an `http://` address is used
+   instead, the app upgrades it to `https://` for `APP_ORIGIN` by itself.
 3. Deploy, then check More, Connection check: "IP used for sign-in limits"
    should be your phone's internet address (for IPv6, its /64 network, like
    `2001:db8:1:2::/64`). `TRUST_PROXY_HOPS` is ignored while
