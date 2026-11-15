@@ -73,7 +73,7 @@
 set -euo pipefail
 umask 022
 
-readonly SCRIPT_VERSION="1.3.0"
+readonly SCRIPT_VERSION="1.3.1"
 readonly COOLIFY_INSTALLER_URL="https://cdn.coollabs.io/coolify/install.sh"
 readonly COOLIFY_ENV="/data/coolify/source/.env"
 readonly GUARD_BIN="/usr/local/sbin/docker-port-guard"
@@ -181,6 +181,16 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+# Never stop silently: if a command fails where nothing else catches it, say
+# where, so the owner sees a message instead of just the prompt coming back.
+set -E
+on_unexpected_error() {
+    local rc=$? line=$1
+    trap - ERR
+    printf '\n%sSTOPPED:%s an unexpected error (code %s) at line %s of bootstrap.sh.\n' "$C_RED" "$C_RESET" "$rc" "$line" >&2
+    printf 'It is safe to run the same command again. If it stops here again, send a photo of this screen.\n' >&2
+}
+trap 'on_unexpected_error "$LINENO"' ERR
 
 # One private temporary folder per run, removed at the end.
 ensure_workdir() {
@@ -478,7 +488,7 @@ principal_from_email() {
 
 current_principal() {
     if [ -n "$OWNER_USER" ] && [ -r "$SSH_PRINCIPALS_DIR/$OWNER_USER" ]; then
-        grep -v '^[[:space:]]*\(#\|$\)' "$SSH_PRINCIPALS_DIR/$OWNER_USER" | head -n 1 | tr -d '[:space:]'
+        grep -v '^[[:space:]]*\(#\|$\)' "$SSH_PRINCIPALS_DIR/$OWNER_USER" | sed -n 1p | tr -d '[:space:]'
     fi
 }
 
@@ -594,7 +604,7 @@ detect_network() {
     PUBLIC_IF="$({ ip -4 route show default 2>/dev/null || true; } | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
     PUBLIC_IF6="$({ ip -6 route show default 2>/dev/null || true; } | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
     if [ "$PUBLIC_IF6" = "$PUBLIC_IF" ]; then PUBLIC_IF6=""; fi
-    PUBLIC_IP="$({ ip -4 route get 1.1.1.1 2>/dev/null || true; } | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)"
+    PUBLIC_IP="$({ ip -4 route get 1.1.1.1 2>/dev/null || true; } | sed -n 's/.* src \([0-9.]*\).*/\1/p' | sed -n 1p)"
     if [ -z "$PUBLIC_IP" ] || is_private_ipv4 "$PUBLIC_IP"; then
         # Behind NAT. Ask the same service Coolify's installer uses.
         local seen=""
@@ -914,7 +924,7 @@ ask() {
 }
 
 installed_version() {
-    dpkg-query -W -f '${db:Status-Abbrev} ${Version}\n' "$1" 2>/dev/null | awk '$1 == "ii" { print $2; exit }'
+    dpkg-query -W -f '${db:Status-Abbrev} ${Version}\n' "$1" 2>/dev/null | awk '$1 == "ii" && !f { print $2; f = 1 }'
 }
 
 # The pin pattern for a version: epoch and major number, "5:28.1.1-1~..." -> "5:28".
@@ -1176,7 +1186,7 @@ enable_swapfile() {
         return 0
     fi
     chmod 600 "$SWAPFILE"
-    if ! blkid -p "$SWAPFILE" 2>/dev/null | grep -q 'TYPE="swap"'; then
+    if ! grep -q 'TYPE="swap"' <<<"$(blkid -p "$SWAPFILE" 2>/dev/null)"; then
         mkswap "$SWAPFILE" >/dev/null
     fi
     swapon "$SWAPFILE" 2>/dev/null
@@ -1328,8 +1338,14 @@ EOF
 # fails.
 verify_ssh_rules() {
     local addr user v problems=""
+    # Read sshd's whole answer first, then search it. Piping sshd straight into
+    # a reader that stops at the first match can kill sshd mid-write (SIGPIPE),
+    # which with pipefail looked like a failure and ended the script silently.
     sshd_value() {
-        sshd -T -C "addr=$1,user=$2,host=check.invalid,laddr=127.0.0.1,lport=22" 2>/dev/null | awk -v k="$3" '$1 == k { print $2; exit }'
+        local out
+        out="$(sshd -T -C "addr=$1,user=$2,host=check.invalid,laddr=127.0.0.1,lport=22" 2>&1)" ||
+            { printf 'unreadable(%s)' "$(head -n 1 <<<"$out" | tr -s ' ' '_')"; return 0; }
+        awk -v k="$3" '$1 == k { print $2; exit }' <<<"$out"
     }
     for addr in 127.0.0.1 ::1 203.0.113.9; do
         for user in "$OWNER_USER" root; do
@@ -1402,8 +1418,8 @@ algorithms_ok() {
         ssh-rsa) sig="rsa-sha2-512"; cert="rsa-sha2-512-cert-v01@openssh.com" ;;
         *) sig="$type"; cert="$type-cert-v01@openssh.com" ;;
     esac
-    awk '$1 == "casignaturealgorithms" { print $2 }' <<<"$cfg" | tr ',' '\n' | grep -qxF -- "$sig" || return 1
-    awk '$1 == "pubkeyacceptedalgorithms" { print $2 }' <<<"$cfg" | tr ',' '\n' | grep -qxF -- "$cert"
+    grep -qxF -- "$sig" <<<"$(awk '$1 == "casignaturealgorithms" { print $2 }' <<<"$cfg" | tr ',' '\n')" || return 1
+    grep -qxF -- "$cert" <<<"$(awk '$1 == "pubkeyacceptedalgorithms" { print $2 }' <<<"$cfg" | tr ',' '\n')"
 }
 
 reload_ssh() {
@@ -1439,7 +1455,7 @@ cmd_set() {
     [ "$(id -u)" -eq 0 ] || die "Please run with sudo: sudo server-ssh-ca set"
     if [ -n "$src" ]; then
         [ -r "$src" ] || die "Cannot read $src"
-        line="$(grep -v '^[[:space:]]*\(#\|$\)' -- "$src" | head -n 1 || true)"
+        line="$(grep -v '^[[:space:]]*\(#\|$\)' -- "$src" | sed -n 1p || true)"
     elif have_tty; then
         printf 'Paste the SSH CA public key from Cloudflare (one line, starts with\necdsa-sha2-nistp256), then press Enter: ' >/dev/tty
         IFS= read -r line </dev/tty || line=""
@@ -2086,9 +2102,9 @@ EOF
     run apt-get "${apt_opts[@]}" install cloudflared
     if [ "$DRY_RUN" = false ]; then
         command -v cloudflared >/dev/null 2>&1 || die "cloudflared did not install."
-        cloudflared tunnel run --help 2>/dev/null | grep -q -- '--token-file' ||
+        grep -q -- '--token-file' <<<"$(cloudflared tunnel run --help 2>/dev/null)" ||
             die "This cloudflared version cannot read the token from a file, so it was not set up (the token would be visible to other programs)."
-        ok "$(cloudflared --version 2>/dev/null | head -n 1)"
+        ok "$(cloudflared --version 2>/dev/null | sed -n 1p)"
     fi
 
     # Updates come from apt when the owner runs "sudo server-update", not from
@@ -2267,9 +2283,9 @@ install_coolify() {
     elif [ -s "$FIRST_LOGIN_FILE" ] && [ -f "$COOLIFY_ENV" ]; then
         # An earlier attempt stopped part way. Coolify's installer keeps the
         # account details already in its settings file, so reuse the same ones.
-        ADMIN_PASSWORD="$(sed -n 's/^Password: *//p' "$FIRST_LOGIN_FILE" | head -n 1)"
+        ADMIN_PASSWORD="$(sed -n 's/^Password: *//p' "$FIRST_LOGIN_FILE" | sed -n 1p)"
         local saved_email
-        saved_email="$(sed -n 's/^Email: *//p' "$FIRST_LOGIN_FILE" | head -n 1)"
+        saved_email="$(sed -n 's/^Email: *//p' "$FIRST_LOGIN_FILE" | sed -n 1p)"
         if [ -n "$saved_email" ] && [ "$saved_email" != "$ADMIN_EMAIL" ]; then
             warn "Using the email from the earlier attempt: $saved_email"
             ADMIN_EMAIL="$saved_email"
@@ -2355,7 +2371,7 @@ open_setup_window() {
         ok "https://$DASHBOARD_HOST already works. No setup window needed."
         return 0
     fi
-    if [ -f /run/docker-port-guard/setup-window-until ] && "$GUARD_BIN" status 2>/dev/null | grep -q '^Setup window: OPEN'; then
+    if [ -f /run/docker-port-guard/setup-window-until ] && grep -q '^Setup window: OPEN' <<<"$("$GUARD_BIN" status 2>/dev/null)"; then
         ok "The setup window is already open: $("$GUARD_BIN" status | sed -n 's/^Setup window: //p')"
         return 0
     fi
@@ -2457,7 +2473,7 @@ configure_docker_logs() {
     fi
     ensure_workdir
     printf '%s\n' "$new" >"$WORKDIR/daemon.json"
-    if dockerd --help 2>&1 | grep -q -- '--validate'; then
+    if grep -q -- '--validate' <<<"$(dockerd --help 2>&1)"; then
         dockerd --validate --config-file "$WORKDIR/daemon.json" >/dev/null 2>&1 ||
             die "Docker refused the new $DOCKER_DAEMON_JSON (dockerd --validate). The old file is unchanged."
     fi
@@ -2626,15 +2642,15 @@ configure_alerts() {
         return 0
     fi
     if [ -f /etc/server-alert/config ]; then
-        ok "Alerts are set up already ($(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | head -n 1)). Change: sudo server-alert setup"
-        done_item "Alerts: checks every 15 minutes; messages to $(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | head -n 1)"
+        ok "Alerts are set up already ($(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | sed -n 1p)). Change: sudo server-alert setup"
+        done_item "Alerts: checks every 15 minutes; messages to $(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | sed -n 1p)"
         return 0
     fi
     if have_tty && [ "$ASSUME_YES" = false ] && ask_yes_no "Set up alerts to Telegram or Discord now (about 3 minutes)?"; then
         "$ALERT_BIN" setup || warn "Alerts are not set up. Try again later: sudo server-alert setup"
     fi
     if [ -f /etc/server-alert/config ]; then
-        done_item "Alerts: checks every 15 minutes; messages to $(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | head -n 1)"
+        done_item "Alerts: checks every 15 minutes; messages to $(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | sed -n 1p)"
     else
         warn "Alerts are not set up yet: problems are only written to the system log. Set up: sudo server-alert setup"
         done_item "Alerts: checks every 15 minutes; NOT sent anywhere until you run: sudo server-alert setup"
@@ -2840,7 +2856,7 @@ configure_auditd() {
     if systemctl is-active --quiet auditd.service; then
         augenrules --load >/dev/null 2>&1 || true
     fi
-    if auditctl -l 2>/dev/null | grep -q -- '-k ssh-config'; then
+    if grep -q -- '-k ssh-config' <<<"$(auditctl -l 2>/dev/null)"; then
         ok "auditd is running with the rules loaded ($(auditctl -l 2>/dev/null | grep -c -- ' -k ') rules)"
         done_item "auditd logs every command of $AGENT_USER and changes to /etc/ssh, sudoers, the tunnel token and the port guard settings"
     else
@@ -3126,7 +3142,7 @@ call_api() {
     code="$(printf 'url = "%s"\n' "$(api_url "$what")" | curl "${args[@]}" 2>"$TMP/curl-err")" || rc=$?
     if [ "$rc" -ne 0 ]; then
         # curl's own message, with the secret removed just in case.
-        sed -e "s#${TELEGRAM_BOT_TOKEN:-@@none@@}#[REDACTED]#g" -e 's#/api/webhooks/[^ ]*#/api/webhooks/[REDACTED]#g' "$TMP/curl-err" | head -n 2 >&2
+        sed -e "s#${TELEGRAM_BOT_TOKEN:-@@none@@}#[REDACTED]#g" -e 's#/api/webhooks/[^ ]*#/api/webhooks/[REDACTED]#g' "$TMP/curl-err" | sed -n 1,2p >&2
         printf '000'
         return 1
     fi
@@ -3625,7 +3641,7 @@ check_fail2ban() {
     [ -n "$lines" ] || return 0
     local n ips
     n="$(grep -c . <<<"$lines")"
-    ips="$(grep -oE 'Ban [0-9a-fA-F:.]+' <<<"$lines" | awk '{ print $2 }' | sort | uniq -c | sort -rn | head -n 10 | awk '{ printf "%s (%s) ", $2, $1 }' || true)"
+    ips="$(grep -oE 'Ban [0-9a-fA-F:.]+' <<<"$lines" | awk '{ print $2 }' | sort | uniq -c | sort -rn | sed -n 1,10p | awk '{ printf "%s (%s) ", $2, $1 }' || true)"
     add_alert fail2ban-bans info "fail2ban blocked $n login attempts" "Since $(date -d "@$since" '+%Y-%m-%d %H:%M'): $ips. Nothing to do unless one of them is you; then: sudo fail2ban-client unban <address>"
 }
 
@@ -3635,8 +3651,8 @@ check_agent_sudo() {
     since="$(summary_since agent-sudo)"
     lines="$(journalctl -q --no-pager -o cat _COMM=sudo --since "@$since" 2>/dev/null | grep -E "^ *$AGENT_USER : " || true)"
     [ -n "$lines" ] || return 0
-    ran="$(grep -v 'command not allowed\|incorrect password\|a password is required' <<<"$lines" | sed -n 's/.*COMMAND=//p' | sort | uniq -c | sort -rn | head -n 15 | awk '{ c = $1; $1 = ""; printf "%sx%s\n", c, $0 }' || true)"
-    refused="$(grep 'command not allowed\|a password is required\|incorrect password' <<<"$lines" | sed -n 's/.*COMMAND=//p' | sort -u | head -n 10 || true)"
+    ran="$(grep -v 'command not allowed\|incorrect password\|a password is required' <<<"$lines" | sed -n 's/.*COMMAND=//p' | sort | uniq -c | sort -rn | sed -n 1,15p | awk '{ c = $1; $1 = ""; printf "%sx%s\n", c, $0 }' || true)"
+    refused="$(grep 'command not allowed\|a password is required\|incorrect password' <<<"$lines" | sed -n 's/.*COMMAND=//p' | sort -u | sed -n 1,10p || true)"
     n="$(grep -c . <<<"$lines")"
     body="Since $(date -d "@$since" '+%Y-%m-%d %H:%M'), $n uses of sudo by $AGENT_USER."
     [ -z "$ran" ] || body="$body"$'\n'"Ran:"$'\n'"$ran"
@@ -3777,7 +3793,7 @@ kv() { { sed -n "s/^$1=//p" "$2" 2>/dev/null || true; } | tail -n 1; }
 
 top_warnings() {
     # warning[]=ID|text|details|solution|
-    sed -n 's/^warning\[\]=//p' "$1" 2>/dev/null | awk -F'|' '{ printf "%s: %s\n", $1, $2 }' | head -n "${2:-5}"
+    sed -n 's/^warning\[\]=//p' "$1" 2>/dev/null | awk -F'|' '{ printf "%s: %s\n", $1, $2 }' | sed -n "1,${2:-5}p"
 }
 
 cmd_run() {
@@ -4070,7 +4086,7 @@ collect() {
     echo "Kernel: $(uname -r)"
     echo "Docker: $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'not running or not installed')"
     echo "Coolify: $(docker container inspect --format '{{.Config.Image}}' coolify 2>/dev/null || echo 'not found')"
-    echo "cloudflared: $(cloudflared --version 2>/dev/null | head -n 1 || true)"
+    echo "cloudflared: $(cloudflared --version 2>/dev/null | sed -n 1p || true)"
     echo "Lynis: $(lynis --version 2>/dev/null || echo 'not installed')"
     echo "Uptime: $(uptime -p 2>/dev/null) (since $(uptime -s 2>/dev/null))"
     if [ -f /var/run/reboot-required ]; then echo "A restart is needed since $(date -r /var/run/reboot-required '+%Y-%m-%d')"; fi
@@ -4115,8 +4131,8 @@ collect() {
     section "Alerts (settings are not shown, only whether they exist)"
     echo "Settings file /etc/server-alert/config: $(present /etc/server-alert/config)"
     if [ -f /etc/server-alert/config ]; then
-        echo "Provider: $(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | head -n 1)"
-        echo "Daily summary: $(sed -n 's/^DIGEST=//p' /etc/server-alert/config | head -n 1)"
+        echo "Provider: $(sed -n 's/^PROVIDER=//p' /etc/server-alert/config | sed -n 1p)"
+        echo "Daily summary: $(sed -n 's/^DIGEST=//p' /etc/server-alert/config | sed -n 1p)"
         echo "Mode: $(stat -c '%a %U:%G' /etc/server-alert/config)"
     fi
     run server-alert status

@@ -903,7 +903,7 @@ cmd_run() {
     if ((rc == 3)); then
         warning="Some files could not be read (they probably changed or vanished during the backup); everything else was saved."
         warn "$warning"
-        grep '"message_type":"error"' "$out" | jq -r '.item // empty' 2>/dev/null | head -n 5 | sed 's/^/  could not read: /' >&2 || true
+        grep '"message_type":"error"' "$out" | jq -r '.item // empty' 2>/dev/null | sed -n 1,5p | sed 's/^/  could not read: /' >&2 || true
     fi
     snap="$(jq -r '.snapshot_id // empty' <<<"$summary")"
     total="$(jq -r '.total_bytes_processed // 0' <<<"$summary")"
@@ -1161,7 +1161,7 @@ cmd_restore_files() {
     if ((DRY_RUN)); then
         say "Dry run. These would be restored into $target:"
         for p in "${want[@]}"; do
-            R ls "$snap" "$p" | head -n 20 | sed 's/^/  /'
+            R ls "$snap" "$p" | sed -n 1,20p | sed 's/^/  /'
         done
         return 0
     fi
