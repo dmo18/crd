@@ -230,14 +230,14 @@ td .val { white-space: nowrap; }
     <header><div class="num">5</div><div class="head"><h2>Run the automatic setup</h2><div class="chips"><span class="chip">Hyper-V console window</span><span class="chip auto">Automated</span><span class="chip">20 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
     <div class="body">
       <p>This is the one command that does the heavy lifting. You cannot paste into the console with Ctrl+V; use the menu instead.</p>
-      <p class="note plain"><b>No subdomain needed yet.</b> The command only notes down the name <span class="val">admin.<span data-d></span></span>. Cloudflare creates the subdomains later, in step 7, when you save the routes.</p>
+      <p class="note plain"><b>No subdomain needed yet.</b> The command only notes down the name <span class="val">appy.<span data-d></span></span>. Cloudflare creates the subdomains later, in step 7, when you save the routes.</p>
       <ol class="do">
         <li>Press <span class="ui">Copy</span> below.</li>
         <li>In the console window's top menu click <span class="ui">Clipboard</span> then <span class="ui">Type clipboard text</span>. Wait while it types, then press <kbd>Enter</kbd>.</li>
         <li>It asks for your Ubuntu password (from step 3). Type it, Enter.</li>
         <li>Answer its questions as in the picture. To paste the token: copy it from Notepad, then <span class="ui">Clipboard</span>, <span class="ui">Type clipboard text</span>, wait about 20 seconds, Enter.</li>
       </ol>
-      <div class="cmd"><code id="c-setup">curl -fsSL https://github.com/dmo18/crd/archive/refs/heads/main.tar.gz | tar xz &amp;&amp; cd crd-main/infra/ubuntu &amp;&amp; sudo bash bootstrap.sh --cloudflare admin.<span data-d></span> <span data-e></span></code><button class="copy" type="button" data-copy="c-setup">Copy</button></div>
+      <div class="cmd"><code id="c-setup">curl -fsSL https://github.com/dmo18/crd/archive/refs/heads/main.tar.gz | tar xz &amp;&amp; cd crd-main/infra/ubuntu &amp;&amp; sudo bash bootstrap.sh --cloudflare appy.<span data-d></span> <span data-e></span></code><button class="copy" type="button" data-copy="c-setup">Copy</button></div>
       <figure><div class="term"><span class="dim">Paste the Cloudflare tunnel token (it starts with eyJ) and press Enter.
 What you type stays hidden:</span> <span class="you">paste the token, Enter (nothing shows, that is normal)</span>
 
@@ -259,32 +259,32 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
     <header><div class="num">6</div><div class="head"><h2>Add the five sign-in rules</h2><div class="chips"><span class="chip">Cloudflare, any browser</span><span class="chip">15 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
     <div class="body">
       <p>These rules decide who gets in. They come <b>before</b> the routes so nothing is ever open by accident. From here on you can use any computer.</p>
+      <p class="note warn"><b>Your domain is shared, so do this first:</b> in the main Cloudflare dashboard open your domain, <span class="ui">DNS</span>, <span class="ui">Records</span>, and write down every name with an <b>orange cloud</b> (for example <span class="val">www</span>, <span class="val">shop</span>). They all go into rule 1. Anything you leave out will ask its visitors to sign in once rule 5 is saved.</p>
       <ol class="do">
         <li>In Zero Trust, left menu: <span class="ui">Access</span> then <span class="ui">Applications</span>. Click <span class="ui">Add an application</span>, choose <span class="ui">Self-hosted</span>.</li>
-        <li>Fill it in from row 1 of the table, add the policy, save. Repeat for rows 2 to 5.</li>
+        <li>Fill it in from row 1 of the table, add the policy, save. Repeat for rows 2 to 5, <b>in this order</b>. Rule 5 must be last.</li>
       </ol>
       <figure><div class="shot"><div class="shot-bar">Add an application · Self-hosted</div><div class="shot-body">
-        <div class="f"><span><span class="n">1</span>Application name</span><span class="box">All apps</span></div>
-        <div class="f"><span><span class="n">2</span>Subdomain · Domain</span><span class="box">* · <span data-d></span></span></div>
+        <div class="f"><span><span class="n">1</span>Application name</span><span class="box">Server dashboard</span></div>
+        <div class="f"><span><span class="n">2</span>Subdomain · Domain</span><span class="box">appy · <span data-d></span></span></div>
         <div class="f"><span>Path</span><span class="box">(empty unless the table says)</span></div>
         <div class="f"><span>Session duration</span><span class="box">24 hours</span></div>
         <div class="f"><span><span class="n">3</span>Policy · Action</span><span class="box">Allow</span></div>
         <div class="f"><span><span class="n">4</span>Include</span><span class="box">Emails · <span data-e></span></span></div>
         <div class="row"><span class="fake hit">Save</span></div>
-      </div></div><figcaption>The same form for every row. Only the outlined values change.</figcaption></figure>
+      </div></div><figcaption>The same form for every row, shown with row 2. Only the outlined values change. "Add public hostname" inside one application adds another subdomain to it (rule 1 needs several).</figcaption></figure>
       <div class="tw"><table>
         <tr><th>#</th><th>Name</th><th>Subdomain</th><th>Path</th><th>Action</th><th>Include</th></tr>
-        <tr><td>1</td><td>All apps</td><td><span class="val">*</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
-        <tr><td>2</td><td>Server dashboard</td><td><span class="val">admin</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
-        <tr><td>3</td><td>Browser SSH</td><td><span class="val">ssh</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
-        <tr><td>4</td><td>GitHub notices</td><td><span class="val">admin</span></td><td><span class="val">webhooks/source/github/events</span></td><td><b>Bypass</b></td><td>Everyone</td></tr>
-        <tr><td>5</td><td>Public apps</td><td><span class="val">cards</span></td><td></td><td><b>Bypass</b></td><td>Everyone</td></tr>
+        <tr><td>1</td><td>Public apps</td><td><span class="val">cards</span> plus every orange-cloud name you wrote down</td><td></td><td><b>Bypass</b></td><td>Everyone</td></tr>
+        <tr><td>2</td><td>Server dashboard</td><td><span class="val">appy</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
+        <tr><td>3</td><td>Browser SSH</td><td><span class="val">appy-ssh</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
+        <tr><td>4</td><td>GitHub notices</td><td><span class="val">appy</span></td><td><span class="val">webhooks/source/github/events</span></td><td><b>Bypass</b></td><td>Everyone</td></tr>
+        <tr><td>5</td><td>All apps (private)</td><td><span class="val">*</span></td><td></td><td>Allow</td><td>Emails: yours</td></tr>
       </table></div>
       <ol class="do" start="3">
-        <li>Row 3 only: in that application's settings find <span class="ui">Browser rendering</span> and set it to <span class="ui">SSH</span>.</li>
-        <li>Row 5 only: if your main website uses subdomains (like <span class="val">www</span>) that show an orange cloud under your domain's <span class="ui">DNS</span> page, add each one to this application too. Otherwise they would ask visitors to sign in.</li>
+        <li>Rule 3 only: in that application's settings find <span class="ui">Browser rendering</span> and set it to <span class="ui">SSH</span>.</li>
       </ol>
-      <p class="note warn">Never put <span class="val">admin</span>, <span class="val">ssh</span> or <span class="val">*</span> in "Public apps". Row 5 is the list of things anyone on the internet may open.</p>
+      <p class="note warn">Never put <span class="val">appy</span>, <span class="val">appy-ssh</span> or <span class="val">*</span> in "Public apps". Rule 1 is the list of things anyone on the internet may open. When you add a new subdomain to your domain later (for anything), add it to rule 1 too if it should stay open.</p>
       <p class="see"><b>You should see:</b> five applications in the list.</p>
       <button class="donebtn" type="button">Done, next step</button>
     </div>
@@ -300,7 +300,7 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
         <li>Click <span class="ui">Add a public hostname</span> and enter row 0. Save. Repeat for rows 1 to 5, <b>in this order</b>.</li>
       </ol>
       <figure><div class="shot"><div class="shot-bar">Add public hostname</div><div class="shot-body">
-        <div class="f"><span><span class="n">1</span>Subdomain</span><span class="box">admin</span></div>
+        <div class="f"><span><span class="n">1</span>Subdomain</span><span class="box">appy</span></div>
         <div class="f"><span>Domain</span><span class="box"><span data-d></span></span></div>
         <div class="f"><span><span class="n">2</span>Path</span><span class="box">^/app/</span></div>
         <div class="f"><span><span class="n">3</span>Service · Type</span><span class="box">HTTP</span></div>
@@ -309,18 +309,18 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
       </div></div><figcaption>Shown with row 1's values.</figcaption></figure>
       <div class="tw"><table>
         <tr><th>#</th><th>Subdomain</th><th>Path</th><th>Type</th><th>URL</th></tr>
-        <tr><td>0</td><td><span class="val">admin</span></td><td><span class="val">^/webhooks/source/github/events(/manual)?$</span></td><td>HTTP</td><td><span class="val">127.0.0.1:8000</span></td></tr>
-        <tr><td>1</td><td><span class="val">admin</span></td><td><span class="val">^/app/</span></td><td>HTTP</td><td><span class="val">127.0.0.1:6001</span></td></tr>
-        <tr><td>2</td><td><span class="val">admin</span></td><td><span class="val">^/terminal/ws</span></td><td>HTTP</td><td><span class="val">127.0.0.1:6002</span></td></tr>
-        <tr><td>3</td><td><span class="val">admin</span></td><td>(empty)</td><td>HTTP</td><td><span class="val">127.0.0.1:8000</span></td></tr>
-        <tr><td>4</td><td><span class="val">ssh</span></td><td>(empty)</td><td>SSH</td><td><span class="val">127.0.0.1:22</span></td></tr>
+        <tr><td>0</td><td><span class="val">appy</span></td><td><span class="val">^/webhooks/source/github/events(/manual)?$</span></td><td>HTTP</td><td><span class="val">127.0.0.1:8000</span></td></tr>
+        <tr><td>1</td><td><span class="val">appy</span></td><td><span class="val">^/app/</span></td><td>HTTP</td><td><span class="val">127.0.0.1:6001</span></td></tr>
+        <tr><td>2</td><td><span class="val">appy</span></td><td><span class="val">^/terminal/ws</span></td><td>HTTP</td><td><span class="val">127.0.0.1:6002</span></td></tr>
+        <tr><td>3</td><td><span class="val">appy</span></td><td>(empty)</td><td>HTTP</td><td><span class="val">127.0.0.1:8000</span></td></tr>
+        <tr><td>4</td><td><span class="val">appy-ssh</span></td><td>(empty)</td><td>SSH</td><td><span class="val">127.0.0.1:22</span></td></tr>
         <tr><td>5</td><td><span class="val">*</span></td><td>(empty)</td><td>HTTP</td><td><span class="val">127.0.0.1:80</span></td></tr>
       </table></div>
       <ol class="do" start="3">
         <li>Row 5 needs one DNS record. On the tunnel's overview page copy the <b>Tunnel ID</b>. Then in the main Cloudflare dashboard open your domain, <span class="ui">DNS</span>, <span class="ui">Records</span>, <span class="ui">Add record</span>: Type <span class="val">CNAME</span>, Name <span class="val">*</span>, Target <span class="val">TUNNEL-ID.cfargotunnel.com</span>, Proxy <b>on</b> (orange cloud). Save.</li>
       </ol>
-      <p class="see"><b>You should see:</b> open <span class="val">https://admin.<span data-d></span></span>. Cloudflare asks for your email and sends you a code. After the code, a Coolify login page appears.</p>
-      <p class="lead" style="font-size:.9rem">If Cloudflare says a record for <span class="val">admin</span> or <span class="val">ssh</span> already exists, delete the old record under DNS and save the route again.</p>
+      <p class="see"><b>You should see:</b> open <span class="val">https://appy.<span data-d></span></span>. Cloudflare asks for your email and sends you a code. After the code, a Coolify login page appears.</p>
+      <p class="lead" style="font-size:.9rem">If Cloudflare says a record for <span class="val">appy</span> or <span class="val">appy-ssh</span> already exists, delete the old record under DNS and save the route again.</p>
       <button class="donebtn" type="button">Done, next step</button>
     </div>
   </section>
@@ -329,14 +329,14 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
   <section class="step" data-step="8">
     <header><div class="num">8</div><div class="head"><h2>Turn on the browser terminal</h2><div class="chips"><span class="chip">Cloudflare, then the console</span><span class="chip">5 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
     <div class="body">
-      <p>After this you can type commands to appy from any browser, with easy copy and paste, at <span class="val">https://ssh.<span data-d></span></span>. No password is used: Cloudflare vouches for you.</p>
+      <p>After this you can type commands to appy from any browser, with easy copy and paste, at <span class="val">https://appy-ssh.<span data-d></span></span>. No password is used: Cloudflare vouches for you.</p>
       <ol class="do">
         <li>Zero Trust: <span class="ui">Access</span>, <span class="ui">Service credentials</span> (some screens: Service auth), tab <span class="ui">SSH</span>.</li>
         <li>Choose the application <span class="val">Browser SSH</span>, click <span class="ui">Generate certificate</span>. Copy the <b>public key</b> (one long line starting <span class="val">ecdsa-sha2-nistp256</span>).</li>
         <li>In the Hyper-V console, type the command below and press Enter. When asked, paste the key with <span class="ui">Clipboard</span>, <span class="ui">Type clipboard text</span>, then Enter.</li>
       </ol>
       <div class="cmd"><code id="c-ca">sudo server-ssh-ca set</code><button class="copy" type="button" data-copy="c-ca">Copy</button></div>
-      <p class="see"><b>You should see:</b> open <span class="val">https://ssh.<span data-d></span></span>, sign in with the email code, type your Ubuntu username: a terminal opens in the browser. Use it for every command from now on (paste works normally there).</p>
+      <p class="see"><b>You should see:</b> open <span class="val">https://appy-ssh.<span data-d></span></span>, sign in with the email code, type your Ubuntu username: a terminal opens in the browser. Use it for every command from now on (paste works normally there).</p>
       <p class="lead" style="font-size:.9rem">Your Ubuntu username should be the part of your email before the @. If it is different, the command tells you what to do.</p>
       <button class="donebtn" type="button">Done, next step</button>
     </div>
@@ -344,17 +344,17 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
 
   <!-- 9 -->
   <section class="step" data-step="9">
-    <header><div class="num">9</div><div class="head"><h2>Sign in to Coolify and lock it</h2><div class="chips"><span class="chip">https://admin.<span data-d></span></span><span class="chip">10 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <header><div class="num">9</div><div class="head"><h2>Sign in to Coolify and lock it</h2><div class="chips"><span class="chip">https://appy.<span data-d></span></span><span class="chip">10 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
     <div class="body">
       <ol class="do">
-        <li>Open <span class="val">https://admin.<span data-d></span></span>. Sign in with your email and the <b>temporary password</b> from step 5.</li>
+        <li>Open <span class="val">https://appy.<span data-d></span></span>. Sign in with your email and the <b>temporary password</b> from step 5.</li>
         <li>Coolify shows welcome questions. When it asks about a server, choose <span class="ui">This Machine</span> (localhost). Accept the rest.</li>
         <li>Left menu <span class="ui">Settings</span>: set the three things in the picture and save.</li>
         <li>Top right, your <span class="ui">Profile</span>: change the password to a long one of your own, then turn on <span class="ui">Two-factor authentication</span> and <b>save the recovery codes</b>.</li>
         <li>In the browser terminal, run the cleanup command below.</li>
       </ol>
       <figure><div class="shot"><div class="shot-bar">Coolify · Settings</div><div class="shot-body">
-        <div class="f"><span><span class="n">1</span>Instance's Domain</span><span class="box">https://admin.<span data-d></span></span></div>
+        <div class="f"><span><span class="n">1</span>Instance's Domain</span><span class="box">https://appy.<span data-d></span></span></div>
         <div class="f"><span><span class="n">2</span>Registration Allowed</span><span class="box">Off</span></div>
         <div class="f"><span><span class="n">3</span>Auto Update</span><span class="box">Off (you update when you choose)</span></div>
       </div></div></figure>
@@ -454,7 +454,7 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
       <tr><th>When</th><th>Do this</th></tr>
       <tr><td>Something looks wrong</td><td>Run <span class="val">sudo server-support</span>, then <span class="val">sudo cat</span> the file it names, and paste the text to Claude. Passwords are removed automatically.</td></tr>
       <tr><td>Updates are waiting (an alert tells you)</td><td><span class="val">sudo server-update</span>. It backs up first and asks before restarting. Nothing updates by itself except security patches.</td></tr>
-      <tr><td>Add another app</td><td>Coolify, + New Resource, its GitHub address, Domain <span class="val">https://name.<span data-d></span></span>, Deploy. It is private until you add <span class="val">name</span> to "Public apps" (step 6, row 5).</td></tr>
+      <tr><td>Add another app</td><td>Coolify, + New Resource, its GitHub address, Domain <span class="val">https://name.<span data-d></span></span>, Deploy. It is private until you add <span class="val">name</span> to "Public apps" (step 6, rule 1).</td></tr>
       <tr><td>The server is lost</td><td>Repeat steps 2, 3 and 5 on a new machine, then <span class="val">sudo server-backup restore-dr</span> with your backup passphrase.</td></tr>
       <tr><td>Locked out of everything</td><td>The Hyper-V console (step 3) always works.</td></tr>
     </table></div>

@@ -4455,6 +4455,8 @@ GRANT_EOF
 # ---------------------------------------------------------------------------
 print_summary_cloudflare() {
     local item base="${DASHBOARD_HOST#*.}"
+    # The browser terminal is named after the dashboard: appy.example.com -> appy-ssh.example.com
+    local ssh_host="${DASHBOARD_HOST%%.*}-ssh.$base"
     printf '\n%s============================================================%s\n' "$C_BOLD" "$C_RESET"
     printf '%s Done. What this script did%s\n' "$C_BOLD" "$C_RESET"
     printf '%s============================================================%s\n' "$C_BOLD" "$C_RESET"
@@ -4471,7 +4473,7 @@ print_summary_cloudflare() {
 
 ${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (step by step: docs/SERVER.md):
   1. FIRST, Zero Trust, Access, Applications: protect $DASHBOARD_HOST,
-     ssh.$base (browser rendering: SSH) and *.$base with your email.
+     $ssh_host (browser rendering: SSH) and *.$base with your email.
      Add a Bypass application for $DASHBOARD_HOST, path
      webhooks/source/github/events, so GitHub can tell Coolify to deploy.
   2. Only then, your tunnel, Routes, add these in this order:
@@ -4479,10 +4481,10 @@ ${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (step by step: docs/SE
        $DASHBOARD_HOST   path ^/app/         ->  HTTP  127.0.0.1:6001
        $DASHBOARD_HOST   path ^/terminal/ws  ->  HTTP  127.0.0.1:6002
        $DASHBOARD_HOST   (no path)           ->  HTTP  127.0.0.1:8000
-       ssh.$base         (no path)           ->  SSH   127.0.0.1:22
+       $ssh_host    (no path)           ->  SSH   127.0.0.1:22
        *.$base           (no path)           ->  HTTP  127.0.0.1:80
   3. SSH CA for the browser terminal: Access controls, Service credentials,
-     SSH, Add a certificate, application ssh.$base, Generate certificate.
+     SSH, Add a certificate, application $ssh_host, Generate certificate.
 
 ${C_BOLD}Then in your browser:${C_RESET}
   4. Open https://$DASHBOARD_HOST and log in with:
@@ -4504,14 +4506,14 @@ EOF
   6. Settings: URL https://$DASHBOARD_HOST, "Redirect HTTP to HTTPS" Disabled.
   7. Delete the saved password:  sudo rm $FIRST_LOGIN_FILE
 
-SSH in the browser: https://ssh.$base, sign in to Cloudflare, user name $OWNER_USER.
+SSH in the browser: https://$ssh_host, sign in to Cloudflare, user name $OWNER_USER.
 No password: Cloudflare gives the browser a certificate that lasts a few minutes.
 EOF
     if [ ! -s "$SSH_CA_FILE" ]; then
         cat <<EOF
 ${C_YELLOW}Browser SSH needs the SSH CA key from Cloudflare first:${C_RESET}
   Zero Trust, Access controls, Service credentials, SSH, Add a certificate,
-  choose the ssh.$base application, Generate certificate, copy the CA public key.
+  choose the $ssh_host application, Generate certificate, copy the CA public key.
   Then on this console:  sudo server-ssh-ca set   (paste it, press Enter)
 EOF
     fi
