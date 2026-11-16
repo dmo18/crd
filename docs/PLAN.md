@@ -1515,6 +1515,23 @@ New, simpler rule that replaces "sure by name":
   top candidate in Review (one tap), not sure; year 1990, sport baseball,
   team Mariners still come from the reading.
 
+**10.6 third review decision (settled 2026-11-16, main session; done in 10.6e)**
+Tightens 10.6d. "Sure" additionally needs ALL of:
+- sport, year and brand were read (none null);
+- the base set id is known and the card's source set id equals it;
+- on the number path, the surname matches exactly after OCR folding (no
+  close spelling), and a read first name or initial agrees; if another
+  player in the pool has that surname, the first name or initial must be
+  read.
+- Search answers from step 3 (no set known) are candidates only.
+- parseName joins leading particles (de, la, del, los, las, da, di, le, van,
+  von, st, st., mc, o) into the surname on both sides; a particle is never a
+  first name or a first-name prefix.
+Tests: the review's cases (Nolan Ryan #1 with no year; Bo Jackson #300 with
+no sport; De La Cruz, St. Claire, La Russa, O Neill in a complete set;
+Griffey #581, Williamson #41, Costello #427 with a misread number; a second
+clean set of the same year and brand) are all not sure.
+
 **10.7 Search cards screen and "Add to my collection"** (Sonnet)
 - Files: `src/app/(app)/search/page.tsx`, `src/components/catalog/*`,
   `src/lib/catalog/actions.ts` (+ test), `src/app/(app)/more/page.tsx`,
