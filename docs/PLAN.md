@@ -1718,3 +1718,524 @@ None blocks the build. One for later:
 
 Run cap for this milestone: 14 task runs (10 tasks plus up to 4 review
 repeats) or 3M delegated tokens, inside the roadmap cap of 75 tasks or 12M.
+
+## Milestone 11: the exact version (approved 2026-11-16 as part of the roadmap)
+
+What the owner can try when it is live: a "Which version is it?" list on
+every card with the reason for each choice; a serial number as two boxes
+("45 of 100") that the scanner only suggests; a rookie mark that says where
+it comes from; add a back photo later, turn, trim and zoom a photo; a clear
+duplicate question with three answers; and on the Connections screen, why
+a look up had to wait.
+
+Source of the facts below: `docs/ROADMAP.md` (Milestone 11, section 1 rows
+F04, F22, F23, F24, F41, F49), `docs/CATALOG-TRIAL.md`, and the five
+matching reviews of Milestone 10.
+
+**The rule of this milestone: the app suggests, the owner chooses.** Five
+reviews in Milestone 10 showed that rules which decide for the owner keep
+finding a wrong sure case. So here:
+- No new automatic filling. `AUTO_FILL_SURE` stays `false`. Nothing in this
+  milestone links a catalog card, sets a version, writes a serial number or
+  changes a rookie mark without a tap of the owner.
+- Every suggestion shows its evidence in a few plain words and its source
+  ("From MyCardfolio", "Known versions list", "Read on the card", "Key card
+  list").
+- A choice is always taken by its position in a list the server stored,
+  never from fields the browser sends.
+- "Not sure yet" is always a valid answer and never blocks saving.
+
+Rules for every task: CLAUDE.md, the security rules above, the Milestone 10
+rules (gate for every outside call, storage policy, recorded answers only
+in tests, 360px, 44px tap targets, no em or en dashes), `npm run check` and
+`npm run build` pass, no new dependency. A builder who meets a choice not
+settled here stops and reports back. "Review" means a fresh reviewer who
+did not write the code.
+
+Real catalog calls allowed in the whole milestone: at most 20, by hand, one
+per 2.1 seconds, only in task 11.2 to make recordings, plus the one Test
+tap at go live. All other work uses the recordings.
+
+Not in this milestone (later, do not start): switching automatic filling
+back on; the `find_variants` tool of the site (its answers were mostly
+eBay listings in the trial); reference pictures side by side; rookie proof
+from set checklists (Milestone 15); moving photos on a merge; a free hand
+crop box; pinch zoom code of our own; a check for duplicates inside a CSV
+import (there is no import yet); a new "Data sources" page (the Connections
+screen gets the missing lines instead); totals that leave out cards with
+an open version (Milestone 14, when real prices hang on the version).
+
+One go live at the end (task 11.8), on the Milestone 10 way.
+
+### Design: data model (settled)
+
+**One migration, adds only.** `drizzle/0009_*`, written in task 11.1, holds
+every new column of this milestone. No new table. Nothing renamed, dropped
+or made required. No stored row is rewritten by the migration or at start
+up: old values are read through small pure functions and are written in
+the new form only when the owner next saves that item.
+
+New nullable columns on `items`:
+
+| Column | Meaning |
+|---|---|
+| `versionState` | `confirmed` or `not_sure`. Null means never asked (every item of today). |
+| `versionSource` | `catalog`, `known_list`, `owner`: where the chosen version came from |
+| `versionOptions` | JSON: at most 12 options from the last "Show versions", with the time. Cleared after a choice or after 30 days. |
+| `serialCopy` | text, digits only, leading zeros kept ("045") |
+| `serialEdition` | text, digits only, no leading zeros ("100") |
+| `serialSuggested` | JSON: what the scanner read (`copy`, `edition`, the line of text it stood in, `weak` true or false). Cleared when the owner answers. |
+| `rookieState` | `yes`, `no`, `unknown`, `disputed`. Null means not recorded (old items). |
+| `rookieSource` | `owner`, `key_list`, `catalog`, `reading` |
+| `rookieNote` | text, at most 200 characters: the evidence in plain words |
+| `keptApartFrom` | JSON list of item ids (at most 50) the owner said are separate records |
+
+New nullable column on `images`: `originalFile` (the photo as it was before
+the owner's first turn or trim; server made name, same folder).
+
+**Old columns stay and stay true.** `variation`, `isParallel`,
+`serialNumber` and `isRookie` keep their meaning, so filters, bulk edit,
+CSV export and old code keep working:
+- `serialNumber` is the text shown and exported. It is rebuilt as
+  "045/100" (or "/100" when only the edition is known) whenever the two
+  parts are saved.
+- `isRookie` is true exactly when `rookieState` is `yes`. One function,
+  `withRookie()`, writes both.
+- An old item with `serialNumber` "045/100" and empty parts is shown split
+  by `splitSerial()` and counts as the owner's own entry. An old text that
+  does not split ("1 of 1 promo") is shown as it is in one box, untouched.
+- An old item with null `rookieState` shows "Rookie card: yes" or nothing,
+  as today, with the line "Source not recorded".
+- The single edit form and the bulk engine keep both forms in step: a bulk
+  "set rookie" writes `rookieState` yes or no with source `owner`; a typed
+  serial text that splits fills the parts.
+
+**Canonical key.** Stays `v1`. The variation is already its last part, so
+base and Tiffany have two keys. No key is rebuilt in this milestone.
+
+### Design: which version is it (settled, F04)
+
+**Where the choices come from** (`src/lib/catalog/versions.ts`, pure
+`buildVersionOptions()` plus `loadVersionOptions()` which may spend calls):
+1. *The catalog.* One search "year brand number surname" (the trial showed
+   that such a search lists the base card and its Tiffany or other product
+   lines as clean entries). Kept: clean entries only (all digit id), same
+   year, same normalized player, same card number. Each product line or
+   variation becomes one option with the link "From MyCardfolio". At most
+   2 calls per tap (the second only when the item has no number: "year
+   brand full name"), in the `now` line, and a stored answer costs nothing.
+   Unverified listings are never options.
+2. *The known versions list* (`src/lib/catalog/versions-known.ts`): a short
+   table written by hand for the owner's years, about 15 rows, each with
+   brand, years, name and one line on how to tell. Examples: Topps Tiffany
+   1984 to 1991 ("glossy front, bright white back, sold only as a boxed
+   set"); Fleer Glossy 1987 to 1989; Topps Desert Shield 1991 ("gold foil
+   shield stamp on the front"); Topps Gold 1992 to 1994; Upper Deck
+   Electric Diamond 1994; Score Gold Rush 1994; Collector's Choice Silver
+   Signature 1994 and 1995; O-Pee-Chee for Topps baseball and hockey. Every
+   row carries a source note in the file. A row is offered when brand and
+   year fit; it is a choice, never a claim that the card is that version.
+3. *Read on the card.* When the scanner read a version word ("TIFFANY",
+   "GLOSSY", "GOLD") or the item's `variation` field holds a text of the
+   reader, the matching option gets the evidence line "The scanner read
+   the word GOLD on the card". It moves that option to second place, never
+   to first, and chooses nothing.
+4. Always present: **"The normal card (base)"** first, **"Another version"**
+   (a text box, 2 to 120 characters) and **"Not sure yet"** last.
+
+The same version from two sources is one option with both evidence lines.
+Order: base, options with read evidence, catalog options, known list
+options, another, not sure. At most 12.
+
+**Choosing** (`chooseVersionAction`, owner session, zod, the option by its
+position in the stored `versionOptions`):
+- Base: `variation` emptied, `isParallel` false, state `confirmed`.
+- A version: `variation` set to its name and marked `owner` in
+  `fieldSources`, `isParallel` true, state `confirmed`, `versionSource`
+  set. When the option is a catalog entry, the item is linked to that
+  catalog card through the existing `linkCatalogCard` path with the filling
+  rule of Milestone 10 (owner fields stay; differences are listed with
+  "Use the catalog's values"). When the item was linked to the base card,
+  that link is replaced by the chosen one.
+- Another version: the typed text, source `owner`.
+- Not sure yet: state `not_sure`, no field changed.
+- Audit event `version_chosen` (item id, state, source; no free text).
+The choice can be changed at any time; "Show versions" may be tapped once
+per 10 seconds per item.
+
+**A pick in Review.** A candidate row whose line shows a version ("Topps
+Tiffany") sets state `confirmed`, source `catalog`, because the owner
+tapped that very row. A pick of a base row leaves the state null. When the
+stored candidates of an item hold more than one version of the same card,
+the Review row and the item page show "There is more than one version of
+this card" with the button "Choose the version".
+
+**Value.** While the state is `not_sure`, the item page and the item rows
+show "Choose the version to see a value" in place of the estimate. The
+owner's own figure (`manualValueCents`) is always shown. Stored values are
+not touched and totals are not changed in this milestone. Null state
+(never asked) changes nothing, so no card of today loses its value.
+
+**Screens.** Item page of a card: block "Which version is it?" with the
+state in one line ("Version: Tiffany, you chose it, from MyCardfolio" or
+"Version: not chosen"), the button "Show versions", then the options as
+big radio rows with the evidence under each name and one "Save" button.
+Catalog off, paused or busy: the known list and the three fixed options
+still show, with one plain line. Inventory filter "Version not sure".
+
+### Design: serial numbers (settled, F24)
+
+`src/lib/items/serial.ts`, pure: `parseSerial(text)`, `splitSerial(text)`,
+`formatSerial(copy, edition)`.
+- Copy: 1 to 6 digits, leading zeros kept. Edition: 1 to 6 digits, from 1
+  to 999999. Copy must not be above the edition and not 0. The copy may be
+  empty when it cannot be read ("/100").
+- **Never mixed with the card number.** The reader's `findSerial` result is
+  dropped when it equals the read card number or its line starts with "No."
+  or "#" followed by one number only, or when the text looks like a date
+  ("5/12/68"), a "1 of 792" set count that equals a known set size on a
+  line with "CARD" or "CHECKLIST", or stands in a stat row.
+- **A read is only a suggestion.** New scans no longer write
+  `serialNumber`. The read goes to `serialSuggested`. `weak` is true when a
+  digit came from a look alike letter (O, l, S, B), when the copy is above
+  the edition, or when the card's year is before 1990 (the line then says
+  "Cards before 1990 were almost never numbered").
+- **Asking.** Review row and item page: "The scanner read 045/100. Is this
+  the serial number?" with "Yes", "Fix it" (the two boxes, filled) and "No
+  serial number". A weak read shows the line of text it came from and has
+  no "Yes" button, only "Fix it" and "No". Yes writes the parts, marks
+  nothing else, clears the suggestion. Audit event `serial_confirmed`.
+- **Form.** `ItemForm` shows "Serial number" as two small number boxes
+  "Copy" and "of" (text inputs with the number keyboard, so zeros stay).
+- Items of today are not touched (see data model).
+
+### Design: rookie mark (settled, F41)
+
+`src/lib/items/rookie.ts`, pure: `rookieEvidence(item, keyCard, catalogTags,
+readWords)` gives a list of evidence lines and one suggested state.
+
+| Evidence | Says |
+|---|---|
+| Key card list has the card with rookie true | yes, with the list's note |
+| Key card list has the card with rookie false | no, with the note ("his 1985 Topps Olympic card came first") |
+| The linked clean catalog entry carries the tag RC | yes, "From MyCardfolio" |
+| The word ROOKIE or RC was read on the card | maybe, "Read on the card" |
+
+- Sources agree on yes: suggestion `yes`. Key list says no: `no`. Key list
+  and another source disagree: `disputed`, both lines shown. Only the read
+  word: `unknown` with the line "The word ROOKIE is on the card. That alone
+  does not make it the rookie card (it may be an All-Star Rookie cup or a
+  Rated Rookie of a later year)". Nothing at all: nothing is shown.
+- **What a scan writes** stays exactly as today and gets its source: a key
+  list hit writes `rookieState` yes or no, source `key_list`, the note.
+  Nothing else is written by a scan: the catalog tag and the read word
+  only ever make a suggestion.
+- **Asking.** Item page and Review row: "Rookie card?" with the evidence
+  lines and four buttons "Yes", "No", "Not sure", "Disputed". The owner's
+  answer is stored with source `owner` and is never changed again by the
+  app, also not by a later look up or a link. Audit event `rookie_set`.
+- The "Rookies" filter keeps using `isRookie`. `ItemForm` replaces the
+  check box with the four way choice.
+
+### Design: photos (settled, F23)
+
+- **Add or replace later.** Item page, under the photos: "Add a back
+  photo" (or "Add a front photo" when there is none) and "Replace" on each
+  photo. Upload through the existing `saveUpload` (type and size limits,
+  re-encode, server made names). Reuses `PhotoPicker` and the browser side
+  shrink. At most one front and one back per item; the scan's crop counts
+  as the front. A replaced photo's files are removed after the new row is
+  stored. No reading is started by an added photo; a button "Read this
+  photo again" is not built.
+- **Turn.** "Turn left" and "Turn right" (90 degrees) on the photo view.
+  Server side with sharp from the best file there is (the working copy
+  when it still exists, else the archive file), written under a new server
+  made name, thumbnail made again, row updated in one transaction, old
+  files removed after it.
+- **Trim.** Four sliders "Top", "Bottom", "Left", "Right" (0 to 40 percent
+  each, whole numbers), with the cut shown live on the picture by CSS. No
+  free hand box. The server checks the four numbers with zod, the rest
+  must be at least 200 pixels on each side, then sharp cuts.
+- **The original is kept.** Before the first turn or trim the photo's file
+  is kept as `images.originalFile`. "Back to the original photo" restores
+  it. Each photo holds at most one original. `removeItemRows`, the bin, the
+  merge and the orphan cleanup (`src/lib/images/cleanup.ts`) must know the
+  column: an original is deleted with its photo and is never seen as an
+  orphan while its row lives.
+- **Zoom.** A tap on a photo opens `/items/[id]/photo/[imageId]`: the
+  picture alone on a dark page, buttons "Bigger" and "Smaller" (1, 2 and 4
+  times, inside a box that scrolls both ways), the browser's own pinch zoom
+  left on, and the Turn and Trim tools below. No zoom library.
+- All photo actions: owner session, zod, ids as integers, the image must
+  belong to the item, one edit at a time per image, audit events
+  `photo_added`, `photo_edited`, `photo_restored`.
+- Slow server: one sharp job at a time (the existing limiter); a turn of a
+  1600 pixel photo must end in under 3 seconds, measured in the task.
+
+### Design: duplicates (settled, F22)
+
+`src/lib/items/duplicates.ts`. The key of a card becomes, in this order:
+1. *What card:* the `catalogCardId` when both items have one (two items
+   with different catalog cards are never duplicates); else the fields of
+   today (year, brand, set, number, player), compared through the
+   `normalize.ts` functions so "Ken Griffey Jr" and "Ken Griffey Jr." meet.
+2. *Version:* the normalized `variation`.
+3. *Grader and grade,* as today.
+4. *Serial:* see below.
+
+The result is no longer yes or no but one of three kinds:
+
+| Kind | When | Notice |
+|---|---|---|
+| `same` | all four parts equal, version of both `confirmed` or both never asked, no serial copy on either | "You already have this card" |
+| `maybe` | card equal, but one version is `not_sure` or one side has no version while the other has one; or one grade is empty | "This may be a card you already have. The version differs or is open." |
+| `same_numbered` | card and version equal and both have the same copy and edition | "This looks like the very same numbered card (045/100) entered twice" |
+
+Two items with different serial copies are never duplicates and never
+merge: each is one numbered card. A pair in `keptApartFrom` is not asked
+again.
+
+**Three answers** on the notice (item page, Review row, and right after
+"Add by hand" and "Add to my collection", which open the item page):
+- **"Count it with the old one"** (merge): only for `same`, and for
+  `same_numbered` with the wording "Remove this double entry" (the
+  quantity is then not raised). `mergeInto` as today (quantities add, value
+  kept, the newer record is removed), plus: the confirm line says in plain
+  words that the photos of the newer record go away with it; the target
+  keeps its own fields; refused for `maybe`.
+- **"Keep both as they are"**: writes each id into the other's
+  `keptApartFrom`; the notice goes away for that pair.
+- **"Open the old one to fix it"**: a link to the old item's edit form.
+The "Possible duplicates" filter lists `same`, `maybe` and `same_numbered`
+without the kept apart pairs. Audit events: `items_merged` (exists today,
+kept) and the new `duplicate_kept_apart`.
+
+### Design: why a look up waited (settled, F49 rest)
+
+No new page and no new table. The Connections card of each source gets a
+folded part "Waits and skips today", built only from `outside_usage` and
+`outside_state`: "3 look ups were skipped: the hourly limit was reached",
+"The site asked us to slow down 1 time", "Paused until 14:20", "Look ups
+waited 42 seconds in all (the app makes one call at a time, 2 seconds
+apart)", and "Nothing had to wait today". The More page link text becomes
+"Connections and data sources". This closes F49 for free sources.
+
+### Tasks
+
+Order: 11.1 first. Then 11.2, 11.5 and 11.7 side by side. Then 11.3, then
+11.4, then 11.6 (these three all touch the item page and the Review row,
+so they run one after another; each adds its own component and one line in
+the page). Then 11.8.
+
+**11.1 Data model and the one migration** (Opus, review)
+- Files: `src/db/schema.ts`, `drizzle/0009_*`, `src/db/migration-0009.test.ts`,
+  `src/lib/items/serial.ts`, `src/lib/items/rookie.ts` (state and
+  `withRookie` only; the evidence part is 11.4) (+ tests),
+  `src/lib/items/update.ts`, `bulk.ts`, `create.ts`, `from-recognition.ts`
+  (key list hit writes state and source; nothing else changes yet),
+  `src/lib/audit/labels.ts`, `src/lib/export/` (new columns left out).
+- Depends on: Milestone 10 live.
+- Done when: every column of the data model exists; `parseSerial`,
+  `splitSerial`, `formatSerial` and `withRookie` work as designed; single
+  edit and bulk edit keep the old and the new columns in step; new audit
+  names have plain labels.
+- Check: the migration applies to a copy of a database made by `0008` with
+  items and photos in it and every old row reads back unchanged; the build
+  from before this task still starts on the migrated copy; serial tests
+  (zeros kept, "045/100", "/100", copy above edition refused, "1 of 1
+  promo" left whole, 0 refused); rookie tests (state and `isRookie` never
+  disagree after any write path: form, bulk, scan); a bulk edit of 500
+  items stays inside the Milestone 9 time limit.
+
+**11.2 Version choices and the choose action** (Opus, review)
+- Files: `src/lib/catalog/versions.ts`, `versions-known.ts` (+ tests),
+  `src/lib/catalog/item-actions.ts` or a new `version-actions.ts` (+ test),
+  `src/lib/catalog/pick.ts` (a version row picked in Review sets the
+  state), `tests/fixtures/catalog/*` (new recordings),
+  `tests/fixtures/README.md`, `docs/CATALOG-TRIAL.md` (what the calls
+  showed).
+- Depends on: 11.1.
+- Starts with at most 20 real calls by hand (2.1 seconds apart, the trial's
+  User-Agent, no personal details) for recordings: the number and name
+  searches for about 8 cards with known versions (1990 Topps Frank Thomas
+  414, 1989 Fleer Bill Ripken 616, 1987 Fleer Barry Bonds 604, 1991 Topps
+  Chipper Jones 333, 1992 Topps a star card, 1994 Upper Deck a star card,
+  one football card, one basketball card that has only listings).
+- Done when: `loadVersionOptions` and `chooseVersionAction` work as
+  designed, for all four kinds of choice, through the gate only.
+- Check: tests on the recordings (base and Tiffany become two options with
+  links; listings never become options; another player with the same
+  number is left out; same version from catalog and known list is one
+  option with two lines; a read word moves an option to second place and
+  chooses nothing; at most 12; catalog off still gives the known list and
+  the fixed three); action tests (no session refused; position 9 of a 5
+  row list refused; an `owner` field survives a version link; base link
+  replaced by the chosen card; `firstSuggestion` identical before and
+  after; "not sure" changes no field; once per 10 seconds; audit row); a
+  test that no path in this task writes a version without the action; the
+  reviewer is given the fifth review text of 10.6 and asked to look for
+  any path that decides a version for the owner.
+
+**11.3 "Which version is it?" on the item page and in Review** (Sonnet)
+- Files: `src/components/catalog/VersionPicker.tsx`,
+  `src/app/(app)/items/[id]/page.tsx`, `src/app/(app)/review/page.tsx`,
+  `src/components/items/CatalogCandidates.tsx`, `ItemRow.tsx`,
+  `InventoryFilters.tsx`, `src/lib/items/query.ts` (+ test),
+  `src/components/manage/filter-url.ts`.
+- Depends on: 11.2.
+- Done when: the block, the Review line, the value line for `not_sure` and
+  the filter work as designed.
+- Check: query test for the filter; a render test that a `not_sure` item
+  shows no estimate but shows the owner's own figure, and that an item
+  with null state shows its value as before; screenshots at 360px: options
+  with evidence, catalog paused, a chosen Tiffany, Review with "more than
+  one version".
+
+**11.4 Serial number and rookie mark as suggestions** (Sonnet, review)
+- Files: `src/lib/free/parse.ts` (`findSerial` guards only),
+  `src/lib/free/recognizer.ts` and `src/lib/recognition/types.ts` (the read
+  serial and read rookie word travel as suggestions),
+  `src/lib/items/from-recognition.ts`, `src/lib/items/rookie.ts` (evidence),
+  `src/lib/items/suggest-actions.ts` (+ test),
+  `src/components/items/SerialAsk.tsx`, `RookieAsk.tsx`, `ItemForm.tsx`,
+  `src/app/(app)/items/[id]/page.tsx`, `src/app/(app)/review/page.tsx`.
+- Depends on: 11.1, 11.3 (same screens).
+- Done when: serial and rookie follow their designs in the free reader,
+  the sample mode and the Anthropic mode (all three go through
+  `from-recognition.ts`).
+- Check: parse tests, each a named case: card number "No. 45" with "45/100"
+  nowhere gives no serial; "045/100" gives copy 045; a birth date, a stat
+  row and "1 of 792" give none; a 1987 card with "12/50" is weak; a look
+  alike letter is weak; write path tests: a scan never writes
+  `serialNumber`, `serialCopy` or `serialEdition`; "Yes" writes them; a
+  weak read has no "Yes"; rookie evidence table, one test per row and per
+  conflict; an owner's rookie answer survives a look up, a link, an unlink
+  and a second scan of the same card; `accuracy.test.ts` and
+  `griffey.test.ts` still green; screenshots at 360px of both questions in
+  Review and on the item page.
+
+**11.5 Photos: add later, turn, trim, zoom** (Sonnet, review)
+- Files: `src/lib/images/edit.ts` (+ test), `src/lib/images/store.ts`,
+  `cleanup.ts`, `src/lib/items/remove.ts`, `src/lib/items/photo-actions.ts`
+  (+ test), `src/app/(app)/items/[id]/photo/[imageId]/page.tsx`,
+  `src/components/items/PhotoTools.tsx`, `src/app/(app)/items/[id]/page.tsx`
+  (photo links and the add buttons only).
+- Depends on: 11.1.
+- Done when: the photo design works in full with real files in a
+  temporary folder.
+- Check: tests: a turn four times gives the first size back; a trim to
+  less than 200 pixels is refused; numbers outside 0 to 40 refused; the
+  original is kept once and restored exactly (same bytes); deleting the
+  item, emptying the bin and a merge remove the original too; the orphan
+  cleanup keeps an original whose row lives and removes one whose row is
+  gone; an image id of another item is refused; no session refused; an
+  upload that is not a picture or is too large is refused; a failed sharp
+  job leaves the old photo in place; timing of one turn noted; screenshots
+  at 360px of the photo page with the sliders.
+
+**11.6 Duplicate question with three answers** (Opus, review)
+- Files: `src/lib/items/duplicates.ts` (+ test), `review-actions.ts`,
+  `src/components/items/DuplicateNotice.tsx`, `src/lib/items/query.ts`,
+  `src/lib/items/create.ts` and `src/lib/catalog/actions.ts` (only so the
+  item page opens with the notice), `src/app/(app)/review/page.tsx`.
+- Depends on: 11.1, 11.2, 11.4.
+- Done when: the three kinds, the three answers and the kept apart memory
+  work as designed; every old merge test still passes.
+- Check: tests: the same catalog card twice is `same`; base and Tiffany
+  are not duplicates; confirmed base and a `not_sure` copy are `maybe` and
+  cannot merge; PSA 9 and PSA 10 are not duplicates; 045/100 and 046/100
+  never merge by any path, also not through a hand made form post; the
+  same copy twice is `same_numbered` and the merge does not raise the
+  quantity; kept apart pairs are not asked again and are written on both
+  sides; a merge keeps the target's value, version and rookie answers; the
+  duplicate filter on 5,000 items runs in under 200 ms on this server;
+  actions refuse without a session; screenshots at 360px of the three
+  notices.
+
+**11.7 Why a look up waited** (Sonnet)
+- Files: `src/lib/outside/view.ts` (+ test),
+  `src/components/connections/ConnectionCard.tsx`,
+  `src/app/(app)/more/page.tsx`.
+- Depends on: Milestone 10 live. Can run beside anything.
+- Done when: the folded part shows the lines of the design from the
+  counters that exist; no new call, table or column.
+- Check: view tests for each line (cap skip, slow down, pause, total wait,
+  nothing waited); no key, URL or answer body in any line; screenshot at
+  360px.
+
+**11.8 Review and go live** (Opus review, main agent deploys)
+- Files: fixes only, `docs/STATUS.md`, `docs/SPEC.md`, `docs/HANDOVER.md`.
+- Depends on: 11.1 to 11.7.
+- Done when: a fresh review has no open finding on: any path that sets a
+  version, serial, rookie mark or catalog link without the owner's tap;
+  the photo actions and file handling; the merge rules; the migration.
+  Backup checked before the deploy; Milestone 11 is live; the owner is
+  told in plain words to try: the version list on the 1990 Topps Griffey,
+  a serial number by hand, the rookie question, turning and trimming one
+  photo and going back to the original, adding the same card twice.
+- Check: `npm run check`, `npm run build`, the migration applied on a copy
+  of the live database first, live `/api/health`, a look at phone width,
+  one Test tap on the live Connections screen as the only real call, no
+  secret in the diff.
+
+| # | Task | Model | Depends on |
+|---|---|---|---|
+| 11.1 | Data model and the one migration | Opus + review | M10 live |
+| 11.2 | Version choices and the choose action (20 real calls at most) | Opus + review | 11.1 |
+| 11.3 | "Which version is it?" screens, value line, filter | Sonnet | 11.2 |
+| 11.4 | Serial number and rookie mark as suggestions | Sonnet + review | 11.1, 11.3 |
+| 11.5 | Photos: add later, turn, trim, zoom | Sonnet + review | 11.1 |
+| 11.6 | Duplicate question with three answers | Opus + review | 11.1, 11.2, 11.4 |
+| 11.7 | Why a look up waited (Connections) | Sonnet | M10 live |
+| 11.8 | Review and go live | Opus + main | all |
+
+### Risks
+
+- **A rule that decides for the owner slips in again.** This is what failed
+  five times. Guards: the rule at the top, a test in 11.2 and 11.4 that no
+  write path exists without an action of the owner, and the reviewers of
+  11.2 and 11.8 are asked to hunt for exactly that.
+- **The catalog knows few versions.** For many cards the search gives only
+  base and Tiffany, and for basketball and hockey mostly nothing clean.
+  The known list and "Another version" carry those; the list is short and
+  written by hand, so it can miss a version or hold a mistake. Each row
+  has a source note and it only ever offers a choice.
+- **More questions for the owner.** Version, serial, rookie and duplicate
+  each can ask. Limits: a question shows only when there is evidence;
+  "Not sure yet" and "No" are one tap; null states of old items ask
+  nothing.
+- **A hidden value confuses.** Only `not_sure` hides the estimate, with
+  the reason in its place; totals still count it. Said in the go live
+  message.
+- **Serial reads are rare and often wrong for 1980 to 1995.** Very few of
+  the owner's cards are numbered. A wrong read now costs one tap on "No"
+  instead of a wrong field.
+- **Photo edits lose quality or files.** Each edit is made from the best
+  file, the original is kept and can be restored, old files go only after
+  the new row is stored. The cleanup is the sharp edge: it must learn the
+  new column in the same task (11.5) and has its own tests.
+- **Merge removes the newer record's photos.** As today, now said in plain
+  words before the tap. Moving photos is deferred.
+- **Migration on the live database.** Adds only, no row rewritten, tried
+  on a copy first, backup checked, old code runs on the new layout.
+- **Budget.** If the run gets short, drop in this order: 11.7; the trim
+  part of 11.5 (keep add, turn, zoom, original); the known list rows
+  beyond Tiffany and Glossy. Never drop a review of 11.1, 11.2 or 11.6.
+
+### Questions for the owner
+
+None blocks the build. Decided by the builder, change on request:
+1. A card with the version "Not sure yet" shows no estimate until a version
+   is chosen (your own figure always shows; totals stay as they are).
+2. Combining two records still removes the newer record's photos; the app
+   now says so before you tap.
+
+Run cap for this milestone: 12 task runs (8 tasks plus up to 4 review
+repeats) or 2.2M delegated tokens, inside what is left of the roadmap cap.
+
+**Milestone 11 main-session decision (2026-11-16)**
+- Combining two records MOVES the other record's photos to the kept record
+  (no photo is ever deleted by a combine). This replaces the builder
+  decision "combining still removes the newer record's photos". Done in
+  11.6, with a test; existing merge code changes accordingly.
+- "Not sure yet" cards show no estimate until a version is chosen: kept.
