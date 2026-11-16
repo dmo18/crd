@@ -1494,6 +1494,27 @@ the designs above.
   #336 through the checklist plus the confirm search; if the confirm search
   shows more than one clean base card, it stays a top candidate in Review.
 
+**10.6 second review decision (settled 2026-11-16, main session; done in 10.6d)**
+The matching failed review twice (cut-short checklists hide second players
+of the same name, e.g. Jeff Robinson #42 and #723, Ken Griffey Sr. #581).
+New, simpler rule that replaces "sure by name":
+- A catalog card is applied as sure ONLY when (a) the read card number and
+  the name agree with one clean, non-subset, non-variation card of the set,
+  or (b) the set is complete (checklist complete:true) and exactly one
+  player in it fits the read name, with first name, surname and suffix
+  compared on parsed names.
+- Everything else, including a unique name in a cut-short checklist and any
+  confirm search result, is only a ranked candidate shown in Review with
+  one tap to pick. No item is ever filled from a candidate without the tap.
+- The confirm search is removed. The number search for cards past #500
+  stays.
+- Names drop bracketed qualifiers ("(P)", "(Texas)") before parsing, and
+  players are told apart by parsed first name, surname and suffix.
+- Slim rows are kept in the scan's checklist memory (parsed once).
+- Griffey target (10.10): "Ken Griffey, J" with no number gives #336 as the
+  top candidate in Review (one tap), not sure; year 1990, sport baseball,
+  team Mariners still come from the reading.
+
 **10.7 Search cards screen and "Add to my collection"** (Sonnet)
 - Files: `src/app/(app)/search/page.tsx`, `src/components/catalog/*`,
   `src/lib/catalog/actions.ts` (+ test), `src/app/(app)/more/page.tsx`,
