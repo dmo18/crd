@@ -53,6 +53,7 @@ const COLUMNS: Col[] = [
   { header: "Confidence", get: (r) => raw(r.confidence == null ? "" : String(Math.round(r.confidence * 100) / 100)) },
   { header: "Notes", get: (r) => text(r.notes) },
   { header: "Added (ISO date)", get: (r) => raw(r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : "") },
+  { header: "Description", get: (r) => text(r.description) },
 ];
 
 /** Stops spreadsheets from running a cell as a formula. */

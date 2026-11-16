@@ -39,7 +39,7 @@ describe("itemsToCsv", () => {
     const lines = parse(csv);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^ID,Kind,Status,Title,/);
-    expect(lines[0]).toMatch(/,Notes,Added \(ISO date\)$/);
+    expect(lines[0]).toMatch(/,Notes,Added \(ISO date\),Description$/);
     expect(csv.endsWith("\r\n")).toBe(true);
     expect(csv.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
   });
@@ -91,5 +91,15 @@ describe("formula guard, leading whitespace", () => {
     expect(guardFormula("\n=1+1")).toBe("'\n=1+1");
     expect(guardFormula("Ken Griffey Jr.")).toBe("Ken Griffey Jr.");
     expect(guardFormula("Topps - Traded")).toBe("Topps - Traded");
+  });
+});
+
+describe("itemsToCsv description column", () => {
+  it("is the last column and is formula-guarded", () => {
+    const csv = itemsToCsv([row({ description: '=SUM(1,2)' }), row({ description: "Plain, with comma" })], none);
+    const lines = parse(csv);
+    expect(lines[0].endsWith(",Description")).toBe(true);
+    expect(lines[1].endsWith(`,"'=SUM(1,2)"`)).toBe(true);
+    expect(lines[2].endsWith(`,"Plain, with comma"`)).toBe(true);
   });
 });

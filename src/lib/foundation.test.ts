@@ -22,6 +22,9 @@ describe("titles", () => {
       .toBe("1989 Upper Deck #1 Ken Griffey Jr.");
   });
   it("names sealed product and bulk lots", () => {
+    expect(buildTitle({ kind: "card", description: "x".repeat(80) })).toBe("x".repeat(60));
+    expect(buildTitle({ kind: "card", description: "  Mystery box  " })).toBe("Mystery box");
+    expect(buildTitle({ kind: "card", description: "  " })).toBe("Unidentified item");
     expect(buildTitle({ kind: "sealed", year: 1990, brand: "Topps", sport: "baseball", productType: "box" })).toBe("1990 Topps baseball box");
     expect(buildTitle({ kind: "bulk", year: 1987, yearEnd: 1991, brand: "Donruss", estCount: 3200 })).toBe("Bulk lot, 1987-1991 Donruss, about 3,200 cards");
     expect(buildTitle({ kind: "card" })).toBe("Unidentified item");

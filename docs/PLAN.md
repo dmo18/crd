@@ -1569,6 +1569,7 @@ New, simpler rule that replaces "sure by name":
   refused; "Look up again" limited to one per 10 seconds; a basketball
   scan with only unverified listings applies nothing; screenshots at 360px
   of Review with candidates, with a difference list, and with none.
+- From the 10.7 review (deferred here): "This is my card" on a scanned item must show the differences returned by `linkCatalogCard` with a "Use the catalog's values" button.
 
 **10.10 Merge `work/m9c`, finish Part C through the catalog** (Opus, review)
 - Files: merge of `work/m9c` (`src/lib/free/ocr.ts`, `parse.ts`, their

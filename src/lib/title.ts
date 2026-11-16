@@ -26,5 +26,5 @@ export function buildTitle(f: TitleFields): string {
     title = [base, f.cardNumber ? `#${f.cardNumber}` : null, f.player, f.variation ? `(${f.variation})` : null]
       .filter(Boolean).join(" ");
   }
-  return title.trim() || "Unidentified item";
+  return title.trim() || f.description?.trim().slice(0, 60) || "Unidentified item";
 }

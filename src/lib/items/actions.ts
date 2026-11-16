@@ -7,6 +7,7 @@ import { auditThisRequest } from "@/lib/audit/request";
 import { itemLabel } from "@/lib/audit/subjects";
 import { requireOwner } from "@/lib/auth/guard";
 import { restoreItems } from "./bin";
+import { createItem } from "./create";
 import { confirmItem, deleteItem, updateItem } from "./update";
 
 export type SaveState = { status: "idle" | "saved" | "error"; errors: Record<string, string>; savedAt?: number };
@@ -40,6 +41,18 @@ export async function saveItemAction(_prev: SaveState, formData: FormData): Prom
   if (!result.ok) return { status: "error", errors: result.errors };
   revalidateItem(id.data);
   return { status: "saved", errors: {}, savedAt: Date.now() };
+}
+
+/** Add by hand: saves a new item from the form and opens its page. No outside call. */
+export async function createItemAction(_prev: SaveState, formData: FormData): Promise<SaveState> {
+  await requireOwner();
+  const input: Record<string, unknown> = {};
+  for (const key of TEXT_FIELDS) input[key] = str(formData.get(key));
+  for (const key of FLAGS) input[key] = formData.get(key) === "on";
+  const result = createItem(str(formData.get("kind")), input);
+  if (!result.ok) return { status: "error", errors: result.errors };
+  revalidateItem(result.id);
+  redirect(`/items/${result.id}`);
 }
 
 export async function confirmItemAction(formData: FormData): Promise<void> {

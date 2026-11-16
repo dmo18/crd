@@ -1,5 +1,6 @@
 import { asc } from "drizzle-orm";
 import { ScanFlow } from "@/components/items/ScanFlow";
+import Link from "next/link";
 import { PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
 import { locations } from "@/db/schema";
@@ -15,6 +16,12 @@ export default async function ScanPage() {
     <>
       <PageHeader title="Scan" subtitle="Pick the photos and tap Save. Then scan the next one while the app reads." />
       <ScanFlow rules={PHOTO_RULES} locations={options} />
+      <p className="pt-6 text-center text-sm text-muted">
+        No photo?{" "}
+        <Link href="/search" className="inline-flex min-h-11 items-center font-semibold text-accent underline">Or search by words</Link>
+        {" "}or{" "}
+        <Link href="/items/new" className="inline-flex min-h-11 items-center font-semibold text-accent underline">add by hand</Link>.
+      </p>
     </>
   );
 }
