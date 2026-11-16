@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkBar, markCard, markField, summarize, type Answer, type CardMarks, type Field } from "./score";
+import { checkBar, countFiled, markCard, markField, summarize, sureMarks, type Answer, type CardMarks, type Field, type Filed } from "./score";
 
 const answer: Answer = {
   sport: "baseball", year: 1990, brand: "Topps", setName: "Topps", cardNumber: "336",
@@ -33,6 +33,17 @@ describe("markField", () => {
     expect(markField("team", "Mariners", "Seattle Mariners")).toBe("right");
     expect(markField("team", "Seattle", "Seattle Mariners")).toBe("wrong");
     expect(markField("team", "Orioles", "Seattle Mariners")).toBe("wrong");
+  });
+  it("counts a set read by its first words, or with words more, as right", () => {
+    expect(markField("setName", "Select", "Select Draft Picks")).toBe("right");
+    expect(markField("setName", "Black Diamond Double", "Black Diamond")).toBe("right");
+    expect(markField("setName", "Sel", "Select Draft Picks")).toBe("wrong");
+    expect(markField("setName", "Draft Picks", "Select Draft Picks")).toBe("wrong");
+    expect(markField("setName", "Prizm", "Select")).toBe("wrong");
+  });
+  it("ignores accents in names", () => {
+    expect(markField("player", "Alvaro Morata", "\u00c1lvaro Morata")).toBe("right");
+    expect(markField("player", "Ronald Acu\u00f1a Jr.", "Ronald Acuna Jr.")).toBe("right");
   });
   it("treats a null answer as should-be-blank", () => {
     expect(markField("team", "Lakers", null)).toBe("wrong");
@@ -77,43 +88,94 @@ describe("summarize", () => {
   });
 });
 
+describe("sure fields", () => {
+  it("counts only the fields the reader was sure of", () => {
+    const marks = cardOf({ year: "wrong", team: "blank" });
+    expect(sureMarks(marks, { player: "sure", year: "unsure", brand: "sure", team: "sure" })).toEqual({
+      sport: "blank", year: "blank", brand: "right", setName: "blank", cardNumber: "blank", player: "right", team: "blank",
+    });
+    expect(sureMarks(cardOf({ year: "wrong" }), { year: "sure" }).year).toBe("wrong");
+  });
+  it("gives the sure table: fill = sure fields / cards, wrong among sure fields", () => {
+    const cards = [
+      sureMarks(cardOf(), { player: "sure", year: "sure" }),
+      sureMarks(cardOf({ year: "wrong" }), { player: "sure", year: "sure" }),
+      sureMarks(cardOf(), { player: "unsure" }),
+      sureMarks(cardOf(), {}),
+    ];
+    const s = summarize(cards);
+    const player = s.fields.find((f) => f.field === "player")!;
+    expect(player.fillRate).toBeCloseTo(0.5);
+    const year = s.fields.find((f) => f.field === "year")!;
+    expect(year.wrongRate).toBeCloseTo(0.5);
+    expect(s.filled).toBe(4);
+    expect(s.wrong).toBe(1);
+  });
+  it("counts cards filed on their own and those of them with any field wrong", () => {
+    expect(countFiled([
+      { marks: cardOf(), filed: true },
+      { marks: cardOf({ team: "wrong" }), filed: true },
+      { marks: cardOf({ year: "wrong" }), filed: false },
+    ])).toEqual({ cards: 3, filed: 2, filedWrong: 1 });
+    expect(countFiled([])).toEqual({ cards: 0, filed: 0, filedWrong: 0 });
+  });
+});
+
 describe("checkBar", () => {
   const many = (n: number, f: (i: number) => Partial<CardMarks>) => Array.from({ length: n }, (_, i) => cardOf(f(i)));
+  const none: Filed = { cards: 0, filed: 0, filedWrong: 0 };
+  const bar = (all: CardMarks[], sure: CardMarks[] = all, filed: Filed = none) => checkBar(summarize(all), summarize(sure), filed);
 
   it("passes a clean, well filled run", () => {
-    expect(checkBar(summarize(many(10, () => ({})))).pass).toBe(true);
+    expect(bar(many(10, () => ({}))).pass).toBe(true);
   });
   it("passes at the exact limits", () => {
-    // 100 cards: player 90, year 80, brand 80, cardNumber 70 filled; 14 wrong of 700 minus blanks stays under 2 percent
-    const cards = many(100, (i) => ({
-      setName: i < 10 ? "wrong" : "right",
-      player: i < 10 ? "blank" : "right",
-      year: i < 20 ? "blank" : "right",
-      brand: i < 20 ? "blank" : "right",
-      cardNumber: i < 30 ? "blank" : "right",
+    // 100 cards, all sure: player 70, year 60, brand 60, cardNumber 50 filled; 7 wrong sets, under 2 in 100 of the sure fields
+    const sure = many(100, (i) => ({
+      setName: i < 7 ? "wrong" : "right",
+      player: i < 30 ? "blank" : "right",
+      year: i < 40 ? "blank" : "right",
+      brand: i < 40 ? "blank" : "right",
+      cardNumber: i < 50 ? "blank" : "right",
     }));
-    const s = summarize(cards);
+    const s = summarize(sure);
     expect(s.overallWrongRate).toBeLessThanOrEqual(0.02);
-    expect(checkBar(s)).toEqual({ pass: true, reasons: [] });
+    expect(checkBar(s, s, { cards: 100, filed: 40, filedWrong: 0 })).toEqual({ pass: true, reasons: [] });
   });
-  it("fails on wrong rate", () => {
-    const r = checkBar(summarize(many(10, (i) => (i < 2 ? { brand: "wrong" as const } : {}))));
+  it("fails on the sure wrong rate", () => {
+    const r = bar(many(10, (i) => (i < 2 ? { brand: "wrong" as const } : {})));
     expect(r.pass).toBe(false);
-    expect(r.reasons.join(" ")).toContain("wrong rate");
+    expect(r.reasons.join(" ")).toContain("sure wrong rate");
   });
-  it.each<[Field, number]>([["player", 11], ["year", 21], ["brand", 21], ["cardNumber", 31]])(
-    "fails when %s fill rate is just under the minimum",
+  it("fails on the wrong rate of all filled fields, unsure ones too", () => {
+    // 10 cards, 70 fields: 6 wrong unsure fields is over 8 in 100; the sure ones are clean.
+    const all = many(10, (i) => (i < 6 ? { team: "wrong" as const } : {}));
+    const sure = many(10, () => ({ team: "blank" as const }));
+    const r = bar(all, sure);
+    expect(r.reasons).toHaveLength(1);
+    expect(r.reasons[0]).toContain("all filled fields");
+    // 5 wrong (7 in 100) passes.
+    expect(bar(many(10, (i) => (i < 5 ? { team: "wrong" as const } : {})), sure).pass).toBe(true);
+  });
+  it("fails when a card filed on its own has a wrong field", () => {
+    const r = bar(many(10, () => ({})), many(10, () => ({})), { cards: 10, filed: 3, filedWrong: 1 });
+    expect(r.pass).toBe(false);
+    expect(r.reasons[0]).toContain("filed on their own");
+  });
+  it.each<[Field, number]>([["player", 31], ["year", 41], ["brand", 41], ["cardNumber", 51]])(
+    "fails when the sure %s fill rate is just under the minimum",
     (field, blanks) => {
-      const r = checkBar(summarize(many(100, (i) => (i < blanks ? { [field]: "blank" as const } : {}))));
+      const all = many(100, () => ({}));
+      const r = bar(all, many(100, (i) => (i < blanks ? { [field]: "blank" as const } : {})));
       expect(r.pass).toBe(false);
       expect(r.reasons).toHaveLength(1);
-      expect(r.reasons[0]).toContain(`${field} fill rate`);
+      expect(r.reasons[0]).toContain(`${field} sure fill rate`);
     },
   );
   it("does not hold other fields to a fill rate", () => {
-    expect(checkBar(summarize(many(10, () => ({ team: "blank", setName: "blank", sport: "blank" })))).pass).toBe(true);
+    expect(bar(many(10, () => ({ team: "blank", setName: "blank", sport: "blank" }))).pass).toBe(true);
   });
   it("fails with no cards", () => {
-    expect(checkBar(summarize([])).pass).toBe(false);
+    expect(bar([]).pass).toBe(false);
   });
 });
