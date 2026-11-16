@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ScanView } from "@/lib/scans/view";
 import {
-  atCap, buildScanBody, createUploader, emptyQueue, entryState, hasUnsaved, postScan, RETRY_DELAYS_MS, retryDelayMs, type ScanJob, type SendResult, GIVE_UP_AFTER_START_MS, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
-  TIMEOUT_MESSAGE, waitingText, type QueueAction, type QueueState,
+  atCap, buildScanBody, canRelease, createUploader, emptyQueue, entryState, failureFor, hasUnsaved, KEEP_OPEN_MESSAGE, liveText, postScan, RETRY_DELAYS_MS, retryDelayMs, type ScanJob, type SendResult, GIVE_UP_AFTER_START_MS, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
+  TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MS, waitingText, type QueueAction, type QueueState, type UploadFailure,
 } from "./scan-queue";
 
 function run(actions: QueueAction[], from: QueueState = emptyQueue): QueueState {
@@ -248,7 +248,7 @@ describe("sending with a fake fetch", () => {
     const reply = (status: number, json: object) => (async () => Response.json(json, { status })) as unknown as typeof fetch;
     expect(await postScan(reply(201, { scanId: 5 }), job("a"))).toEqual({ ok: true, scanId: 5 });
     expect(await postScan(reply(200, { scanId: 5 }), job("a"))).toEqual({ ok: true, scanId: 5 });
-    expect(await postScan(reply(400, { error: "Bad" }), job("a"))).toEqual({ ok: false, message: "Bad" });
+    expect(await postScan(reply(400, { error: "Bad" }), job("a"))).toEqual({ ok: false, message: "Bad", failure: "final" });
     expect(await postScan(reply(500, {}), job("a"))).toMatchObject({ ok: false });
     expect(await postScan(reply(201, {}), job("a"))).toMatchObject({ ok: false });
   });
@@ -293,14 +293,17 @@ describe("sending with a fake fetch", () => {
   });
 
   it("never runs more than 2 uploads at once and keeps the failed one after 3 retries", async () => {
-    let active = 0, peak = 0;
+    let active = 0, peak = 0, sends = 0;
     const resolvers: ((r: SendResult) => void)[] = [];
     let state: QueueState = emptyQueue;
     const dispatch = (a: QueueAction) => { state = queueReducer(state, a); };
     const timers: (() => void)[] = [];
     const up = createUploader({
       getState: () => state, dispatch,
-      send: () => new Promise<SendResult>((res) => { active += 1; peak = Math.max(peak, active); resolvers.push((r) => { active -= 1; res(r); }); }),
+      send: () => new Promise<SendResult>((res) => {
+        sends += 1; active += 1; peak = Math.max(peak, active);
+        resolvers.push((r) => { active -= 1; res(r); });
+      }),
       later: (fn) => timers.push(fn), now: () => 0, onSaved: () => {},
     });
     [1, 2, 3].forEach((k) => dispatch(add(k)));
@@ -308,14 +311,147 @@ describe("sending with a fake fetch", () => {
     expect(resolvers).toHaveLength(2);
     up.pump();
     expect(resolvers).toHaveLength(2);
-    for (let round = 0; round < 4; round++) {
-      resolvers.shift()!({ ok: false, message: "Offline" });
-      await vi.waitFor(() => expect(resolvers.length + timers.length).toBeGreaterThan(0));
-      await Promise.resolve();
-      while (timers.length) timers.shift()!();
-      await vi.waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    // Every try fails: answer each, fire each retry timer, until nothing is left to do.
+    for (let guard = 0; guard < 100 && (resolvers.length > 0 || timers.length > 0); guard++) {
+      if (resolvers.length > 0) resolvers.shift()!({ ok: false, message: "Offline", failure: "retryable" });
+      else timers.shift()!();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
     }
+    expect(resolvers).toHaveLength(0);
+    expect(timers).toHaveLength(0);
     expect(peak).toBeLessThanOrEqual(2);
-    expect(state.entries.find((e) => e.key === 1)?.status).not.toBe("reading");
+    // 1 first try plus 3 automatic retries for each of the 3 entries.
+    expect(sends).toBe(12);
+    const first = state.entries.find((e) => e.key === 1)!;
+    expect(first.status).toBe("failed");
+    expect(first.attempt).toBe(3);
+    expect(first.error).toBe("Offline");
+    expect(state.entries.every((e) => e.status === "failed" && e.attempt === 3)).toBe(true);
+    expect(retryKind({ ...first, previewUrl: "blob:x" })).toBe("upload");
+  });
+});
+
+describe("errors the server gives", () => {
+  const sending = (): QueueState => run([add(1), { type: "sending", key: 1 }]);
+  const failWith = (failure: UploadFailure) =>
+    run([{ type: "uploadFailed", key: 1, message: "Server said no", failure }], sending()).entries[0];
+
+  it("sorts answers by status: 4xx stop at once, except 408 and 429", () => {
+    expect(failureFor(400)).toBe("final");
+    expect(failureFor(413)).toBe("final");
+    expect(failureFor(415)).toBe("final");
+    expect(failureFor(401)).toBe("signIn");
+    expect(failureFor(403)).toBe("rejected");
+    expect(failureFor(404)).toBe("rejected");
+    expect(failureFor(422)).toBe("rejected");
+    expect(failureFor(408)).toBe("retryable");
+    expect(failureFor(429)).toBe("retryable");
+    expect(failureFor(500)).toBe("retryable");
+    expect(failureFor(503)).toBe("retryable");
+  });
+
+  it("400, 413 and 415 go straight to Not saved with the server's message and no Retry", () => {
+    const e = failWith("final");
+    expect(e).toMatchObject({ status: "failed", attempt: 0, error: "Server said no", failure: "final" });
+    expect(entryState(e).text).toBe("Not saved");
+    expect(retryKind({ ...e, previewUrl: "blob:x" })).toBeNull();
+    expect(canRelease(e)).toBe(true);
+  });
+
+  it("401 stops at once but keeps Retry and the photo", () => {
+    const e = failWith("signIn");
+    expect(e).toMatchObject({ status: "failed", attempt: 0, failure: "signIn" });
+    expect(retryKind({ ...e, previewUrl: "blob:x" })).toBe("upload");
+    expect(canRelease(e)).toBe(false);
+    const again = run([{ type: "retry", key: 1 }], run([{ type: "uploadFailed", key: 1, message: "x", failure: "signIn" }], sending()));
+    expect(again.entries[0]).toMatchObject({ status: "waiting", failure: null, error: null });
+  });
+
+  it("other 4xx stop at once and keep Retry", () => {
+    const e = failWith("rejected");
+    expect(e).toMatchObject({ status: "failed", attempt: 0 });
+    expect(retryKind({ ...e, previewUrl: "blob:x" })).toBe("upload");
+  });
+
+  it("a retryable answer waits and tries again", () => {
+    expect(failWith("retryable")).toMatchObject({ status: "backoff", attempt: 1 });
+  });
+
+  it("postScan passes the server's short message and the kind of failure", async () => {
+    const reply = (status: number, json: object) => (async () => Response.json(json, { status })) as unknown as typeof fetch;
+    const job: ScanJob = { mode: "single", clientKey: "k", hint: "", locationId: "", source: [] };
+    expect(await postScan(reply(413, { error: "Too large" }), job)).toEqual({ ok: false, message: "Too large", failure: "final" });
+    expect(await postScan(reply(415, {}), job)).toMatchObject({ ok: false, failure: "final" });
+    expect(await postScan(reply(401, { error: "Please sign in." }), job)).toEqual({ ok: false, message: "Please sign in.", failure: "signIn" });
+    expect(await postScan(reply(404, { error: "Gone" }), job)).toEqual({ ok: false, message: "Gone", failure: "rejected" });
+    expect(await postScan(reply(429, {}), job)).toMatchObject({ ok: false, failure: "retryable" });
+    expect(await postScan(reply(408, {}), job)).toMatchObject({ ok: false, failure: "retryable" });
+    expect(await postScan(reply(502, {}), job)).toMatchObject({ ok: false, failure: "retryable" });
+    // A long body is never shown as the message.
+    expect(await postScan(reply(403, { error: "x".repeat(500) }), job)).toEqual({ ok: false, message: "The server did not accept these photos.", failure: "rejected" });
+  });
+});
+
+describe("upload time limit", () => {
+  /** A fetch that never answers until its signal stops it, like a stalled connection. */
+  const stalled = (async (_url: string, init: RequestInit) =>
+    new Promise((_res, rej) => {
+      init.signal!.addEventListener("abort", () => rej(init.signal!.reason));
+    })) as unknown as typeof fetch;
+  const job: ScanJob = { mode: "single", clientKey: "k", hint: "", locationId: "", source: [] };
+
+  it("is 90 seconds and a timeout is a failure that is tried again", async () => {
+    expect(UPLOAD_TIMEOUT_MS).toBe(90_000);
+    const r = await postScan(stalled, job, 20);
+    expect(r).toEqual({ ok: false, message: UPLOAD_TIMEOUT_MESSAGE, failure: "retryable" });
+  });
+
+  it("sends the time limit signal with every try", async () => {
+    let signal: AbortSignal | undefined;
+    const spy = (async (_u: string, init: RequestInit) => { signal = init.signal ?? undefined; return Response.json({ scanId: 1 }, { status: 201 }); }) as unknown as typeof fetch;
+    await postScan(spy, job);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal!.aborted).toBe(false);
+  });
+
+  it("a stalled upload does not block the queue forever", async () => {
+    let state: QueueState = emptyQueue;
+    const dispatch = (a: QueueAction) => { state = queueReducer(state, a); };
+    const timers: (() => void)[] = [];
+    let calls = 0;
+    const up = createUploader({
+      getState: () => state, dispatch,
+      // Entries 1 and 2 stall; entry 3 would work at once.
+      send: (key) => { calls += 1; return postScan(key === 3 ? (async () => Response.json({ scanId: 9 }, { status: 201 })) as unknown as typeof fetch : stalled, job, 20); },
+      later: (fn) => timers.push(fn), now: () => 0, onSaved: () => {},
+    });
+    [1, 2, 3].forEach((k) => dispatch(add(k)));
+    up.pump();
+    expect(state.entries.map((e) => e.status)).toEqual(["sending", "sending", "waiting"]);
+    await vi.waitFor(() => expect(state.entries[2].status).toBe("reading"));
+    expect(state.entries[0]).toMatchObject({ status: "backoff", attempt: 1, error: UPLOAD_TIMEOUT_MESSAGE });
+    expect(timers.length).toBeGreaterThan(0);
+    expect(calls).toBe(3);
+  });
+});
+
+describe("liveText and canRelease", () => {
+  it("announces counts and the keep open notice", () => {
+    expect(liveText(emptyQueue)).toBe("");
+    const s = run([add(1), add(2), add(3), { type: "sending", key: 3 }, { type: "uploadFailed", key: 3, message: "x", failure: "final" }]);
+    expect(liveText(s)).toBe(`2 saving, 1 not saved. ${KEEP_OPEN_MESSAGE}`);
+    const saved = run([add(1), { type: "sending", key: 1 }, { type: "uploaded", key: 1, scanId: 1, at: 0 }]);
+    expect(liveText(saved)).toBe("1 saved, being read.");
+  });
+
+  it("lets go of photos once read, failed on the server, timed out or refused for good; keeps them while Retry can send them", () => {
+    const up = run([add(1), { type: "sending", key: 1 }, { type: "uploaded", key: 1, scanId: 3, at: 0 }]);
+    expect(canRelease(up.entries[0])).toBe(false);
+    expect(canRelease(run([{ type: "update", scan: view(3, "done", ["ok"]) }], up).entries[0])).toBe(true);
+    expect(canRelease(run([{ type: "update", scan: view(3, "failed") }], up).entries[0])).toBe(true);
+    expect(canRelease(run([{ type: "timeout", key: 1 }], up).entries[0])).toBe(true);
+    const notSaved = run([add(2), { type: "sending", key: 2 }, { type: "uploadFailed", key: 2, message: "x", failure: "rejected" }]);
+    expect(canRelease(notSaved.entries[0])).toBe(false);
+    expect(run([{ type: "released", key: 1 }], run([add(1)])).entries[0].previewUrl).toBeNull();
   });
 });

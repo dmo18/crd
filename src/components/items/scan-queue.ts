@@ -29,6 +29,26 @@ export function waitingText(scan: Pick<ScanView, "status" | "queuePosition"> | n
 /** Seconds to wait before each automatic try after a failed upload: 3 more tries. */
 export const RETRY_DELAYS_MS = [2_000, 8_000, 20_000] as const;
 export const NOT_SAVED_MESSAGE = "Could not send the photos. Check your connection.";
+/** One upload try is stopped after this long and counts as a failed try that is tried again. */
+export const UPLOAD_TIMEOUT_MS = 90_000;
+export const UPLOAD_TIMEOUT_MESSAGE = "Sending took too long. Check your connection.";
+
+/**
+ * Why an upload failed.
+ * - "retryable": no answer, a timeout, a server error, 408 or 429. Tried again on its own, then Retry.
+ * - "rejected": the server refused it (4xx). Stops at once; Retry is offered.
+ * - "final": 400, 413 or 415. Stops at once; trying again cannot help, so no Retry.
+ * - "signIn": 401. Stops at once; Retry is offered with a "Sign in again" link.
+ */
+export type UploadFailure = "retryable" | "rejected" | "final" | "signIn";
+
+/** How a failed answer from the server is handled, by its HTTP status. */
+export function failureFor(status: number): UploadFailure {
+  if (status === 401) return "signIn";
+  if (status === 400 || status === 413 || status === 415) return "final";
+  if (status >= 400 && status < 500 && status !== 408 && status !== 429) return "rejected";
+  return "retryable";
+}
 
 /** "backoff" means the upload failed and the page will try again on its own soon. */
 export type QueueStatus = "waiting" | "sending" | "backoff" | "reading" | "done" | "failed";
@@ -47,6 +67,8 @@ export type QueueEntry = {
   /** When the upload finished (ms), used for the give-up timer. */
   uploadedAt: number | null;
   error: string | null;
+  /** Why the last upload failed, while it is not saved. */
+  failure: UploadFailure | null;
   scan: ScanView | null;
 };
 
@@ -56,7 +78,9 @@ export type QueueState = { entries: QueueEntry[] };
 export type QueueAction =
   | { type: "add"; key: number; clientKey: string; name: string; previewUrl: string | null }
   | { type: "sending"; key: number }
-  | { type: "uploadFailed"; key: number; message: string }
+  | { type: "uploadFailed"; key: number; message: string; failure?: UploadFailure }
+  /** The page let go of the photo preview (the photo is no longer needed or can no longer be sent). */
+  | { type: "released"; key: number }
   | { type: "retryDue"; key: number }
   | { type: "uploaded"; key: number; scanId: number; at: number }
   | { type: "update"; scan: ScanView }
@@ -86,23 +110,29 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       return {
         entries: [
           ...state.entries,
-          { key: action.key, clientKey: action.clientKey, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, attempt: 0, uploadedAt: null, error: null, scan: null },
+          { key: action.key, clientKey: action.clientKey, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, attempt: 0, uploadedAt: null, error: null, failure: null, scan: null },
         ],
       };
     case "sending":
       return patch(state, action.key, (e) => (e.status === "waiting" ? { ...e, status: "sending", error: null } : e));
     case "uploadFailed":
       // Try again on its own 3 times (after 2, 8 and 20 seconds), then give up and keep the photo.
+      // A refusal by the server (most 4xx) stops at once: trying again would get the same answer.
       return patch(state, action.key, (e) => {
         if (e.status !== "sending") return e;
-        if (e.attempt < RETRY_DELAYS_MS.length) return { ...e, status: "backoff", attempt: e.attempt + 1, error: action.message };
-        return { ...e, status: "failed", error: action.message };
+        const failure = action.failure ?? "retryable";
+        if (failure === "retryable" && e.attempt < RETRY_DELAYS_MS.length) {
+          return { ...e, status: "backoff", attempt: e.attempt + 1, error: action.message, failure };
+        }
+        return { ...e, status: "failed", error: action.message, failure };
       });
+    case "released":
+      return patch(state, action.key, (e) => (e.previewUrl === null ? e : { ...e, previewUrl: null }));
     case "retryDue":
       return patch(state, action.key, (e) => (e.status === "backoff" ? { ...e, status: "waiting" } : e));
     case "uploaded":
       return patch(state, action.key, (e) =>
-        e.status === "sending" ? { ...e, status: "reading", scanId: action.scanId, uploadedAt: action.at } : e,
+        e.status === "sending" ? { ...e, status: "reading", scanId: action.scanId, uploadedAt: action.at, error: null, failure: null } : e,
       );
     case "update": {
       const { scan } = action;
@@ -122,7 +152,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "retry":
       // Upload again: only for photos the server never accepted.
       return patch(state, action.key, (e) =>
-        e.status === "failed" && e.scanId === null ? { ...e, status: "waiting", attempt: 0, error: null, scan: null, uploadedAt: null } : e,
+        e.status === "failed" && e.scanId === null ? { ...e, status: "waiting", attempt: 0, error: null, failure: null, scan: null, uploadedAt: null } : e,
       );
     case "requeued":
       // The server runs the same scan again with the photos it already has.
@@ -145,9 +175,9 @@ export type RetryKind = "upload" | "server" | null;
  * page stopped waiting) Retry stays hidden, because uploading again would
  * create a duplicate.
  */
-export function retryKind(e: Pick<QueueEntry, "status" | "scanId" | "scan" | "previewUrl">): RetryKind {
+export function retryKind(e: Pick<QueueEntry, "status" | "scanId" | "scan" | "previewUrl" | "failure">): RetryKind {
   if (e.status !== "failed") return null;
-  if (e.scanId === null) return e.previewUrl !== null ? "upload" : null;
+  if (e.scanId === null) return e.failure !== "final" && e.previewUrl !== null ? "upload" : null;
   return e.scan?.status === "failed" ? "server" : null;
 }
 
@@ -178,6 +208,42 @@ export function summaryText(s: QueueSummary): string {
   if (s.failed > 0) parts.push(`${s.failed} failed`);
   return parts.join(" · ");
 }
+
+/**
+ * True when the page can let go of an entry's photo and preview: the server
+ * has it and is done with it (read, failed on the server, or the page stopped
+ * waiting), or the server refused it for good. A photo that may still be sent
+ * again (Not saved with Retry) is kept.
+ */
+export function canRelease(e: Pick<QueueEntry, "status" | "scanId" | "failure">): boolean {
+  if (e.status === "done") return true;
+  if (e.status !== "failed") return false;
+  return e.scanId !== null || e.failure === "final";
+}
+
+/** The one line read out by screen readers whenever the counts change, for example "2 saving, 1 not saved". */
+export function liveText(state: QueueState): string {
+  let saving = 0, reading = 0, read = 0, notSaved = 0, didNotWork = 0;
+  for (const e of state.entries) {
+    const { kind } = entryState(e);
+    if (kind === "saving") saving += 1;
+    else if (kind === "saved" || kind === "slow") reading += 1;
+    else if (kind === "not_saved") notSaved += 1;
+    else if (kind === "did_not_work") didNotWork += 1;
+    else read += 1;
+  }
+  const parts: string[] = [];
+  if (saving > 0) parts.push(`${saving} saving`);
+  if (reading > 0) parts.push(`${reading} saved, being read`);
+  if (read > 0) parts.push(`${read} read`);
+  if (notSaved > 0) parts.push(`${notSaved} not saved`);
+  if (didNotWork > 0) parts.push(`${didNotWork} did not work`);
+  if (parts.length === 0) return "";
+  const line = parts.join(", ") + ".";
+  return hasUnsaved(state) ? `${line} ${KEEP_OPEN_MESSAGE}` : line;
+}
+
+export const KEEP_OPEN_MESSAGE = "Keep this page open until your photos are saved.";
 
 export function atCap(state: QueueState): boolean {
   return state.entries.length >= MAX_QUEUE;
@@ -241,21 +307,36 @@ export function buildScanBody(job: ScanJob): FormData {
   return body;
 }
 
-export type SendResult = { ok: true; scanId: number } | { ok: false; message: string };
+export type SendResult = { ok: true; scanId: number } | { ok: false; message: string; failure: UploadFailure };
+
+const SERVER_MESSAGE_MAX = 200;
 
 /**
  * One try. Saved only when the server answered 201 (new) or 200 (it already
- * had this clientKey), with a scan id.
+ * had this clientKey), with a scan id. The try is stopped after `timeoutMs`
+ * (90 seconds) so a stalled connection never holds a place in the queue.
  */
-export async function postScan(fetchFn: typeof fetch, job: ScanJob): Promise<SendResult> {
+export async function postScan(fetchFn: typeof fetch, job: ScanJob, timeoutMs: number = UPLOAD_TIMEOUT_MS): Promise<SendResult> {
+  let res: Response;
   try {
-    const res = await fetchFn("/api/scans", { method: "POST", body: buildScanBody(job) });
-    const data = (await res.json().catch(() => ({}))) as { scanId?: number; error?: string };
-    if ((res.status === 201 || res.status === 200) && typeof data.scanId === "number") return { ok: true, scanId: data.scanId };
-    return { ok: false, message: data.error ?? "Something went wrong. Please try again." };
-  } catch {
-    return { ok: false, message: NOT_SAVED_MESSAGE };
+    res = await fetchFn("/api/scans", { method: "POST", body: buildScanBody(job), signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const timedOut = err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+    return { ok: false, message: timedOut ? UPLOAD_TIMEOUT_MESSAGE : NOT_SAVED_MESSAGE, failure: "retryable" };
   }
+  let data: { scanId?: unknown; error?: unknown } = {};
+  try {
+    data = (await res.json()) as typeof data;
+  } catch {
+    // No JSON (for example a proxy error page, or the body timed out): handled by status below.
+  }
+  if ((res.status === 201 || res.status === 200) && typeof data.scanId === "number") return { ok: true, scanId: data.scanId };
+  const failure = failureFor(res.status);
+  // The server's own short message for a refusal; never a long or odd body.
+  const said = typeof data.error === "string" && data.error.trim() !== "" && data.error.length <= SERVER_MESSAGE_MAX ? data.error : null;
+  if (failure === "signIn") return { ok: false, message: said ?? "Please sign in.", failure };
+  if (failure === "retryable") return { ok: false, message: res.status === 429 || res.status >= 500 ? (said ?? NOT_SAVED_MESSAGE) : NOT_SAVED_MESSAGE, failure };
+  return { ok: false, message: said ?? "The server did not accept these photos.", failure };
 }
 
 export type UploaderDeps = {
@@ -281,23 +362,26 @@ export function createUploader(deps: UploaderDeps): { pump: () => void } {
       if (inFlight.has(key)) continue;
       inFlight.add(key);
       deps.dispatch({ type: "sending", key });
-      void deps.send(key).then((r) => {
-        inFlight.delete(key);
-        if (r.ok) {
-          deps.dispatch({ type: "uploaded", key, scanId: r.scanId, at: deps.now() });
-          deps.onSaved(key);
-        } else {
-          deps.dispatch({ type: "uploadFailed", key, message: r.message });
-          const e = deps.getState().entries.find((x) => x.key === key);
-          if (e?.status === "backoff") {
-            deps.later(() => {
-              deps.dispatch({ type: "retryDue", key });
-              pump();
-            }, retryDelayMs(e));
+      void deps
+        .send(key)
+        .catch((): SendResult => ({ ok: false, message: NOT_SAVED_MESSAGE, failure: "retryable" }))
+        .then((r) => {
+          inFlight.delete(key);
+          if (r.ok) {
+            deps.dispatch({ type: "uploaded", key, scanId: r.scanId, at: deps.now() });
+            deps.onSaved(key);
+          } else {
+            deps.dispatch({ type: "uploadFailed", key, message: r.message, failure: r.failure });
+            const e = deps.getState().entries.find((x) => x.key === key);
+            if (e?.status === "backoff") {
+              deps.later(() => {
+                deps.dispatch({ type: "retryDue", key });
+                pump();
+              }, retryDelayMs(e));
+            }
           }
-        }
-        pump();
-      });
+          pump();
+        });
     }
   }
   return { pump };

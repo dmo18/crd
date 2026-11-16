@@ -1,3 +1,4 @@
+import { ScanQueueProvider } from "@/components/items/ScanQueueProvider";
 import { TabBar } from "@/components/nav/TabBar";
 import { requireOwner } from "@/lib/auth/guard";
 import { startPhotoArchiver } from "@/lib/images/archive";
@@ -14,12 +15,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // while no scan is being read. Does nothing when it is already running.
   void startPhotoArchiver({ busy: scanQueueBusy });
   return (
-    <>
+    <ScanQueueProvider>
       <main className="mx-auto w-full max-w-xl flex-1 p-4 pb-28">
         {children}
         <footer className="mt-8 text-center text-xs text-muted">{appVersion()}</footer>
       </main>
       <TabBar reviewCount={reviewCount()} />
-    </>
+    </ScanQueueProvider>
   );
 }

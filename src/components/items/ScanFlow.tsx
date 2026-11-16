@@ -6,19 +6,16 @@ import { PhotoPicker } from "@/components/capture/PhotoPicker";
 import { shrinkPhoto } from "@/components/capture/shrink";
 import { Badge, Button, Card, INPUT_CLASS, LinkButton, Notice } from "@/components/ui";
 import type { ScanMode } from "@/db/schema";
-import type { ScanView } from "@/lib/scans/view";
 import {
-  atCap, createUploader, emptyQueue, entryState, hasUnsaved, MAX_QUEUE, postScan, queueReducer, retryKind, scanTimedOut, summary,
-  summaryText, waitingText, type QueueAction, type QueueEntry, type QueueState, type ScanJob,
+  atCap, entryState, hasUnsaved, KEEP_OPEN_MESSAGE, liveText, MAX_QUEUE, retryKind, summary, summaryText, waitingText, type QueueEntry,
 } from "./scan-queue";
+import { useScanQueue } from "./ScanQueueProvider";
 
 type Rules = Record<ScanMode, { min: number; max: number }>;
 type Choice = ScanMode | "rapid";
 export type LocationOption = { id: number; name: string };
 
 const LOCATION_KEY = "crd.scan.location";
-const POLL_MS = 2000;
-const SAVED_EVENT = "crd:scan-saved";
 const BUTTON_LABEL = "inline-flex min-h-11 w-full cursor-pointer items-center justify-center rounded-xl px-4 py-3 text-base font-semibold has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent";
 
 const MODES: { value: Choice; title: string; text: string }[] = [
@@ -40,14 +37,10 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
   const [back, setBack] = useState<File[]>([]);
   const [source, setSource] = useState<File[]>([]);
   const [hint, setHint] = useState("");
-  const [state, setState] = useState<QueueState>(emptyQueue);
+  // The list and the uploads live in the (app) layout, so they keep going on other pages.
+  const { state, store } = useScanQueue();
 
-  // Latest values for code that runs later (timers, uploads, polling).
-  const stateRef = useRef<QueueState>(emptyQueue);
-  const jobs = useRef(new Map<number, ScanJob>());
-  const previews = useRef(new Map<number, string>());
-  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
-  const nextKey = useRef(1);
+  // Latest form values for photos still being shrunk after the tap.
   const hintRef = useRef(hint);
   const locationRef = useRef(locationId);
   useEffect(() => {
@@ -55,105 +48,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
     locationRef.current = locationId;
   });
 
-  function release(key: number) {
-    const url = previews.current.get(key);
-    if (url) URL.revokeObjectURL(url);
-    previews.current.delete(key);
-    jobs.current.delete(key);
-  }
-
-  function dispatch(action: QueueAction) {
-    stateRef.current = queueReducer(stateRef.current, action);
-    setState(stateRef.current);
-  }
-
-  const uploaderRef = useRef<ReturnType<typeof createUploader> | null>(null);
-
-  // Start waiting entries whenever something changes.
-  useEffect(() => {
-    uploaderRef.current ??= createUploader({
-      getState: () => stateRef.current,
-      dispatch,
-      send: async (key) => {
-        const job = jobs.current.get(key);
-        if (!job) return { ok: false, message: "This photo is no longer on the page. Take it again." };
-        return postScan(fetch, job);
-      },
-      later: (fn, ms) => {
-        const id = setTimeout(() => {
-          timers.current.delete(id);
-          fn();
-        }, ms);
-        timers.current.add(id);
-      },
-      now: () => Date.now(),
-      onSaved: (key) => {
-        // The server has the photos: the page can let go of the files.
-        const job = jobs.current.get(key);
-        if (job) jobs.current.set(key, { ...job, front: undefined, back: undefined, source: [] });
-        window.dispatchEvent(new Event(SAVED_EVENT));
-      },
-    });
-    uploaderRef.current.pump();
-  }, [state]);
-
-  // Leave warning while anything is not yet on the server.
   const unsaved = hasUnsaved(state);
-  useEffect(() => {
-    if (!unsaved) return;
-    const warn = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [unsaved]);
-
-  // One timer checks every saved entry that is still being read.
-  const polling = state.entries.some((e) => e.status === "reading");
-  useEffect(() => {
-    if (!polling) return;
-    let stopped = false;
-    const timer = setInterval(() => {
-      for (const e of stateRef.current.entries) {
-        if (e.status !== "reading" || e.scanId === null) continue;
-        // Only a scan the server has been reading for over 6 minutes is given up on;
-        // one waiting in line keeps being checked.
-        if (scanTimedOut(e.scan)) {
-          dispatch({ type: "timeout", key: e.key });
-          continue;
-        }
-        void (async () => {
-          try {
-            const res = await fetch(`/api/scans/${e.scanId}`, { cache: "no-store" });
-            if (stopped || !res.ok) return;
-            const scan = (await res.json()) as ScanView;
-            if (stopped) return;
-            dispatch({ type: "update", scan });
-            if (scan.status === "done") release(e.key);
-          } catch {
-            // A short network blip: try again on the next tick.
-          }
-        })();
-      }
-    }, POLL_MS);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-    };
-  }, [polling]);
-
-  // Let go of timers and photo previews when the screen closes.
-  useEffect(() => {
-    const held = previews.current;
-    const pending = timers.current;
-    return () => {
-      for (const url of held.values()) URL.revokeObjectURL(url);
-      held.clear();
-      for (const id of pending) clearTimeout(id);
-      pending.clear();
-    };
-  }, []);
 
   // Restore the remembered location after the first render (localStorage is browser only).
   useEffect(() => {
@@ -182,18 +77,6 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
     setSource([]);
   }
 
-  /** Puts one scan in the list, to be sent. The form is free again at once. */
-  function enqueue(job: Omit<ScanJob, "clientKey">, preview: File, name: string) {
-    if (atCap(stateRef.current)) return false;
-    const key = nextKey.current++;
-    const clientKey = crypto.randomUUID();
-    const url = URL.createObjectURL(preview);
-    jobs.current.set(key, { ...job, clientKey });
-    previews.current.set(key, url);
-    dispatch({ type: "add", key, clientKey, name, previewUrl: url });
-    return true;
-  }
-
   const single = mode === "single";
   const ready = single ? front.length >= rules.single.min : source.length >= rules[mode].min;
   const full = state.entries.length >= MAX_QUEUE;
@@ -201,7 +84,8 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
   function save() {
     if (!ready || full) return;
     const files = single ? [front[0], back[0]].filter(Boolean) : source;
-    const ok = enqueue(
+    // Puts one scan in the list, to be sent. The form is free again at once.
+    const ok = store.enqueue(
       { mode, hint, locationId, front: single ? front[0] : undefined, back: single ? back[0] : undefined, source: single ? [] : source },
       files[0],
       MODE_NAME[mode],
@@ -215,32 +99,15 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
 
   async function take(picked: File[]) {
     for (const original of picked) {
-      if (atCap(stateRef.current)) break;
+      if (atCap(store.getState())) break;
       const photo = await shrinkPhoto(original);
       // Add straight away: the cap check sees this photo before the next one is looked at.
-      enqueue({ mode: "single", hint: hintRef.current, locationId: locationRef.current, front: photo, source: [] }, photo, photo.name);
+      store.enqueue({ mode: "single", hint: hintRef.current, locationId: locationRef.current, front: photo, source: [] }, photo, photo.name);
     }
   }
 
-  /** Retry: send the photo again if the server never got it; otherwise run the same scan again on the server. */
-  async function retry(entry: QueueEntry) {
-    const kind = retryKind(entry);
-    if (kind === "upload") {
-      dispatch({ type: "retry", key: entry.key });
-      return;
-    }
-    if (kind !== "server" || entry.scanId === null) return;
-    try {
-      const res = await fetch(`/api/scans/${entry.scanId}/retry`, { method: "POST" });
-      const data = (await res.json().catch(() => null)) as (ScanView & { error?: string }) | null;
-      if (res.ok) dispatch({ type: "requeued", key: entry.key, scan: data });
-      else dispatch({ type: "retryError", key: entry.key, message: data?.error ?? "Could not try again. Please try later." });
-    } catch {
-      dispatch({ type: "retryError", key: entry.key, message: "Could not reach the server. Check your connection and try again." });
-    }
-  }
-
-  const list = [...state.entries].reverse();
+  // Newest first; each keeps its number in this visit (1 is the first one saved).
+  const list = state.entries.map((entry, i) => ({ entry, n: i + 1 })).reverse();
 
   return (
     <div className="flex flex-col gap-6">
@@ -359,18 +226,21 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
         )}
       </form>
 
-      {full ? <Notice tone="warn">That is the most for one visit. Open Review or Inventory, then come back.</Notice> : null}
+      {full ? <Notice tone="warn">That is the most for one visit. When all are saved, reload this page to start a new list.</Notice> : null}
 
-      {unsaved ? <Notice tone="warn">Keep this page open until your photos are saved.</Notice> : null}
+      {/* Always on the page, so screen readers hear every change in the counts and the keep open notice. */}
+      <p role="status" aria-live="polite" className="sr-only">{liveText(state)}</p>
+
+      {unsaved ? <Notice tone="warn">{KEEP_OPEN_MESSAGE}</Notice> : null}
 
       {list.length > 0 ? (
         <section aria-labelledby="scan-entries" className="flex flex-col gap-3">
           <h2 id="scan-entries" className="text-lg font-semibold">This visit</h2>
-          <p aria-live="polite" role="status" className="text-sm font-semibold">{summaryText(summary(state))}</p>
+          <p className="text-sm font-semibold">{summaryText(summary(state))}</p>
           <ul className="flex flex-col gap-3">
-            {list.map((e) => (
-              <li key={e.key}>
-                <EntryRow entry={e} onRetry={() => void retry(e)} />
+            {list.map(({ entry, n }) => (
+              <li key={entry.key}>
+                <EntryRow entry={entry} n={n} onRetry={() => void store.retry(entry.key)} />
               </li>
             ))}
           </ul>
@@ -384,7 +254,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
   );
 }
 
-function EntryRow({ entry, onRetry }: { entry: QueueEntry; onRetry: () => void }) {
+function EntryRow({ entry, n, onRetry }: { entry: QueueEntry; n: number; onRetry: () => void }) {
   const { kind, text } = entryState(entry);
   const kindOfRetry = retryKind(entry);
   const items = entry.scan?.items ?? [];
@@ -405,11 +275,12 @@ function EntryRow({ entry, onRetry }: { entry: QueueEntry; onRetry: () => void }
       ) : entry.previewUrl ? (
         // Local preview of the photo just taken; not a server image.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={entry.previewUrl} alt={`Photo: ${entry.name}`} className="size-16 shrink-0 rounded-lg bg-surface-2 object-cover" />
+        <img src={entry.previewUrl} alt={`Photo for scan ${n}`} className="size-16 shrink-0 rounded-lg bg-surface-2 object-cover" />
       ) : (
         <div aria-hidden="true" className="size-16 shrink-0 rounded-lg bg-surface-2" />
       )}
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <p className="text-xs text-muted break-words">Scan {n}: {entry.name}</p>
         <p className={`font-semibold ${tone}`}>{kind === "read" || kind === "check" ? (kind === "check" ? text : "Read") : text}</p>
         {wait ? <p className="text-sm text-muted">{wait}</p> : null}
         {kind === "saving" && entry.status === "backoff" && entry.error ? <p className="text-sm text-muted">{entry.error}</p> : null}
@@ -427,7 +298,7 @@ function EntryRow({ entry, onRetry }: { entry: QueueEntry; onRetry: () => void }
         {kind === "check" ? (
           <div className="flex flex-wrap gap-2">
             <Badge tone="warn">Needs a look</Badge>
-            <Link href="/review" className="inline-flex min-h-11 items-center text-accent underline">Check in Review</Link>
+            <Link href="/review" aria-label={`Check scan ${n} in Review`} className="inline-flex min-h-11 items-center text-accent underline">Check in Review</Link>
           </div>
         ) : null}
         {kind === "slow" ? (
@@ -435,11 +306,26 @@ function EntryRow({ entry, onRetry }: { entry: QueueEntry; onRetry: () => void }
         ) : null}
         {entry.status === "failed" ? (
           <>
-            {kind !== "slow" ? <p role="alert" className="text-sm break-words text-danger">{entry.error}</p> : null}
+            {kind !== "slow" ? <p className="text-sm break-words text-danger">{entry.error}</p> : null}
+            {entry.failure === "signIn" && entry.scanId === null ? (
+              // A new tab, so this page keeps the photos while the owner signs in.
+              <a
+                href="/login"
+                target="_blank"
+                rel="noopener"
+                aria-label={`Sign in again for scan ${n}, opens a new tab`}
+                className="inline-flex min-h-11 items-center text-accent underline"
+              >
+                Sign in again
+              </a>
+            ) : null}
+            {entry.failure === "signIn" && kindOfRetry ? <p className="text-sm text-muted">Sign in, then come back and tap Retry.</p> : null}
             {kindOfRetry ? (
-              <Button variant="secondary" onClick={onRetry} aria-label={`Retry: ${entry.name}`}>Retry</Button>
+              <Button variant="secondary" onClick={onRetry} aria-label={`Retry scan ${n}`}>Retry</Button>
             ) : entry.scanId === null ? (
-              <p className="text-sm text-muted">The photo is no longer on this page. Take it again.</p>
+              <p className="text-sm text-muted">
+                {entry.failure === "final" ? "Trying again will not help. Take the photos again." : "The photo is no longer on this page. Take it again."}
+              </p>
             ) : null}
           </>
         ) : null}
