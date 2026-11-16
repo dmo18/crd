@@ -166,17 +166,25 @@ Create the Cloudflare Access applications **before** the tunnel routes. A route
 is live the moment it is saved; without its Access application the dashboard
 or the terminal would be reachable without a sign-in for that time.
 
-Routes (tunnel, **Routes**, **Published application**), in this order
-(Cloudflare uses the first that matches):
+Access applications (Zero Trust, **Access controls**, **Applications**,
+Self-hosted): one for `admin.example.com` (Allow: your email) and one for
+`admin-ssh.example.com` (Allow: your email, no Bypass, browser rendering SSH).
+An address without an Access application is open, so other sites on a shared
+domain are not affected.
+
+Routes (tunnel, **Routes**, **Published application**); the routes with a path
+must stay above the one without (Cloudflare uses the first that matches):
 
 | # | Subdomain | Path | Service |
 | --- | --- | --- | --- |
-| 1 | `admin` | `^/webhooks/source/github/events(/manual)?$` | HTTP, `127.0.0.1:8000` (GitHub tells Coolify to deploy) |
-| 2 | `admin` | `^/app/` | HTTP, `127.0.0.1:6001` (live updates) |
-| 3 | `admin` | `^/terminal/ws` | HTTP, `127.0.0.1:6002` (Coolify's terminal) |
-| 4 | `admin` | (empty) | HTTP, `127.0.0.1:8000` (Coolify dashboard) |
-| 5 | `ssh` | (empty) | SSH, `127.0.0.1:22` (terminal in the browser) |
-| 6 | `*` | (empty) | HTTP, `127.0.0.1:80` (all apps, through Coolify's proxy) |
+| 1 | `admin` | `^/app/` | `http://127.0.0.1:6001` (live updates) |
+| 2 | `admin` | `^/terminal/ws` | `http://127.0.0.1:6002` (Coolify's terminal) |
+| 3 | `admin` | (empty) | `http://127.0.0.1:8000` (Coolify dashboard) |
+| 4 | `admin-ssh` | (empty) | `ssh://127.0.0.1:22` (terminal in the browser) |
+
+Each app then gets its own route, for example `cards` to
+`http://127.0.0.1:80` (through Coolify's proxy). Never leave the subdomain
+empty: that is the main site of the domain.
 
 Notes:
 
@@ -184,18 +192,15 @@ Notes:
   would also catch dashboard pages such as `/project/.../application/...`.
 - `127.0.0.1` instead of `localhost`: Coolify's ports do not answer on the
   IPv6 address that `localhost` can mean (Coolify's guide gives this fix).
-- GitHub webhooks: GitHub cannot sign in to Cloudflare Access, so the webhook
-  address needs a **Bypass** Access application for `admin.example.com` with
-  path `webhooks/source/github/events` (Coolify's address is
-  `/webhooks/source/github/events/manual`, see Coolify's `routes/webhooks.php`;
-  Coolify still checks the webhook secret). Route 1 must **not** have "Protect
-  with Access" turned on, because a bypassed request carries no Access token;
-  routes 2 to 5 should have it.
+- No GitHub webhook route: deploys happen when you click Deploy in Coolify, so
+  updates only go live with your approval.
+- No wildcard: the current Cloudflare screens do not offer `*` for published
+  applications, and on a shared domain one route per app is clearer.
 
 ### Browser SSH with short-lived certificates
 
 There is no password for SSH at all, not even through the tunnel. When you open
-`https://ssh.example.com` and pass the Cloudflare sign-in, Cloudflare creates
+`https://admin-ssh.example.com` and pass the Cloudflare sign-in, Cloudflare creates
 an SSH certificate for you that is valid for a few minutes, signed by your
 Cloudflare account's SSH CA. The server trusts that CA and nothing else:
 
@@ -226,7 +231,7 @@ AuthorizedPrincipalsFile /etc/ssh/principals/%u
 
 Where the key comes from: Cloudflare dashboard, **Zero Trust**, **Access
 controls**, **Service credentials**, **SSH**, **Add a certificate**, choose the
-browser SSH application (`ssh.example.com`), **Generate certificate**, then
+browser SSH application (`admin-ssh.example.com`), **Generate certificate**, then
 copy the **CA public key** (one line, starts with `ecdsa-sha2-nistp256`).
 
 Tested in a container with a locally made CA: a certificate for the mapped

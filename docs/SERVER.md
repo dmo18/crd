@@ -17,13 +17,13 @@ Cloudflare and Coolify.
 | 3 | Console window | Install Ubuntu with the defaults. Server's name `appy`. Write down the username and password |
 | 4 | Cloudflare Zero Trust | Networks, Tunnels, Create a tunnel, Cloudflared, name `appy`. Copy the token (starts `eyJ`) |
 | 5 | Console window | Paste the setup command (below). Answer: token, your email, Enter to skip the SSH key, `n` for alerts. Write down the temporary Coolify password it prints |
-| 6 | Cloudflare Zero Trust | Access, Applications: add the five sign-in rules (below) |
-| 7 | Cloudflare | Tunnel `appy`, Public Hostname: add the six routes (below), then one DNS record: CNAME `*` to `TUNNEL-ID.cfargotunnel.com`, proxied |
-| 8 | Cloudflare, console | Access, Service credentials, SSH: generate a certificate for "Browser SSH", copy the public key, run `sudo server-ssh-ca set` and paste it. Terminal is then at `https://appy-ssh.yourdomain.com` |
+| 6 | Cloudflare Zero Trust | Access controls, Applications: add the two sign-in rules (below) |
+| 7 | Cloudflare | Tunnel `appy`, Routes: add the four routes (below). Cloudflare makes their DNS records |
+| 8 | Cloudflare, console | Access controls, Service credentials, tab SSH (not Service Tokens), Add a certificate, Application `appy-ssh`, Generate certificate. Copy the public key, run `sudo server-ssh-ca set` and paste it. Terminal is then at `https://appy-ssh.yourdomain.com`, user name `owner` |
 | 9 | `https://appy.yourdomain.com` | Sign in with the temporary password, choose "This Machine", Settings: domain `https://appy.yourdomain.com`, Registration off, Auto Update off. Profile: new password and two-factor. Then run the cleanup command (below) |
 | 10 | Browser terminal | `sudo server-alert setup` (Telegram or Discord) |
 | 11 | Browser terminal | `sudo server-backup setup`, save the passphrase, then `sudo server-backup run` |
-| 12 | Coolify | New project, Public Repository `https://github.com/dmo18/crd`, Build Pack Docker Compose, Domain `https://cards.yourdomain.com:3000`, HTTPS redirect off, variable `CLIENT_IP_HEADER` = `cf-connecting-ip`, Deploy |
+| 12 | Coolify, Cloudflare | New project, Public Repository `https://github.com/dmo18/crd`, Build Pack Docker Compose, Domain `https://cards.yourdomain.com:3000`, HTTPS redirect off, variable `CLIENT_IP_HEADER` = `cf-connecting-ip`, Deploy. Then tunnel route `cards` to `http://127.0.0.1:80` (no sign-in rule: Card Vault has its own password) |
 | 13 | Coolify, phone | Copy `SETUP_CODE` from Environment Variables, open `https://cards.yourdomain.com`, Set your password, scan a card |
 | 14 | Browser terminal | `sudo server-check` |
 
@@ -33,31 +33,32 @@ cd ~ && rm -rf crd-main && curl -fsSL https://github.com/dmo18/crd/archive/refs/
 ```
 In the Hyper-V console paste with **Clipboard, Type clipboard text**.
 
-## Step 6 sign-in rules (create before the routes, in this order)
-Your domain is shared: first write down every orange-cloud name under your
-domain's DNS, Records. They all go into rule 1, or they will ask visitors to
-sign in once rule 5 is saved.
+## Step 6 sign-in rules (create before the routes)
+An address with a sign-in rule asks for your email code first; an address
+without one is open. So your other sites on this domain are not affected.
 
-| # | Name | Subdomain | Path | Action | Include |
+| # | Name | Subdomain | Path | Policies | Extra |
 |---|---|---|---|---|---|
-| 1 | Public apps | `cards` plus every existing orange-cloud name | | Bypass | Everyone |
-| 2 | Server dashboard | `appy` | | Allow | Emails: yours |
-| 3 | Browser SSH (Browser rendering: SSH) | `appy-ssh` | | Allow | Emails: yours |
-| 4 | GitHub notices | `appy` | `webhooks/source/github/events` | Bypass | Everyone |
-| 5 | All apps (private), last | `*` | | Allow | Emails: yours |
+| 1 | Server dashboard | `appy` | | Allow: your email (Bypass for your office is fine) | |
+| 2 | Browser SSH | `appy-ssh` | | Allow: your email, **no Bypass** | Browser-based sessions on, protocol SSH |
 
-Never put `appy`, `appy-ssh` or `*` in rule 1. When you add a new subdomain
-to your domain later, for anything, add it to rule 1 if it should stay open.
+A Bypass on rule 2 breaks the browser terminal: no sign-in means no certificate.
 
-## Step 7 routes (in this order)
-| # | Subdomain | Path | Type | URL |
-|---|---|---|---|---|
-| 0 | `appy` | `^/webhooks/source/github/events(/manual)?$` | HTTP | `127.0.0.1:8000` |
-| 1 | `appy` | `^/app/` | HTTP | `127.0.0.1:6001` |
-| 2 | `appy` | `^/terminal/ws` | HTTP | `127.0.0.1:6002` |
-| 3 | `appy` | | HTTP | `127.0.0.1:8000` |
-| 4 | `appy-ssh` | | SSH | `127.0.0.1:22` |
-| 5 | `*` | | HTTP | `127.0.0.1:80` |
+## Step 7 routes (paths above the empty one)
+| # | Subdomain | Path | Service URL |
+|---|---|---|---|
+| 1 | `appy` | `^/app/` | `http://127.0.0.1:6001` |
+| 2 | `appy` | `^/terminal/ws` | `http://127.0.0.1:6002` |
+| 3 | `appy` | | `http://127.0.0.1:8000` |
+| 4 | `appy-ssh` | | `ssh://127.0.0.1:22` |
+
+Never leave the subdomain empty: that is your main site. Each app gets its
+own route later (for example `cards` to `http://127.0.0.1:80`).
+
+## PuTTY from your own network (optional)
+The setup turns off password SSH. To allow PuTTY from your local network
+only: `curl -sL github.com/dmo18/crd/raw/main/lan-ssh | sudo bash`
+(add `-s off` to undo).
 
 ## Step 9 cleanup command
 ```
@@ -69,7 +70,7 @@ sudo rm -f /root/coolify-first-login.txt && sudo sed -i '/^ROOT_USER_PASSWORD=/d
 |---|---|
 | Something looks wrong | `sudo server-support`, `sudo cat` the file it names, paste the text to Claude (secrets are removed) |
 | Updates are waiting | `sudo server-update` (backs up first, asks before restarting). Only security patches install by themselves |
-| Add another app | Coolify, new resource, Domain `https://name.yourdomain.com`, Deploy. Private until `name` is added to "Public apps" (step 6, rule 1) |
+| Add another app | Coolify, new resource, Domain `https://name.yourdomain.com:PORT`, Deploy. Then tunnel route `name` to `http://127.0.0.1:80`. Public unless you add a sign-in rule for `name` |
 | The server is lost | Steps 2, 3 and 5 on a new machine, then `sudo server-backup restore-dr` with the backup passphrase |
 | Locked out | The Hyper-V console always works |
 | AI agent on the server | `sudo -iu ops-agent`. It can only look; approve one change with `sudo server-agent-grant "<command>" 30m` |
