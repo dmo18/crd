@@ -28,13 +28,21 @@ export type CatalogCard = {
 
 export type CatalogFailure = "off" | "paused" | "cap" | "busy" | "failed";
 
-export type CatalogResult<T> = { ok: true; value: T; fromStore: boolean } | { ok: false; reason: CatalogFailure };
+/**
+ * `tries`: network tries the gate made for this call (a call it retried once
+ * cost 2). Left out by simple fakes: then a fresh answer or a failed call
+ * counts 1 and anything else 0.
+ */
+export type CatalogResult<T> = { ok: true; value: T; fromStore: boolean; tries?: number } | { ok: false; reason: CatalogFailure; tries?: number };
+
+/** Limits one call may be given. `maxTries`: most network tries, the first included. */
+export type CallLimits = { maxTries?: number };
 
 export type Line = "now" | "background";
 
 export interface Catalog {
-  search(q: { text: string; sport?: Sport; year?: number; limit?: number }, line: Line): Promise<CatalogResult<CatalogCard[]>>;
-  card(sourceId: string, line: Line): Promise<CatalogResult<CatalogCard | null>>;
+  search(q: { text: string; sport?: Sport; year?: number; limit?: number }, line: Line, limits?: CallLimits): Promise<CatalogResult<CatalogCard[]>>;
+  card(sourceId: string, line: Line, limits?: CallLimits): Promise<CatalogResult<CatalogCard | null>>;
   /** At most the first 500 cards: the source cannot page past that (`complete: false` then). */
-  checklist(sourceSetId: string, line: Line): Promise<CatalogResult<{ cards: CatalogCard[]; complete: boolean }>>;
+  checklist(sourceSetId: string, line: Line, limits?: CallLimits): Promise<CatalogResult<{ cards: CatalogCard[]; complete: boolean }>>;
 }

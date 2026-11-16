@@ -2,9 +2,28 @@
 
 ## Milestone 10: the card catalog (in progress, branch work/m10)
 - 10.6 matching (`src/lib/catalog/match.ts`, `lookup.ts`): timing on this
-  server (median of 7 runs): turning the 500 row checklist 9179 into slim
-  rows once 1.3 ms; judging it with 5 spellings 4.7 ms; 800 names with 5
-  spellings 8.3 ms (limit 50 ms).
+  server after the 10.6c rework (median of 7 runs): turning the 500 row
+  checklist 9179 into slim rows once about 2.3 ms; judging it with 5
+  spellings about 4.9 ms; 800 names with 5 spellings about 12.6 ms (limit
+  50 ms).
+- 10.6c (rework after the failed review): a checklist that was cut short
+  never makes a card sure by name alone; one confirm search decides.
+  Subset cards need the read number. Any variation is never sure. The sport
+  is part of the set key and memory lives only for one scan. Every network
+  try counts in the budgets (8 per card, 40 per scan), one retry at most,
+  and a "busy" answer stops catalog calls for the rest of the scan.
+- 10.6c choices made inside the settled rules (for the next review):
+  an initial or a missing first name does not pick one player when the part
+  of the checklist we have shows other players of that surname ("D Smith");
+  with the checklist in memory a card gets at most one search (the number
+  search for a card past the cut, or the confirm search); with no sport
+  read, nothing is sure by name alone and the scan's memory is not used;
+  a card of several players counts as a subset card.
+- Known limit: the confirm search asks for the checklist's own name, so
+  "Griffey" or "Ken Griffey" without Jr. is applied as Jr. #336 (it waits
+  in Review at 0.7) although a Ken Griffey Sr. card may sit past the cut. The
+  confirm search uses limit 10; a player with more than 10 rows that year
+  could hide a second base card.
 - Known gap: a misread name with no number and no earlier clean hit of the
   same year and brand finds no base set id (the broad "year brand" search
   gives only noise, see CATALOG-TRIAL.md), so no checklist is fetched.

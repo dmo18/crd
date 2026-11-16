@@ -45,6 +45,11 @@ export type CallOptions = {
   cache?: { args?: Record<string, string | number | boolean | null | undefined>; kindOf: (body: string) => CacheKind | null };
   /** Overrides the source's timeout (a checklist gets 10 s). At most 10 s. */
   timeoutMs?: number;
+  /**
+   * Most network tries for this call, the first one included (a scan's catalog
+   * calls pass 2: one retry). Never more than the source's own retry plan.
+   */
+  maxTries?: number;
   fetchImpl?: typeof fetch;
   /** Which database (and so which gate) to use. Default: the app's. */
   db?: Db;
@@ -54,9 +59,12 @@ export type OutsideFailure =
   | "off" | "needs_key" | "paused" | "capped" | "busy" | "timeout" | "network" | "server" | "http"
   | "slow_down" | "too_large" | "redirect" | "bad_request";
 
-export type OutsideResult =
+type Outcome =
   | { ok: true; status: number; body: string; fromStore: boolean; ms: number }
   | { ok: false; reason: OutsideFailure; status: number | null; message: string; errorKind: string; retryAt: Date | null };
+
+/** `tries`: how many network tries this call made (0 for a stored answer or a call that never left). */
+export type OutsideResult = Outcome & { tries: number };
 
 /**
  * One overall deadline for a `now` call: queue, tries and the waits between
@@ -96,7 +104,7 @@ const ERROR_KINDS: Record<OutsideFailure, string> = {
   too_large: "TooLarge", redirect: "Redirect", bad_request: "BadRequest",
 };
 
-function fail(reason: OutsideFailure, status: number | null = null, retryAt: Date | null = null): OutsideResult {
+function fail(reason: OutsideFailure, status: number | null = null, retryAt: Date | null = null): Outcome {
   return { ok: false, reason, status, message: MESSAGES[reason], errorKind: ERROR_KINDS[reason], retryAt };
 }
 
@@ -277,7 +285,7 @@ export class Gate {
   // ---------- switch, pause, caps ----------
 
   /** Why a call to this source may not start now, or null. A cap counts as skipped. */
-  private blocked(source: SourceId, nowMs: number): OutsideResult | null {
+  private blocked(source: SourceId, nowMs: number): Outcome | null {
     const src = SOURCES[source];
     const state = getSourceState(this.db, source);
     if (!state.enabled) return fail("off");
@@ -351,6 +359,12 @@ export class Gate {
   // ---------- the call ----------
 
   async call(source: SourceId, request: OutsideRequest, options: CallOptions = {}): Promise<OutsideResult> {
+    const count = { tries: 0 };
+    const outcome = await this.run(source, request, options, count);
+    return { ...outcome, tries: count.tries };
+  }
+
+  private async run(source: SourceId, request: OutsideRequest, options: CallOptions, count: { tries: number }): Promise<Outcome> {
     const src = SOURCES[source];
     const db = this.db;
     const line = options.line ?? "background";
@@ -389,6 +403,8 @@ export class Gate {
     const deadline = line === "now" ? startedAll + NOW_DEADLINE_MS : null;
     const left = () => (deadline === null ? Infinity : deadline - this.clock.now());
     const safeToRepeat = request.safeToRepeat ?? src.repeatSafeTools.includes(request.tool);
+    const asked = Number(options.maxTries);
+    const maxTries = Number.isFinite(asked) ? Math.max(1, Math.trunc(asked)) : Infinity;
 
     for (let tryNo = 0; ; tryNo++) {
       const before = this.blocked(source, this.clock.now());
@@ -413,6 +429,7 @@ export class Gate {
         cut = room < timeoutMs;
         this.recentStarts(source).push(startAt);
         bumpUsage(db, source, startAt, { calls: 1, waitMs: startAt - queuedAt });
+        count.tries++;
         result = await this.attempt(src, built.url, built.init, cut ? room : timeoutMs, fetchImpl, secretHeader);
       } finally {
         this.release();
@@ -451,7 +468,7 @@ export class Gate {
       }
       if (deadlineCut) return fail("busy");
 
-      if (failedTry && safeToRepeat && !paused && tryNo < src.retryDelaysMs.length) {
+      if (failedTry && safeToRepeat && !paused && tryNo < src.retryDelaysMs.length && tryNo + 1 < maxTries) {
         const waitMs = src.retryDelaysMs[tryNo] + Math.floor(this.random() * RETRY_SPREAD_MS);
         // A `now` call whose next try could not start before the deadline stops here.
         if (waitMs >= left()) return fail("busy");

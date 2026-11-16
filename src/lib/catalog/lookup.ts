@@ -1,10 +1,10 @@
 import type { Sport } from "@/db/schema";
 import { REVIEW_THRESHOLD } from "@/lib/recognition/types";
-import type { Catalog, CatalogCard, CatalogFailure, Line } from "./types";
+import type { CallLimits, Catalog, CatalogCard, CatalogFailure, CatalogResult, Line } from "./types";
 import { createMyCardfolio } from "./mycardfolio";
 import { cleanCardNumber, setIdFromUrl, splitProduct } from "./clean";
 import { normalizeBrand } from "./normalize";
-import { MAX_CANDIDATES, judge, matchRead, slimRows, type Candidate, type Judgement, type MatchRead, type SlimRow } from "./match";
+import { MAX_CANDIDATES, judge, judgeConfirm, matchRead, slimRows, type Candidate, type Judgement, type MatchRead, type SlimRow } from "./match";
 
 /**
  * The look up of one read card in the catalog: spends calls, then lets
@@ -33,7 +33,7 @@ export type LookupResult = {
   sureBy: Judgement["sureBy"];
   /** Up to 5, best first, for Review. */
   candidates: Candidate[];
-  /** Outside calls made for this card (stored answers do not count). */
+  /** Network tries made for this card: a call the gate tried again counts each try; stored answers count 0. */
   callsUsed: number;
   /** Why the look up stopped before its end, if it did. */
   stopped: LookupStop | null;
@@ -46,6 +46,8 @@ export const CHECK_CONFIDENCE = 0.7;
 /** Small answers only: a search with limit 50 took 7 s in the probe. */
 const SEARCH_LIMIT = 10;
 const MAX_SETS = 2;
+/** Catalog calls from a scan: the first try and at most one retry. */
+const MAX_TRIES = 2;
 /**
  * Cold start (no set id known yet): "year brand 1", then "year brand 2", each
  * with limit 5, until a clean Base Set card teaches the set id. At most 2
@@ -54,21 +56,7 @@ const MAX_SETS = 2;
 const DISCOVERY_NUMBERS = ["1", "2"] as const;
 const DISCOVERY_LIMIT = 5;
 
-/** One per scan (a photo with many cards): the 40 call budget and what was learned on the way. */
-export type ScanBudget = {
-  used: number;
-  max: number;
-  /** off, paused or cap: no more calls for the rest of the scan. */
-  stopped: CatalogFailure | null;
-  /** "1990|topps" to the base set id, learned from clean answers. */
-  setIds: Map<string, string>;
-};
-
-export function createScanBudget(max = SCAN_CALLS): ScanBudget {
-  return { used: 0, max, stopped: null, setIds: new Map() };
-}
-
-/** The last 4 checklists as slim rows, so the second card of a set costs no call. */
+/** The last 4 checklists of one scan, so the second card of a set costs no call. */
 export class ChecklistMemory {
   private sets = new Map<string, { key: string; cards: CatalogCard[]; complete: boolean }>();
   constructor(private readonly size = 4) {}
@@ -80,6 +68,7 @@ export class ChecklistMemory {
     }
     return v ?? null;
   }
+  /** `key`: sport, year and brand (see `setKey`). */
   put(setId: string, key: string, cards: CatalogCard[], complete: boolean) {
     this.sets.delete(setId);
     this.sets.set(setId, { key, cards, complete });
@@ -94,13 +83,30 @@ export class ChecklistMemory {
   }
 }
 
-const memoryHolder = globalThis as unknown as { __crdChecklistMemory?: ChecklistMemory };
-export function checklistMemory(): ChecklistMemory {
-  memoryHolder.__crdChecklistMemory ??= new ChecklistMemory();
-  return memoryHolder.__crdChecklistMemory;
+/**
+ * One per scan (a photo with many cards): the 40 call budget and what was
+ * learned on the way. Everything remembered lives here and ends with the
+ * scan; between scans only the gate's stored answers remain. There is no
+ * map that outlives a scan.
+ */
+export type ScanBudget = {
+  used: number;
+  max: number;
+  /** off, paused, cap or busy: no more catalog calls for the rest of the scan. */
+  stopped: CatalogFailure | null;
+  /** "baseball|1990|topps" to the base set id, learned from clean answers of that sport. */
+  setIds: Map<string, string>;
+  /** Checklists fetched in this scan. */
+  memory: ChecklistMemory;
+  /** Search answers of this scan, so the same words are never asked twice. */
+  searches: Map<string, CatalogCard[]>;
+};
+
+export function createScanBudget(max = SCAN_CALLS): ScanBudget {
+  return { used: 0, max, stopped: null, setIds: new Map(), memory: new ChecklistMemory(), searches: new Map() };
 }
 
-export type LookupOptions = { catalog?: Catalog; scan?: ScanBudget; memory?: ChecklistMemory };
+export type LookupOptions = { catalog?: Catalog; scan?: ScanBudget };
 
 /** Confidence for the item: sure by number and name is filed as sure; applied without a number waits in Review. */
 export function lookupConfidence(result: Pick<LookupResult, "sure" | "sureBy">, readingConfidence: number): number {
@@ -109,20 +115,21 @@ export function lookupConfidence(result: Pick<LookupResult, "sure" | "sureBy">, 
   return readingConfidence;
 }
 
-function setKey(year: number, brand: string): string {
-  return `${year}|${normalizeBrand(brand)}`;
+/** The sport is part of the key: 1990 Topps baseball and 1990 Topps football are two sets. */
+export function setKey(sport: Sport, year: number, brand: string): string {
+  return `${sport}|${year}|${normalizeBrand(brand)}`;
 }
 
 function cleanRead(read: LookupRead) {
   const year = Number.isInteger(read.year) && (read.year as number) >= 1800 && (read.year as number) <= 2100 ? (read.year as number) : null;
-  // "Topps Tiffany" read: the brand is Topps (sets are found by brand), the product is kept to judge versions.
+  // "Topps Tiffany" read: the brand is Topps (sets are found by brand). A variation is never applied, even when read.
   const brands: string[] = [];
-  const products: string[] = [];
+  let tiffany = false;
   for (const b of (read.brands ?? []).slice(0, 2)) {
     const t = String(b ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
     const brand = splitProduct(t).brand;
     if (!brand || !normalizeBrand(brand)) continue;
-    products.push(normalizeBrand(t));
+    if (normalizeBrand(t).includes("tiffany")) tiffany = true;
     if (!brands.some((x) => normalizeBrand(x) === normalizeBrand(brand))) brands.push(brand);
   }
   const names: string[] = [];
@@ -130,7 +137,7 @@ function cleanRead(read: LookupRead) {
     const t = String(n ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
     if (t.length >= 2 && !names.includes(t)) names.push(t);
   }
-  return { year, yearFromStats: Boolean(read.yearFromStats), brands, products, tiffany: products.some((p) => p.includes("tiffany")), sport: read.sport ?? null, names: names.slice(0, 5), number: cleanCardNumber(read.cardNumber) };
+  return { year, yearFromStats: Boolean(read.yearFromStats), brands, tiffany, sport: read.sport ?? null, names: names.slice(0, 5), number: cleanCardNumber(read.cardNumber) };
 }
 
 function surnameOf(name: string): string | null {
@@ -147,13 +154,16 @@ function mergeCandidates(...lists: Candidate[][]): Candidate[] {
   return out.slice(0, MAX_CANDIDATES);
 }
 
+type Target = { year: number; brand: string };
+type FetchedSet = { target: Target; cards: CatalogCard[]; complete: boolean };
+
 export async function lookupCard(read: LookupRead, line: Line, options: LookupOptions = {}): Promise<LookupResult> {
   const catalog = options.catalog ?? createMyCardfolio();
   const scan = options.scan ?? createScanBudget();
-  const memory = options.memory ?? checklistMemory();
+  const memory = scan.memory;
   const r = cleanRead(read);
+  const sport = r.sport;
   const m: MatchRead = matchRead(r.names, r.number);
-  const brandKeys = r.products;
   let callsUsed = 0;
   let stopped: LookupStop | null = scan.stopped;
   const done = (j: Pick<Judgement, "sure" | "sureBy">, candidates: Candidate[]): LookupResult => {
@@ -163,63 +173,75 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     return { sure, sureBy: sure ? j.sureBy : null, candidates: list, callsUsed, stopped };
   };
   const nothing: Pick<Judgement, "sure" | "sureBy"> = { sure: null, sureBy: null };
+  const halted = () => stopped !== null && stopped !== "failed";
 
-  /** One outside call within the budgets. Null when it was not made or failed. */
-  async function spend<T>(call: () => Promise<{ ok: true; value: T; fromStore: boolean } | { ok: false; reason: CatalogFailure }>): Promise<T | null> {
-    if (stopped && stopped !== "failed") return null;
-    if (callsUsed >= CARD_CALLS || scan.used >= scan.max) {
+  /**
+   * One outside call within the budgets. Null when it was not made or failed.
+   * Every network try counts: the call may try at most twice, and never more
+   * often than the budgets still allow.
+   */
+  async function spend<T>(call: (limits: CallLimits) => Promise<CatalogResult<T>>): Promise<T | null> {
+    if (scan.stopped) stopped = scan.stopped;
+    if (halted()) return null;
+    const room = Math.min(CARD_CALLS - callsUsed, scan.max - scan.used);
+    if (room <= 0) {
       stopped = "budget";
       return null;
     }
-    const res = await call();
-    if (res.ok) {
-      if (!res.fromStore) {
-        callsUsed++;
-        scan.used++;
-      }
-      return res.value;
-    }
-    if (res.reason === "failed") {
-      // The call went out and failed; the next step may still work.
-      callsUsed++;
-      scan.used++;
-      stopped = "failed";
-      return null;
-    }
+    const res = await call({ maxTries: Math.min(MAX_TRIES, room) });
+    const fallback = res.ok ? (res.fromStore ? 0 : 1) : res.reason === "failed" ? 1 : 0;
+    const told = Number(res.tries);
+    const tries = Number.isFinite(told) && told >= 0 ? Math.trunc(told) : fallback;
+    callsUsed += tries;
+    scan.used += tries;
+    if (res.ok) return res.value;
+    // A failed call went out and failed; the next step may still work.
+    // off, paused, cap and busy stop catalog calls for the rest of the scan.
     stopped = res.reason;
-    if (res.reason !== "busy") scan.stopped = res.reason;
+    if (res.reason !== "failed") scan.stopped = res.reason;
     return null;
   }
 
-  const searched = new Map<string, CatalogCard[]>();
+  // Set ids learned from other cards are used only for the same sport. With
+  // no sport read, only what this card's own searches taught is used.
+  const setIds = sport ? scan.setIds : new Map<string, string>();
+  const keyOf = (t: Target) => setKey(sport ?? ("unknown" as Sport), t.year, t.brand);
+  const sportFits = (c: CatalogCard) => !sport || c.sport === sport;
+
+  const tried = new Map<string, CatalogCard[]>();
   const noise: CatalogCard[] = [];
   /** `forCard`: the words were this card's name or number (a set id search gives no candidates). */
   async function search(text: string, year: number | null, forCard: boolean, limit = SEARCH_LIMIT): Promise<CatalogCard[]> {
-    const key = text.toLowerCase();
-    const known = searched.get(key);
-    if (known) return known;
-    const q: { text: string; limit: number; sport?: Sport; year?: number } = { text, limit };
-    if (r.sport) q.sport = r.sport;
-    if (year) q.year = year;
-    const cards = (await spend(() => catalog.search(q, line))) ?? [];
-    searched.set(key, cards);
+    const key = `${sport ?? ""}|${year ?? ""}|${limit}|${text.toLowerCase()}`;
+    let cards = tried.get(key) ?? scan.searches.get(key) ?? null;
+    if (!cards) {
+      const q: { text: string; limit: number; sport?: Sport; year?: number } = { text, limit };
+      if (sport) q.sport = sport;
+      if (year) q.year = year;
+      const got = await spend((limits) => catalog.search(q, line, limits));
+      if (got) scan.searches.set(key, got);
+      cards = got ?? [];
+    }
+    tried.set(key, cards);
     if (forCard) for (const c of cards) if (!c.verified && !noise.some((n) => n.sourceId === c.sourceId)) noise.push(c);
-    // Base set ids come only from a clean, verified Base Set card, read from its url
-    // (the probe: a broad search gives none; a Tiffany or insert card is another set).
+    // Base set ids come only from a clean, verified Base Set card of the read
+    // sport, read from its url (the probe: a broad search gives none; a
+    // Tiffany or insert card is another set).
     for (const c of cards) {
-      if (c.verified && c.sourceSetId && c.year && c.brand && !c.variation && !c.setName && setIdFromUrl(c.url) === c.sourceSetId) {
-        const k = setKey(c.year, c.brand);
-        if (!scan.setIds.has(k)) scan.setIds.set(k, c.sourceSetId);
+      if (c.verified && c.sourceSetId && c.year && c.brand && !c.variation && !c.setName && sportFits(c) && setIdFromUrl(c.url) === c.sourceSetId) {
+        const k = keyOf({ year: c.year, brand: c.brand });
+        if (!setIds.has(k)) setIds.set(k, c.sourceSetId);
       }
     }
     return cards;
   }
 
+  /** Clean rows of the read year, brand and sport. Nothing of another sport is ever judged. */
   function rowsOf(cards: CatalogCard[], year: number | null, brandKey: string | null): SlimRow[] {
     const fit = cards.filter(
-      (c) => c.verified && (year === null || c.year === year) && (brandKey === null || (c.brand !== null && normalizeBrand(c.brand) === brandKey)) && (!r.sport || !c.sport || c.sport === r.sport),
+      (c) => c.verified && (year === null || c.year === year) && (brandKey === null || (c.brand !== null && normalizeBrand(c.brand) === brandKey)) && sportFits(c),
     );
-    return slimRows(fit, brandKeys);
+    return slimRows(fit);
   }
   /** Unverified listings, for Review only, never judged by spelling. */
   function noiseCandidates(): Candidate[] {
@@ -234,25 +256,60 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     const cards = await search(text, r.year, true);
     const rows = rowsOf(cards, r.year, r.brands[0] ? normalizeBrand(r.brands[0]) : null);
     // Applied only when exactly one clean entry agrees with a read number and the name.
-    const j = judge(rows, m, false);
+    const j = judge(rows, m, "search");
     return done(j, mergeCandidates(j.candidates, noiseCandidates()));
   }
 
   const year = r.year;
   // The sets to try: two possible brands, or one brand in the year and the year before.
-  const targets: { year: number; brand: string }[] = r.brands.map((brand) => ({ year, brand }));
+  const targets: Target[] = r.brands.map((brand) => ({ year, brand })).slice(0, MAX_SETS);
   if (targets.length < MAX_SETS && r.yearFromStats) targets.push({ year: year - 1, brand: r.brands[0] });
-  const knownSetId = (t: { year: number; brand: string }) => scan.setIds.get(setKey(t.year, t.brand)) ?? memory.setIdFor(setKey(t.year, t.brand));
+  const knownSetId = (t: Target) => setIds.get(keyOf(t)) ?? (sport ? memory.setIdFor(keyOf(t)) : null);
 
-  // ---- Before any call: checklists already in memory (the second card of a set costs nothing).
-  const inMemory: SlimRow[] = [];
+  /**
+   * The end of step 2: judges the fetched checklists. `allTargets`: every set
+   * to try is in `sets`. `oneSearch`: the checklists came from memory, so at
+   * most one more search is spent on this card (the number search for a card
+   * past a cut short checklist, or the confirm search for a name).
+   */
+  async function decide(sets: FetchedSet[], allTargets: boolean, oneSearch: boolean, others: Candidate[]): Promise<LookupResult> {
+    const pool: SlimRow[] = [];
+    let searches = 0;
+    for (const set of sets) {
+      pool.push(...slimRows(set.cards.filter(sportFits)));
+      // The checklist stops at 500 cards: one search by year, brand and number.
+      if (!set.complete && r.number && !set.cards.some((c) => c.cardNumber === r.number) && !(oneSearch && searches > 0)) {
+        searches++;
+        const extra = await search(`${set.target.year} ${set.target.brand} ${r.number}`, set.target.year, true);
+        pool.push(...rowsOf(extra, set.target.year, normalizeBrand(set.target.brand)));
+      }
+    }
+    // "No other card fits" counts only over complete sets, and only when the sport is known.
+    const whole = allTargets && sets.every((s) => s.complete);
+    const j = judge(pool, m, !sport ? "search" : whole ? "complete" : "partial");
+    const rest = () => mergeCandidates(j.candidates, others, noiseCandidates());
+    if (j.sure || !j.confirm || !j.confirm.year || !j.confirm.brand || !j.confirm.player) return done(j, rest());
+    // A name found in a checklist that was cut short: one exact search confirms it.
+    const target = j.confirm;
+    const brand = target.brand as string;
+    const answer = await search(`${target.year} ${brand} ${target.player}`, target.year, true);
+    const confirmed = judgeConfirm(rowsOf(answer, target.year, normalizeBrand(brand)), target, m);
+    const sure = confirmed.sure ? { sure: confirmed.sure, sureBy: "name" as const } : nothing;
+    return done(sure, mergeCandidates(confirmed.candidates, j.candidates, others, noiseCandidates()));
+  }
+
+  // ---- Before any call: checklists already in this scan's memory.
+  const remembered: FetchedSet[] = [];
   for (const t of targets) {
     const id = knownSetId(t);
     const set = id ? memory.get(id) : null;
-    if (set) inMemory.push(...slimRows(set.cards, brandKeys));
+    if (set) remembered.push({ target: t, cards: set.cards, complete: set.complete });
   }
-  if (inMemory.length > 0) {
-    const j = judge(inMemory, m, true);
+  // Every set to try is in memory: no step 1 searches are spent on this card.
+  if (remembered.length === targets.length) return decide(remembered, true, true, []);
+  if (remembered.length > 0 && m.number) {
+    // Number and name agree in a set we already have: nothing to ask.
+    const j = judge(remembered.flatMap((s) => slimRows(s.cards.filter(sportFits))), m, "search");
     if (j.sure) return done(j, j.candidates);
   }
 
@@ -269,20 +326,19 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   if (r.number) queries.push(`${year} ${brand} ${r.number}`);
   for (const text of queries) {
     step1.push(...rowsOf(await search(text, year, true), year, normalizeBrand(brand)));
-    const j = judge(step1, m, false);
+    const j = judge(step1, m, "search");
     if (j.sure) return done(j, j.candidates);
-    if (stopped && stopped !== "failed") break;
+    if (halted()) break;
   }
-  const step1Judged = judge(step1, m, false);
+  const step1Judged = judge(step1, m, "search");
 
   // ---- Step 2: checklist and close spelling, at most 2 sets.
-  const pool: SlimRow[] = [];
-  let fetchedAny = false;
-  for (const t of targets.slice(0, MAX_SETS)) {
-    if (stopped && stopped !== "failed") break;
+  const fetched: FetchedSet[] = [];
+  for (const t of targets) {
+    if (halted()) break;
     let id = knownSetId(t);
     for (const n of DISCOVERY_NUMBERS) {
-      if (id || (stopped && stopped !== "failed")) break;
+      if (id || halted()) break;
       await search(`${t.year} ${t.brand} ${n}`, t.year, false, DISCOVERY_LIMIT);
       id = knownSetId(t);
     }
@@ -290,24 +346,14 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     let set = memory.get(id);
     if (!set) {
       const setId = id;
-      const got = await spend(() => catalog.checklist(setId, line));
+      const got = await spend((limits) => catalog.checklist(setId, line, limits));
       if (got) {
-        memory.put(setId, setKey(t.year, t.brand), got.cards, got.complete);
+        memory.put(setId, keyOf(t), got.cards, got.complete);
         set = memory.get(setId);
       }
     }
-    if (!set) continue;
-    fetchedAny = true;
-    pool.push(...slimRows(set.cards, brandKeys));
-    // The checklist stops at 500 cards: one search by year, brand and number.
-    if (!set.complete && r.number && !set.cards.some((c) => c.cardNumber === r.number)) {
-      const extra = await search(`${t.year} ${t.brand} ${r.number}`, t.year, true);
-      pool.push(...rowsOf(extra, t.year, normalizeBrand(t.brand)));
-    }
+    if (set) fetched.push({ target: t, cards: set.cards, complete: set.complete });
   }
-  if (fetchedAny) {
-    const j = judge(pool, m, true);
-    return done(j, mergeCandidates(j.candidates, step1Judged.candidates, noiseCandidates()));
-  }
+  if (fetched.length > 0) return decide(fetched, fetched.length === targets.length, false, step1Judged.candidates);
   return done(nothing, mergeCandidates(step1Judged.candidates, noiseCandidates()));
 }

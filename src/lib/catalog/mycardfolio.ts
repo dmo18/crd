@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Db } from "@/db";
 import { outsideCall, type OutsideFailure } from "@/lib/outside/gate";
 import type { CacheKind } from "@/lib/outside/cache";
-import type { Catalog, CatalogCard, CatalogFailure, CatalogResult, Line } from "./types";
+import type { CallLimits, Catalog, CatalogCard, CatalogFailure, CatalogResult, Line } from "./types";
 import { MAX_SUBJECTS, cleanCardNumber, cleanName, cleanSetName, cleanSport, cleanYear, isCleanId, setIdFromUrl, sourceUrl, splitProduct } from "./clean";
 
 /**
@@ -219,6 +219,7 @@ export function createMyCardfolio(options: ClientOptions = {}): Catalog {
     line: Line,
     parse: (body: string) => T | null,
     kindOf: (v: T) => CacheKind,
+    limits: CallLimits | undefined,
     timeoutMs?: number,
   ): Promise<CatalogResult<T>> {
     const r = await outsideCall(
@@ -235,36 +236,37 @@ export function createMyCardfolio(options: ClientOptions = {}): Catalog {
         db: options.db,
         fetchImpl: options.fetchImpl,
         timeoutMs,
+        maxTries: limits?.maxTries,
         // Only an answer that parses is kept. The arguments are the exact ones sent.
         cache: { args, kindOf: (body) => { const v = parse(body); return v === null ? null : kindOf(v); } },
       },
     );
-    if (!r.ok) return { ok: false, reason: failure(r.reason) };
+    if (!r.ok) return { ok: false, reason: failure(r.reason), tries: r.tries };
     const value = parse(r.body);
-    if (value === null) return { ok: false, reason: "failed" };
-    return { ok: true, value, fromStore: r.fromStore };
+    if (value === null) return { ok: false, reason: "failed", tries: r.tries };
+    return { ok: true, value, fromStore: r.fromStore, tries: r.tries };
   }
 
   return {
-    async search(q, line) {
+    async search(q, line, limits) {
       const text = String(q.text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
-      if (text.length < 2) return { ok: true, value: [], fromStore: false };
+      if (text.length < 2) return { ok: true, value: [], fromStore: false, tries: 0 };
       const asked = Number(q.limit ?? DEFAULT_LIMIT);
       const limit = Number.isFinite(asked) ? Math.min(50, Math.max(1, Math.trunc(asked))) : DEFAULT_LIMIT;
       const args: Record<string, string | number> = { query: text, limit };
       if (q.sport) args.sport = q.sport[0].toUpperCase() + q.sport.slice(1);
       if (q.year && Number.isInteger(q.year)) args.year = String(q.year);
-      return run("search_cards", args, line, (b) => parseSearch(b, limit), (v) => (v.length > 0 ? "search" : "search_empty"));
+      return run("search_cards", args, line, (b) => parseSearch(b, limit), (v) => (v.length > 0 ? "search" : "search_empty"), limits);
     },
-    async card(sourceId, line) {
-      if (!/^[A-Za-z0-9_]{1,40}$/.test(String(sourceId ?? ""))) return { ok: true, value: null, fromStore: false };
-      return run("get_card", { card_id: sourceId }, line, (b) => parseCard(b), (v) => (v.card ? "card" : "search_empty")).then(
-        (r): CatalogResult<CatalogCard | null> => (r.ok ? { ok: true, value: r.value.card, fromStore: r.fromStore } : r),
+    async card(sourceId, line, limits) {
+      if (!/^[A-Za-z0-9_]{1,40}$/.test(String(sourceId ?? ""))) return { ok: true, value: null, fromStore: false, tries: 0 };
+      return run("get_card", { card_id: sourceId }, line, (b) => parseCard(b), (v) => (v.card ? "card" : "search_empty"), limits).then(
+        (r): CatalogResult<CatalogCard | null> => (r.ok ? { ok: true, value: r.value.card, fromStore: r.fromStore, tries: r.tries } : r),
       );
     },
-    async checklist(sourceSetId, line) {
-      if (!/^\d{1,12}$/.test(String(sourceSetId ?? ""))) return { ok: false, reason: "failed" };
-      return run("get_set_checklist", { set_id: sourceSetId }, line, (b) => parseChecklist(b, sourceSetId), () => "checklist", CHECKLIST_TIMEOUT_MS);
+    async checklist(sourceSetId, line, limits) {
+      if (!/^\d{1,12}$/.test(String(sourceSetId ?? ""))) return { ok: false, reason: "failed", tries: 0 };
+      return run("get_set_checklist", { set_id: sourceSetId }, line, (b) => parseChecklist(b, sourceSetId), () => "checklist", limits, CHECKLIST_TIMEOUT_MS);
     },
   };
 }

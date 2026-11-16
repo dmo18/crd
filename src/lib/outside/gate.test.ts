@@ -281,6 +281,46 @@ describe("retry and backoff", () => {
     expect(f).toHaveBeenCalledTimes(3);
   });
 
+  it("reports its network tries: 3 for a call retried twice, 1 for a first answer, 0 for a stored answer or a call that never left", async () => {
+    const f: FakeFetch = vi.fn(async () => new Response("oops", { status: 500 }));
+    const a = setup(f);
+    const p = a.gate.call("mycardfolio", SEARCH);
+    await a.clock.advance(20_000);
+    expect(await p).toMatchObject({ ok: false, reason: "server", tries: 3 });
+
+    let n = 0;
+    const g: FakeFetch = vi.fn(async () => (++n < 3 ? new Response("oops", { status: 500 }) : new Response("fine", { status: 200 })));
+    const b = setup(g);
+    const cache = { kindOf: () => "search" as const };
+    const q = b.gate.call("mycardfolio", SEARCH, { cache });
+    await b.clock.advance(20_000);
+    expect(await q).toMatchObject({ ok: true, body: "fine", tries: 3 });
+    expect(await b.gate.call("mycardfolio", SEARCH, { cache })).toMatchObject({ ok: true, fromStore: true, tries: 0 });
+
+    const c = setup(vi.fn(async () => new Response("fine", { status: 200 })));
+    expect(await c.gate.call("mycardfolio", SEARCH)).toMatchObject({ ok: true, tries: 1 });
+    setSourceEnabled(c.db, "mycardfolio", false);
+    expect(await c.gate.call("mycardfolio", SEARCH)).toMatchObject({ ok: false, reason: "off", tries: 0 });
+  });
+
+  it("maxTries 2 allows one retry only (catalog calls from a scan); maxTries 1 allows none", async () => {
+    const run = async (maxTries: number) => {
+      const f: FakeFetch = vi.fn(async () => new Response("oops", { status: 500 }));
+      const { gate, clock } = setup(f);
+      const p = gate.call("mycardfolio", SEARCH, { maxTries });
+      await clock.advance(20_000);
+      const r = await p;
+      expect(r).toMatchObject({ ok: false, reason: "server" });
+      expect(r.tries).toBe(f.mock.calls.length);
+      return r.tries;
+    };
+    expect(await run(2)).toBe(2);
+    expect(await run(1)).toBe(1);
+    // Never more than the source's own plan, and a silly value still gives one try.
+    expect(await run(9)).toBe(3);
+    expect(await run(0)).toBe(1);
+  });
+
   it("retries only a request that is safe to repeat (MyCardfolio's MCP reads are)", async () => {
     setLogSink(() => undefined);
     const run = async (req: OutsideRequest) => {

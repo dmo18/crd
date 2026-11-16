@@ -63,7 +63,7 @@ describe("search", () => {
     const db = createDb(":memory:");
     const fetchImpl = vi.fn(async () => new Response(sse("search_empty_eriffey.json"), { status: 200 }));
     const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(await c.search({ text: "1990 Topps Eriffey" }, "now")).toEqual({ ok: true, value: [], fromStore: false });
+    expect(await c.search({ text: "1990 Topps Eriffey" }, "now")).toMatchObject({ ok: true, value: [], fromStore: false });
     const { outsideCache } = await import("@/db/schema");
     expect(db.select().from(outsideCache).all()).toHaveLength(1);
   });
@@ -73,7 +73,7 @@ describe("search", () => {
       const db = createDb(":memory:");
       const fetchImpl = vi.fn(async () => new Response(wrap(text), { status: 200 }));
       const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
-      expect(await c.search({ text: "1990 Topps" }, "now")).toEqual({ ok: false, reason: "failed" });
+      expect(await c.search({ text: "1990 Topps" }, "now")).toMatchObject({ ok: false, reason: "failed" });
       const { outsideCache } = await import("@/db/schema");
       expect(db.select().from(outsideCache).all()).toHaveLength(0);
     },
@@ -87,7 +87,7 @@ describe("search", () => {
   it("too short a text makes no call", async () => {
     const { catalog, fetchImpl } = client("x");
     const r = await catalog.search({ text: " a " }, "now");
-    expect(r).toEqual({ ok: true, value: [], fromStore: false });
+    expect(r).toMatchObject({ ok: true, value: [], fromStore: false });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
@@ -131,11 +131,11 @@ describe("card", () => {
   });
   it("no such card is a normal nothing", async () => {
     const { catalog } = client(wrap("No card found with card_id 1"));
-    expect(await catalog.card("1", "now")).toEqual({ ok: true, value: null, fromStore: false });
+    expect(await catalog.card("1", "now")).toMatchObject({ ok: true, value: null, fromStore: false });
   });
   it("a bad id makes no call", async () => {
     const { catalog, fetchImpl } = client("x");
-    expect(await catalog.card("../x", "now")).toEqual({ ok: true, value: null, fromStore: false });
+    expect(await catalog.card("../x", "now")).toMatchObject({ ok: true, value: null, fromStore: false });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
@@ -163,7 +163,7 @@ describe("checklist", () => {
     const db = createDb(":memory:");
     const fetchImpl = vi.fn(async () => new Response(wrap(inner), { status: 200 }));
     const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(await c.checklist("9180", "background")).toEqual({ ok: false, reason: "failed" });
+    expect(await c.checklist("9180", "background")).toMatchObject({ ok: false, reason: "failed" });
     const { outsideCache } = await import("@/db/schema");
     expect(db.select().from(outsideCache).all()).toHaveLength(0);
   });
@@ -233,13 +233,24 @@ describe("broken answers never throw", () => {
     const db = createDb(":memory:");
     const fetchImpl = vi.fn(async () => new Response(wrap(junk), { status: 200 }));
     const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(await c.search({ text: "1990 Topps" }, "now")).toEqual({ ok: false, reason: "failed" });
+    expect(await c.search({ text: "1990 Topps" }, "now")).toMatchObject({ ok: false, reason: "failed" });
     const { outsideCache } = await import("@/db/schema");
     expect(db.select().from(outsideCache).all()).toHaveLength(0);
   });
   it("a failed call gives the plain reason", async () => {
     const { catalog } = client(() => new Response("x", { status: 429 }));
-    expect(await catalog.search({ text: "1990 Topps" }, "now")).toEqual({ ok: false, reason: "paused" });
+    expect(await catalog.search({ text: "1990 Topps" }, "now")).toMatchObject({ ok: false, reason: "paused" });
+  });
+  it("reports the gate's network tries and hands it the most tries allowed", async () => {
+    const db = createDb(":memory:");
+    const down = vi.fn(async () => new Response("oops", { status: 500 }));
+    const c = createMyCardfolio({ db, fetchImpl: down as unknown as typeof fetch });
+    expect(await c.search({ text: "1990 Topps" }, "background", { maxTries: 1 })).toEqual({ ok: false, reason: "failed", tries: 1 });
+    expect(down).toHaveBeenCalledTimes(1);
+    const up = vi.fn(async () => new Response(sse("search_1990_topps_650.json"), { status: 200 }));
+    const d = createMyCardfolio({ db: createDb(":memory:"), fetchImpl: up as unknown as typeof fetch });
+    expect(await d.search({ text: "1990 Topps 650" }, "background", { maxTries: 2 })).toMatchObject({ ok: true, fromStore: false, tries: 1 });
+    expect(await d.search({ text: "1990 Topps 650" }, "background", { maxTries: 2 })).toMatchObject({ ok: true, fromStore: true, tries: 0 });
   });
   it("readAnswer takes plain JSON too", () => {
     expect(readAnswer(JSON.stringify({ result: { content: [{ type: "text", text: "{\"a\":1}" }] } }))).toEqual({ kind: "json", value: { a: 1 } });
