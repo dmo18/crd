@@ -18,8 +18,16 @@ const TABS: { href: string; label: string; icon: ReactNode; emphasis?: boolean }
   { href: "/more", label: "More", icon: svg(<><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>) },
 ];
 
-function isActive(pathname: string, href: string) {
-  return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(href + "/");
+/** Pages reached from a tab that live outside its path (Manage records belongs to Inventory). */
+const ALSO: Record<string, string[]> = { "/items": ["/manage"] };
+
+function under(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(href + "/");
+}
+
+export function isActive(pathname: string, href: string) {
+  if (href === "/") return pathname === "/";
+  return under(pathname, href) || (ALSO[href] ?? []).some((h) => under(pathname, h));
 }
 
 export function TabBar({ reviewCount = 0 }: { reviewCount?: number }) {
