@@ -1,0 +1,80 @@
+#!/bin/bash
+# Keeps Claude Code running for the ops-agent account inside tmux, started at
+# boot and restarted if it stops. Open it from PuTTY or the browser terminal
+# with:  agent      (leave it running with Ctrl+B, then D)
+#
+#   curl -sL github.com/dmo18/crd/raw/main/agent-session | sudo bash          set up
+#   curl -sL github.com/dmo18/crd/raw/main/agent-session | sudo bash -s off   remove
+set -euo pipefail
+
+AGENT=ops-agent
+DIR=/agent
+UNIT=/etc/systemd/system/claude-agent.service
+HELPER=/usr/local/bin/agent
+die() { printf 'STOPPED: %s\n' "$*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "Run it with sudo: curl -sL github.com/dmo18/crd/raw/main/agent-session | sudo bash"
+
+if [ "${1:-on}" = off ]; then
+    systemctl disable --now claude-agent.service >/dev/null 2>&1 || true
+    rm -f -- "$UNIT" "$HELPER"
+    systemctl daemon-reload
+    echo "OK: the always-on Claude session is removed. Its folder $DIR is kept."
+    exit 0
+fi
+
+id "$AGENT" >/dev/null 2>&1 || die "The account $AGENT does not exist. Run the server setup (step 5) first."
+home="$(getent passwd "$AGENT" | cut -d: -f6)"
+claude_bin="$home/.local/bin/claude"
+[ -x "$claude_bin" ] || die "Claude Code is not installed for $AGENT yet. First: sudo -iu $AGENT, then: curl -fsSL https://claude.ai/install.sh | bash, then run claude once to log in."
+command -v tmux >/dev/null 2>&1 || { apt-get install -y -qq tmux >/dev/null || die "Could not install tmux."; }
+
+# The working folder. Root owns it and the guide link in it; the sticky bit
+# lets the agent create its own files there but never replace the guide.
+install -d -m 1770 -o root -g "$AGENT" "$DIR"
+if [ -f "$home/CLAUDE.md" ]; then
+    ln -sfn "$home/CLAUDE.md" "$DIR/CLAUDE.md"
+fi
+
+cat >"$UNIT" <<EOF
+# Written by agent-session. Claude Code for $AGENT in tmux session "claude".
+[Unit]
+Description=Claude Code for $AGENT (tmux session "claude")
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=$AGENT
+WorkingDirectory=$DIR
+Environment=HOME=$home
+Environment=PATH=$home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/tmux new-session -d -s claude -c $DIR "while true; do claude --continue || claude; echo 'Claude stopped. Starting again in 5 seconds.'; sleep 5; done"
+ExecStop=/usr/bin/tmux kill-session -t claude
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 0644 "$UNIT"
+
+cat >"$HELPER" <<EOF
+#!/bin/bash
+# Written by agent-session. Opens the always-on Claude session.
+# Leave it running: Ctrl+B, then D.
+if [ "\$(id -un)" = "$AGENT" ]; then exec tmux attach -t claude; fi
+exec sudo -u $AGENT -H tmux attach -t claude
+EOF
+chmod 0755 "$HELPER"
+
+systemctl daemon-reload
+systemctl enable claude-agent.service >/dev/null 2>&1
+systemctl restart claude-agent.service
+sleep 2
+if sudo -u "$AGENT" -H tmux has-session -t claude 2>/dev/null; then
+    echo "OK: Claude is running in folder $DIR and starts by itself after a reboot."
+    echo "Open it any time (PuTTY or the browser terminal):  agent"
+    echo "Leave it running: press Ctrl+B, then D."
+else
+    die "The session did not start. See: sudo journalctl -u claude-agent -n 30"
+fi
