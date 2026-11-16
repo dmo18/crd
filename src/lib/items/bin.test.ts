@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, setDbForTests, type Db } from "@/db";
-import { collectionSnapshots, images, items, locations, scans, valuations, type NewItem } from "@/db/schema";
+import { bulkOps, collectionSnapshots, images, items, locations, scans, valuations, type NewItem } from "@/db/schema";
 import { convertScanPhotos } from "@/lib/images/archive";
 import { removeOrphanPhotos } from "@/lib/images/cleanup";
 import { uploadsDir } from "@/lib/images/store";
@@ -19,6 +19,7 @@ import { revalueItem } from "@/lib/valuation";
 import { SampleSource } from "@/lib/valuation/sample-source";
 import { collectionTotals, recordSnapshot } from "@/lib/valuation/snapshots";
 import { BIN_DAYS, daysLeft, timeLeftText, maybePurgeBin, purgeExpired, purgeItems, resetBinPurge, restoreItems, softDeleteItems } from "./bin";
+import { applyBulk } from "./bulk";
 import { findDuplicates, mergeInto, reviewCount, reviewItems } from "./duplicates";
 import { inventoryFilterSchema, listItems } from "./query";
 import { setQuickValue } from "./quick-value";
@@ -184,6 +185,14 @@ describe("restore", () => {
     expect(restoreItems([], db)).toBe(0);
   });
 
+  it("sets updated_at to now so bulk undo sees the item as edited since", () => {
+    const id = insert({});
+    softDeleteItems([id], db, new Date("2026-11-01T00:00:00Z"));
+    const at = new Date("2026-11-05T00:00:00Z");
+    expect(restoreItems([id], db, at)).toBe(1);
+    expect(db.select().from(items).where(eq(items.id, id)).get()?.updatedAt).toEqual(at);
+  });
+
   it("keeps the first time an item was deleted", () => {
     const id = insert({});
     const first = new Date("2026-11-01T00:00:00Z");
@@ -239,6 +248,24 @@ describe("purge after 30 days", () => {
     resetBinPurge();
     // After a restart the marker file stops an early second run.
     expect(await maybePurgeBin({ db, now: new Date(now.getTime() + DAY / 2), marker })).toBe(0);
+    resetBinPurge();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("the daily job also drops old bulk undo rows, and the automatic purge scrubs undo text", async () => {
+    resetBinPurge();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "crd-bin-"));
+    const marker = path.join(dir, ".bin-purge");
+    const now = new Date();
+    const id = insert({ player: "Secret" });
+    const old = applyBulk({ ids: [id] }, { type: "status", status: "confirmed" }, db, new Date(now.getTime() - 40 * DAY));
+    expect("opId" in old).toBe(true);
+    // A pruned row needs no new bulk edit; the purge below also scrubs this one.
+    const other = insert({ player: "Secret2" });
+    applyBulk({ ids: [other] }, { type: "status", status: "confirmed" }, db, new Date(now.getTime() - DAY));
+    softDeleteItems([other], db, new Date(now.getTime() - 31 * DAY));
+    expect(await maybePurgeBin({ db, now, marker })).toBe(1);
+    expect(db.select().from(bulkOps).all()).toEqual([]);
     resetBinPurge();
     await fs.rm(dir, { recursive: true, force: true });
   });

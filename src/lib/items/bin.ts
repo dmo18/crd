@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { and, inArray, isNotNull, isNull, lte } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
-import { items } from "@/db/schema";
+import { bulkOps, items } from "@/db/schema";
 import { env } from "@/lib/env";
 import { errorKind, log } from "@/lib/log";
+import { pruneOps } from "./bulk";
 import { deletePhotoFiles, removeItemRows } from "./remove";
 
 /** Days an item stays in Recently deleted before it is removed for good. */
@@ -41,18 +42,44 @@ export function softDeleteItems(ids: number[], db: Db = getDb(), now: Date = new
  * Puts items from Recently deleted back in the collection, with the photos
  * and value history they kept. Reads deleted rows on purpose (restore).
  * Ids that are not in the bin are skipped. Returns how many came back.
+ * Sets updated_at to now: a restored item counts as edited since any earlier
+ * bulk change, so undoing that change leaves it alone (bulk undo of a delete
+ * matches on deleted_at instead, and does not go through here).
  */
-export function restoreItems(ids: number[], db: Db = getDb()): number {
+export function restoreItems(ids: number[], db: Db = getDb(), now: Date = new Date()): number {
   const parts = chunks(ids);
   if (parts.length === 0) return 0;
   return db.transaction((tx) => {
     let changed = 0;
     for (const part of parts) {
-      changed += tx.update(items).set({ deletedAt: null })
+      changed += tx.update(items).set({ deletedAt: null, updatedAt: now })
         .where(and(inArray(items.id, part), isNotNull(items.deletedAt))).run().changes;
     }
     return changed;
   }, { behavior: "immediate" });
+}
+
+/**
+ * Takes purged item ids out of every saved bulk undo entry, so their old text
+ * does not linger. An operation left with no items is deleted. Call inside a
+ * transaction.
+ */
+function scrubUndo(tx: Db, removedIds: number[]): void {
+  if (removedIds.length === 0) return;
+  const gone = new Set(removedIds);
+  for (const op of tx.select({ id: bulkOps.id, undo: bulkOps.undo }).from(bulkOps).all()) {
+    let parsed: { items?: unknown };
+    try {
+      parsed = JSON.parse(op.undo);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed.items)) continue;
+    const kept = parsed.items.filter((e) => !(Array.isArray(e) && gone.has(e[0] as number)));
+    if (kept.length === parsed.items.length) continue;
+    if (kept.length === 0) tx.delete(bulkOps).where(eq(bulkOps.id, op.id)).run();
+    else tx.update(bulkOps).set({ undo: JSON.stringify({ ...parsed, items: kept }) }).where(eq(bulkOps.id, op.id)).run();
+  }
 }
 
 /**
@@ -67,15 +94,17 @@ export async function purgeItems(ids: number[], db: Db = getDb()): Promise<numbe
     const t = tx as unknown as Db;
     let count = 0;
     const toDelete: string[] = [];
+    const removedIds: number[] = [];
     for (const part of parts) {
       // Reads deleted rows on purpose (purge).
       const inBin = t.select({ id: items.id }).from(items)
         .where(and(inArray(items.id, part), isNotNull(items.deletedAt))).all();
       for (const { id } of inBin) {
         const f = removeItemRows(t, id);
-        if (f) { count += 1; toDelete.push(...f); }
+        if (f) { count += 1; toDelete.push(...f); removedIds.push(id); }
       }
     }
+    scrubUndo(t, removedIds);
     return { removed: count, files: toDelete };
   }, { behavior: "immediate" });
   await deletePhotoFiles(files);
@@ -124,7 +153,10 @@ export function maybePurgeBin(deps: { db?: Db; now?: Date; marker?: string } = {
         state.lastRun = saved;
         return 0;
       }
-      const removed = await purgeExpired(deps.db ?? getDb(), now);
+      const db = deps.db ?? getDb();
+      const removed = await purgeExpired(db, now);
+      // Old undo rows go away even when no new bulk edit has happened.
+      db.transaction((tx) => pruneOps(tx as unknown as Db, now), { behavior: "immediate" });
       // The marker is written only after a purge that worked, so a failure tries again on the next visit.
       await fs.writeFile(/*turbopackIgnore: true*/ marker, String(now.getTime()));
       if (removed > 0) log.info("bin_purge", { removed });

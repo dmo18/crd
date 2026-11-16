@@ -8,7 +8,7 @@ import { CONDITION_LABELS, RARITY_LABELS, SPORT_LABELS } from "@/lib/items/label
 
 export type SheetKind = "set" | "replace" | "move" | "status" | "delete";
 export type Done = { changed: number; summary: string; kind: SheetKind };
-type Preview = { count: number; samples: { id: number; title: string; before: string; after: string }[] };
+type Preview = { count: number; fingerprint: string; samples: { id: number; title: string; before: string; after: string }[] };
 
 const FLAGS = ["isRookie", "isError", "isParallel", "isInsert", "isAutograph", "isMemorabilia"] as const;
 const SET_FIELDS: [string, string][] = [
@@ -96,8 +96,13 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
     e.preventDefault();
     void run(() => previewBulkAction({ selection, action: buildAction() }), (r: Preview) => setPreview(r));
   };
+  // "All matching" sends back the stamp of the list the preview saw.
+  const applySelection = () =>
+    preview && selection && typeof selection === "object" && "filters" in selection
+      ? { ...selection, fingerprint: preview.fingerprint }
+      : selection;
   const doApply = () =>
-    void run(() => applyBulkAction({ selection, action: buildAction() }), (r: { changed: number; summary: string }) =>
+    void run(() => applyBulkAction({ selection: applySelection(), action: buildAction() }), (r: { changed: number; summary: string }) =>
       onDone({ changed: r.changed, summary: r.summary, kind }));
 
   const idp = `sheet-${kind}`;

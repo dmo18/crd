@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, setDbForTests, type Db } from "@/db";
 import { bulkOps, images, items, locations, valuations, type Item, type NewItem } from "@/db/schema";
-import { softDeleteItems } from "./bin";
+import { purgeItems, restoreItems, softDeleteItems } from "./bin";
+import { deleteLocation } from "@/lib/locations/locations";
 import {
-  applyBulk, BULK_KEEP, latestUndoable, MAX_BULK_IDS, MAX_BULK_ITEMS, parseAction, parseSelection, previewBulk,
+  applyBulk, BULK_KEEP, fingerprintIds, latestUndoable, undoData, MAX_BULK_IDS, MAX_BULK_ITEMS, parseAction, parseSelection, previewBulk,
   replaceText, undoBulk, type BulkAction, type Selection,
 } from "./bulk";
 import { inventoryFilterSchema, listItems, matchingIds } from "./query";
@@ -176,7 +178,7 @@ describe("find and replace", () => {
     const c = add({ player: null });
     const act: BulkAction = { type: "replace", field: "player", find: "grifey", replace: "Griffey", matchCase: false };
     const p = ok(previewBulk(ids(a, b, c), act, db));
-    expect(p).toEqual({ count: 1, samples: [{ id: a, title: "T", before: "Ken Grifey Jr.", after: "Ken Griffey Jr." }] });
+    expect(p).toEqual({ count: 1, fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/), samples: [{ id: a, title: "T", before: "Ken Grifey Jr.", after: "Ken Griffey Jr." }] });
     ok(applyBulk(ids(a, b, c), act, db));
     expect(get(a)).toMatchObject({ player: "Ken Griffey Jr.", title: "1990 Topps Ken Griffey Jr." });
     expect(get(b).updatedAt).toEqual(T0);
@@ -199,7 +201,7 @@ describe("move, status and delete", () => {
     const a = add();
     const b = add({ locationId: box });
     const p = ok(previewBulk(ids(a, b), { type: "move", locationId: box }, db));
-    expect(p).toEqual({ count: 1, samples: [{ id: a, title: "T", before: "No location", after: "Box 1" }] });
+    expect(p).toEqual({ count: 1, fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/), samples: [{ id: a, title: "T", before: "No location", after: "Box 1" }] });
     expect(ok(applyBulk(ids(a, b), { type: "move", locationId: box }, db)).summary).toBe("Moved 1 item to Box 1");
     expect(get(a).locationId).toBe(box);
     expect(ok(applyBulk(ids(a, b), { type: "move", locationId: null }, db)).changed).toBe(2);
@@ -242,8 +244,11 @@ describe("selections", () => {
     add({ sport: "baseball" });
     add({ sport: "baseball" });
     add({ sport: "hockey" });
-    const sel: Selection = { filters: { sport: "baseball" }, expectedCount: 2 };
-    expect(ok(previewBulk(sel, set("team", "Mariners"), db)).count).toBe(2);
+    const sel0: Selection = { filters: { sport: "baseball" }, expectedCount: 2 };
+    const pv = ok(previewBulk(sel0, set("team", "Mariners"), db));
+    expect(pv.count).toBe(2);
+    expect(pv.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    const sel: Selection = { ...sel0, fingerprint: pv.fingerprint };
     // Something changed between the preview and the tap: a new item matches.
     const extra = add({ sport: "baseball" });
     expect(applyBulk(sel, set("team", "Mariners"), db)).toEqual({ error: "The list changed. Look again." });
@@ -253,12 +258,34 @@ describe("selections", () => {
     expect(get(extra).team).toBeNull();
   });
 
+  it("all matching: same count but a different list is refused, and so is a missing or bad fingerprint", () => {
+    const a = add({ sport: "baseball" });
+    const b = add({ sport: "baseball" });
+    const sel0: Selection = { filters: { sport: "baseball" }, expectedCount: 2 };
+    const fingerprint = ok(previewBulk(sel0, set("team", "M"), db)).fingerprint;
+    // One leaves, another arrives: the count is still 2.
+    softDeleteItems([a], db);
+    add({ sport: "baseball" });
+    expect(applyBulk({ ...sel0, fingerprint }, set("team", "M"), db)).toEqual({ error: "The list changed. Look again." });
+    expect(applyBulk(sel0, set("team", "M"), db)).toEqual({ error: "The list changed. Look again." });
+    expect(db.select().from(items).all().every((r) => r.team === null)).toBe(true);
+    expect(get(b).team).toBeNull();
+    expect(parseSelection({ ...sel0, fingerprint: "xyz" })).toEqual({ error: "Select the items again." });
+    expect(parseSelection({ ...sel0, fingerprint: "0123456789abcdef" })).toHaveProperty("filters");
+  });
+
+  it("the fingerprint is sha256 of the sorted ids joined by commas, first 16 hex characters", () => {
+    expect(fingerprintIds([3, 1, 2])).toBe(createHash("sha256").update("1,2,3").digest("hex").slice(0, 16));
+  });
+
   it("all matching uses the same filters as Inventory, including the parsed form", () => {
     for (let i = 0; i < 45; i++) add({ year: 1990 + (i % 3), player: i % 2 ? "X" : null });
     const filters = inventoryFilterSchema.parse({ yearFrom: "1991", missing: "player", page: "2", sort: "player" });
     const total = listItems(filters, db).total;
-    const sel: Selection = { filters, expectedCount: total };
-    expect(ok(previewBulk(sel, { type: "status", status: "confirmed" }, db)).count).toBe(total);
+    const sel0: Selection = { filters, expectedCount: total };
+    const pv = ok(previewBulk(sel0, { type: "status", status: "confirmed" }, db));
+    expect(pv.count).toBe(total);
+    const sel: Selection = { ...sel0, fingerprint: pv.fingerprint };
     expect(ok(applyBulk(sel, { type: "status", status: "confirmed" }, db)).changed).toBe(total);
     expect(listItems({ ...filters, status: "confirmed" }, db).total).toBe(total);
   });
@@ -295,6 +322,42 @@ describe("selections", () => {
   });
 });
 
+describe("purge cleans saved undo text", () => {
+  it("removes purged ids from every undo entry and deletes an op left empty", async () => {
+    const a = add({ player: "Secret A" });
+    const b = add({ player: "Secret B" });
+    const c = add({ player: "Keep C" });
+    const op1 = ok(applyBulk(ids(a, b, c), set("player", "X"), db, later(MIN)));
+    const op2 = ok(applyBulk(ids(a), set("team", "T"), db, later(2 * MIN)));
+    softDeleteItems([a, b], db);
+    expect(await purgeItems([a, b], db)).toBe(2);
+    const left = (undoData(op1.opId, db) as { items: [number, unknown][] }).items.map(([id]) => id);
+    expect(left).toEqual([c]);
+    expect(JSON.stringify(ops())).not.toMatch(/Secret/);
+    expect(ops().map((o) => o.id)).toEqual([op1.opId]);
+    expect(undoData(op2.opId, db)).toBeNull();
+  });
+
+  it("a live item in the purge list keeps its undo entry", async () => {
+    const a = add({ player: "A" });
+    const r = ok(applyBulk(ids(a), set("player", "B"), db, later(MIN)));
+    expect(await purgeItems([a], db)).toBe(0);
+    expect(ops()).toHaveLength(1);
+    expect(undoData(r.opId, db)).not.toBeNull();
+  });
+});
+
+describe("plain messages for over-limit filters", () => {
+  it("says what is wrong in plain words", () => {
+    const err = (filters: object) => parseSelection({ filters, expectedCount: 1 });
+    expect(err({ q: "x".repeat(101) })).toEqual({ error: "That search is too long." });
+    expect(err({ yearFrom: 1000 })).toEqual({ error: "That first year is too early." });
+    expect(err({ yearTo: 3000 })).toEqual({ error: "That last year is too far ahead." });
+    expect(err({ location: 0 })).toEqual({ error: "That location is not valid." });
+    expect(err({ tier: [] })).toEqual({ error: "Pick at least one rarity." });
+  });
+});
+
 describe("safety", () => {
   it("a failure in the middle rolls everything back", () => {
     const list = Array.from({ length: 10 }, () => add({ team: null }));
@@ -308,8 +371,10 @@ describe("safety", () => {
   it("changes 5,000 items in under 5 seconds", () => {
     const rows = Array.from({ length: MAX_BULK_ITEMS }, (_, i) => ({ kind: "card" as const, title: "T", player: `P${i}`, createdAt: T0, updatedAt: T0 }));
     for (let i = 0; i < rows.length; i += 500) db.insert(items).values(rows.slice(i, i + 500)).run();
+    const all0: Selection = { filters: {}, expectedCount: MAX_BULK_ITEMS };
+    const fingerprint = ok(previewBulk(all0, set("team", "Mariners"), db)).fingerprint;
     const started = performance.now();
-    const r = ok(applyBulk({ filters: {}, expectedCount: MAX_BULK_ITEMS }, set("team", "Mariners"), db, later(MIN)));
+    const r = ok(applyBulk({ ...all0, fingerprint }, set("team", "Mariners"), db, later(MIN)));
     const applyMs = performance.now() - started;
     const mid = performance.now();
     const undo = ok(undoBulk(r.opId, db));
@@ -333,6 +398,29 @@ describe("undo", () => {
     expect(undoBulk(r.opId, db)).toEqual({ error: "This change was already undone." });
     expect(latestUndoable(db)).toBeNull();
     expect(undoBulk(424242, db)).toEqual({ error: "This change can no longer be undone." });
+  });
+
+  it("bulk delete then undo brings the items back, even after a location was deleted or a restore elsewhere", () => {
+    const a = add({ locationId: box });
+    const b = add();
+    const r = ok(applyBulk(ids(a, b), { type: "delete" }, db, later(MIN)));
+    expect(get(a).deletedAt).not.toBeNull();
+    expect(ok(undoBulk(r.opId, db, later(2 * MIN)))).toMatchObject({ restored: 2, skipped: 0 });
+    expect(get(a).deletedAt).toBeNull();
+    expect(get(b).deletedAt).toBeNull();
+  });
+
+  it("deleting a location or restoring from the bin counts as an edit, so undo leaves those items alone", () => {
+    const a = add({ locationId: box, team: "Old" });
+    const b = add({ team: "Old" });
+    const r = ok(applyBulk(ids(a, b), set("team", "New"), db, later(MIN)));
+    deleteLocation(box, db, later(2 * MIN));
+    expect(get(a).updatedAt).toEqual(later(2 * MIN));
+    softDeleteItems([b], db, later(2 * MIN));
+    restoreItems([b], db, later(3 * MIN));
+    expect(get(b).updatedAt).toEqual(later(3 * MIN));
+    expect(ok(undoBulk(r.opId, db, later(4 * MIN)))).toMatchObject({ restored: 0, skipped: 2 });
+    expect(get(a).team).toBe("New");
   });
 
   it("skips items edited, deleted or whose location went away since, and reports the numbers", () => {

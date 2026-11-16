@@ -103,8 +103,14 @@ export function renameLocation(id: number, input: unknown, db: Db = getDb()): Lo
   });
 }
 
-/** Items in the location are kept; the database sets their location to none. */
-export function deleteLocation(id: number, db: Db = getDb()): { ok: boolean } {
-  const res = db.delete(locations).where(eq(locations.id, id)).run();
-  return { ok: res.changes > 0 };
+/**
+ * Items in the location are kept; the database sets their location to none.
+ * Those items get updated_at = now, so a bulk undo sees them as edited since.
+ */
+export function deleteLocation(id: number, db: Db = getDb(), now: Date = new Date()): { ok: boolean } {
+  return db.transaction((tx) => {
+    tx.update(items).set({ updatedAt: now }).where(eq(items.locationId, id)).run();
+    const res = tx.delete(locations).where(eq(locations.id, id)).run();
+    return { ok: res.changes > 0 };
+  }, { behavior: "immediate" });
 }

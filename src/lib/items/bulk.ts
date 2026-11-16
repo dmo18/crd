@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
@@ -45,15 +46,15 @@ export const FIELD_LABELS: Record<BulkField | BulkTextField, string> = {
 
 /** Filters as the manager screen holds them (already parsed), without page and sort. */
 export const selectionFiltersSchema = z.strictObject({
-  q: z.string().trim().min(1).max(100).optional(),
+  q: z.string().trim().min(1, "Type something to search for.").max(100, "That search is too long.").optional(),
   kind: z.enum(ITEM_KINDS).optional(),
   sport: z.enum(SPORTS).optional(),
   status: z.enum(ITEM_STATUSES).optional(),
-  tier: z.array(z.enum(RARITY_TIERS)).min(1).max(RARITY_TIERS.length).optional(),
+  tier: z.array(z.enum(RARITY_TIERS)).min(1, "Pick at least one rarity.").max(RARITY_TIERS.length, "Too many rarities picked.").optional(),
   rookie: z.literal(true).optional(),
-  yearFrom: z.number().int().min(1860).max(2100).optional(),
-  yearTo: z.number().int().min(1860).max(2100).optional(),
-  location: z.union([z.literal("none"), z.number().int().min(1).max(2_000_000_000)]).optional(),
+  yearFrom: z.number().int().min(1860, "That first year is too early.").max(2100, "That first year is too far ahead.").optional(),
+  yearTo: z.number().int().min(1860, "That last year is too early.").max(2100, "That last year is too far ahead.").optional(),
+  location: z.union([z.literal("none"), z.number().int().min(1, "That location is not valid.").max(2_000_000_000, "That location is not valid.")]).optional(),
   value: z.literal("none").optional(),
   missing: z.enum(MISSING_FIELDS).optional(),
   flag: z.enum(ITEM_FLAGS).optional(),
@@ -63,7 +64,7 @@ export const selectionFiltersSchema = z.strictObject({
 });
 export type SelectionFilters = Omit<InventoryFilters, "sort" | "page">;
 
-export type Selection = { ids: number[] } | { filters: InventoryFilters | SelectionFilters; expectedCount: number };
+export type Selection = { ids: number[] } | { filters: InventoryFilters | SelectionFilters; expectedCount: number; fingerprint?: string };
 export type BulkAction =
   | { type: "set"; field: BulkField; value: unknown; onlyEmpty: boolean }
   | { type: "replace"; field: BulkTextField; find: string; replace: string; matchCase: boolean }
@@ -71,7 +72,8 @@ export type BulkAction =
   | { type: "status"; status: ItemStatus }
   | { type: "delete" };
 export type BulkSample = { id: number; title: string; before: string; after: string };
-export type BulkPreview = { count: number; samples: BulkSample[] };
+/** `fingerprint` is for "all matching": a short stamp of the exact list of items the preview saw. */
+export type BulkPreview = { count: number; samples: BulkSample[]; fingerprint: string };
 type Fail = { error: string };
 
 const idList = z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER))
@@ -82,6 +84,7 @@ const selectionSchema = z.union([
   z.strictObject({
     filters: selectionFiltersSchema,
     expectedCount: z.number().int().min(1, "Select at least one item first.").max(Number.MAX_SAFE_INTEGER),
+    fingerprint: z.string().regex(/^[0-9a-f]{16}$/, "The list changed. Look again.").optional(),
   }),
 ]);
 
@@ -133,8 +136,17 @@ function liveRows(tx: Tx, ids: number[]): Item[] {
   return out.sort((a, b) => a.id - b.id);
 }
 
-/** The live items a selection covers, worked out on the server (deleted items are never in it). */
-function resolveSelection(tx: Tx, sel: Selection): Item[] | Fail {
+/** A short stamp of a list of ids: sha256 of the sorted ids joined by commas, first 16 hex characters. */
+export function fingerprintIds(ids: number[]): string {
+  const sorted = [...new Set(ids)].sort((a, b) => a - b);
+  return createHash("sha256").update(sorted.join(",")).digest("hex").slice(0, 16);
+}
+
+/**
+ * The live items a selection covers, worked out on the server (deleted items are never in it).
+ * With `strict` (apply), "all matching" must also carry the fingerprint the preview gave.
+ */
+function resolveSelection(tx: Tx, sel: Selection, strict = false): Item[] | Fail {
   if ("ids" in sel) {
     if (sel.ids.length === 0) return { error: "Select at least one item first." };
     if (new Set(sel.ids).size > MAX_BULK_IDS) return { error: `Tick up to ${MAX_BULK_IDS} items one by one, or use "Select all matching".` };
@@ -146,7 +158,9 @@ function resolveSelection(tx: Tx, sel: Selection): Item[] | Fail {
     return { error: `That is more than ${MAX_BULK_ITEMS.toLocaleString("en-US")} items. Narrow the search and try again.` };
   }
   if (total !== sel.expectedCount || ids.length !== total) return { error: "The list changed. Look again." };
-  return liveRows(tx, ids);
+  const rows = liveRows(tx, ids);
+  if (strict && sel.fingerprint !== fingerprintIds(rows.map((r) => r.id))) return { error: "The list changed. Look again." };
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,8 +335,8 @@ function context(tx: Tx): Ctx {
   return { locationNames: new Map(tx.select({ id: locations.id, name: locations.name }).from(locations).all().map((l) => [l.id, l.name])) };
 }
 
-function work(tx: Tx, sel: Selection, action: BulkAction): { rows: Item[]; changes: Change[]; ctx: Ctx } | Fail {
-  const rows = resolveSelection(tx, sel);
+function work(tx: Tx, sel: Selection, action: BulkAction, strict = false): { rows: Item[]; changes: Change[]; ctx: Ctx } | Fail {
+  const rows = resolveSelection(tx, sel, strict);
   if ("error" in rows) return rows;
   const ctx = context(tx);
   const changes = planChanges(tx, rows, action, ctx);
@@ -344,6 +358,7 @@ export function previewBulk(sel: Selection, action: BulkAction, db: Db = getDb()
     if ("error" in w) return w;
     return {
       count: w.changes.length,
+      fingerprint: fingerprintIds(w.rows.map((r) => r.id)),
       samples: w.changes.slice(0, SAMPLES).map(({ id, title, before, after }) => ({ id, title, before, after })),
     };
   });
@@ -361,7 +376,7 @@ const fromJson = (old: Record<string, unknown>) =>
   Object.fromEntries(Object.entries(old).map(([k, v]) => [k, TIME_COLUMNS.has(k) && typeof v === "number" ? new Date(v) : v]));
 
 /** Keeps the latest BULK_KEEP operations and none older than BULK_KEEP_DAYS. */
-function pruneOps(tx: Tx, now: Date): void {
+export function pruneOps(tx: Tx, now: Date): void {
   tx.delete(bulkOps).where(lt(bulkOps.at, new Date(now.getTime() - BULK_KEEP_DAYS * DAY_MS))).run();
   const edge = tx.select({ id: bulkOps.id }).from(bulkOps).orderBy(desc(bulkOps.id)).limit(1).offset(BULK_KEEP - 1).get();
   if (edge) tx.delete(bulkOps).where(lt(bulkOps.id, edge.id)).run();
@@ -377,7 +392,7 @@ export function applyBulk(
 ): { changed: number; opId: number; summary: string } | Fail {
   return db.transaction((txRaw) => {
     const tx = txRaw as unknown as Tx;
-    const w = work(tx, sel, action);
+    const w = work(tx, sel, action, true);
     if ("error" in w) return w;
     if (w.changes.length === 0) return { error: "Nothing here needs this change." };
     const byId = new Map(w.rows.map((r) => [r.id, r]));
