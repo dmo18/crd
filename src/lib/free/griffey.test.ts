@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RecognizedItem } from "@/lib/recognition/types";
-import { fixturePhotos, GRIFFEY } from "../../../tests/helpers/ocr-fixture";
+import { buildTitle } from "@/lib/title";
+import { fixturePhotos, GRIFFEY, recordedOcr } from "../../../tests/helpers/ocr-fixture";
 import { closeTextReader } from "./ocr";
+import { parseCardText } from "./parse";
 import { FreeRecognizer } from "./recognizer";
 
 /**
@@ -16,13 +18,20 @@ import { FreeRecognizer } from "./recognizer";
  * another number.
  */
 
+/** Words from the bio, the stat table and misread scraps that must never end up in a name. */
+const NOT_NAME = /graduated|moeller|cincinnati|high school|played|football|baseball|player|year|bellingham|bernardino|vermont|tug|atau/i;
+/** A partial name is fine for now, but only made of the words of his real name. */
+const NAME_WORD = /^(?:ken|griffey|jr\.?)$/i;
+
 let item: RecognizedItem;
+let title: string;
 
 beforeAll(async () => {
   const recognizer = new FreeRecognizer({ lookup: async () => null });
   const started = Date.now();
   [item] = await recognizer.recognize({ mode: "single", photos: fixturePhotos(GRIFFEY) });
   console.log(`Griffey scan took ${((Date.now() - started) / 1000).toFixed(1)} s`);
+  title = buildTitle(item);
 }, 120_000);
 
 afterAll(async () => {
@@ -31,12 +40,41 @@ afterAll(async () => {
 
 describe("1990 Topps Ken Griffey Jr., read end to end", () => {
   it("reads the sport", () => expect(item.sport).toBe("baseball"));
+  it("reads the year from the stat table", () => expect(item.year).toBe(1990));
+  it("reads the team", () => expect(item.team ?? "").toContain("Mariners"));
   it("never reads a wrong card number", () => expect([null, "336"]).toContain(item.cardNumber));
-  it.todo("reads the year (task 9.11, stat table rule)");
-  it.todo("reads the team (task 9.11, team rule)");
-  it.todo("takes no name from a sentence (task 9.11)");
+  it("takes no name from a sentence", () => {
+    expect(title).not.toMatch(NOT_NAME);
+    expect(item.player ?? "").not.toMatch(NOT_NAME);
+    for (const word of (item.player ?? "").split(" ").filter(Boolean)) expect(word).toMatch(NAME_WORD);
+  });
+  // Not reached with these photos: TOPPS is printed only as the script logo
+  // and in tiny print by the right edge, and neither is read. Confidence
+  // needs the brand to reach 0.5. Open question for the owner, see STATUS.md.
   it.todo("reads the brand Topps");
-  it.todo("is sure enough to show, even if it waits in Review");
-  it.todo("reads the full name Ken Griffey Jr. (Milestone 10, card catalog)");
+  it.todo("is sure enough to show, even if it waits in Review (confidence 0.5)");
+  it.todo("reads the full name Ken Griffey Jr. every time (Milestone 10, card catalog)");
   it.todo("fills the card number 336 (Milestone 10, card catalog)");
+});
+
+describe("1990 Topps Ken Griffey Jr., parsing the recorded text", () => {
+  const { front, back } = recordedOcr(GRIFFEY);
+  const parsed = parseCardText(front, back);
+
+  it("gives only Griffey spellings as player candidates, no sentence names", () => {
+    expect(parsed.playerCandidates.length).toBeGreaterThan(0);
+    for (const name of parsed.playerCandidates) {
+      expect(name).toMatch(/^(?:Ken )?Griffey/);
+      expect(name).not.toMatch(/Ken Graduated|Moeller Cincinnati|Tug Atau Le/i);
+    }
+  });
+
+  it("keeps Ken from the bio only as a first name hint", () => expect(parsed.firstNameHint).toBe("Ken"));
+
+  it("reads team, year, sport and position", () => {
+    expect(parsed.team ?? "").toContain("Mariners");
+    expect(parsed.year).toBe(1990);
+    expect(parsed.sport).toBe("baseball");
+    expect(parsed.position).toBe("OF");
+  });
 });

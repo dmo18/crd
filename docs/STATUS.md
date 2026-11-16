@@ -14,6 +14,20 @@
   the front (the cap hides part of it; the band reader gets nothing), and
   TOPPS anywhere (the logo is script, the copyright print on the right edge
   is too small and sits inside the photo, not in the outer 9% strip).
+- 9.11 done: parsing rules. No name from a bio sentence (its first word is
+  kept only as a first name hint), the name header "Name, Jr. * POS" is the
+  strongest name and sets the position, a name in capitals read from a band
+  is trusted, team names match with one letter wrong ("MARMNERS"), the last
+  stat table row gives the team, and split stat rows with a repeated season
+  give the year.
+- Griffey photos end to end now: sport baseball, year 1990, team Seattle
+  Mariners, player "Ken Griffey Jr." (matched to the key card list from the
+  header), no number, no wrong names. Whole scan about 13 to 19 s.
+- Open question for the owner or lead: the brand Topps is not read from
+  these photos (see above), so the Griffey test cannot meet "brand Topps"
+  or "confidence at least 0.5" (confidence is 0.35 without the brand). Both
+  stay marked todo in `griffey.test.ts`. Milestone 10's catalog may settle
+  it; a wider edge strip was tried and read nothing useful either.
 - The same photo can read slightly differently depending on what the text
   engine read just before (seen in testing). The band reading of the back
   header's G switches between "Griffey" and "Criffey" with small changes.
