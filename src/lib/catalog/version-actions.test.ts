@@ -191,6 +191,7 @@ describe("no path decides a version for the owner", () => {
       }
     };
     walk(root);
-    expect(writers.sort()).toEqual(["db/schema.ts", "lib/catalog/pick.ts", "lib/catalog/versions.ts"]);
+    // update.ts only clears the answer when the variation changes; duplicates.ts copies the newer record's answer onto an older record that has none.
+    expect(writers.sort()).toEqual(["db/schema.ts", "lib/catalog/pick.ts", "lib/catalog/versions.ts", "lib/items/duplicates.ts", "lib/items/update.ts"]);
   });
 });

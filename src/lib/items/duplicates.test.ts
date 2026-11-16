@@ -65,8 +65,8 @@ describe("findDuplicates", () => {
 
 describe("mergeInto", () => {
   it("adds quantities, moves the source's photos to the target and removes the source", () => {
-    const source = add({ status: "needs_review", quantity: 2 });
     const target = add({ quantity: 3 });
+    const source = add({ status: "needs_review", quantity: 2 });
     db.insert(images).values({ itemId: target, role: "front", file: "t.jpg", thumbFile: "t-t.jpg", width: 1, height: 1, bytes: 1 }).run();
     db.insert(images).values({ itemId: source, role: "front", file: "a.jpg", thumbFile: "a-t.jpg", originalFile: "a-o.jpg", width: 1, height: 1, bytes: 1 }).run();
     db.insert(images).values({ itemId: source, role: "back", file: "b.jpg", thumbFile: "b-t.jpg", width: 1, height: 1, bytes: 1 }).run();
@@ -108,8 +108,8 @@ describe("mergeInto", () => {
   });
 
   it("keeps the source's value and history when the target has none", () => {
-    const source = add({ status: "needs_review", estLowCents: 400, estHighCents: 800, estValueCents: 600, valueSource: "ai_estimate", valueBasis: "AI." });
     const target = add();
+    const source = add({ status: "needs_review", estLowCents: 400, estHighCents: 800, estValueCents: 600, valueSource: "ai_estimate", valueBasis: "AI." });
     db.insert(valuations).values({ itemId: source, source: "ai_estimate", valueCents: 600 }).run();
     expect(mergeInto(source, target, db).ok).toBe(true);
     expect(db.select().from(items).where(eq(items.id, target)).get()).toMatchObject({
@@ -119,8 +119,8 @@ describe("mergeInto", () => {
   });
 
   it("keeps the target's own value when it has one", () => {
-    const source = add({ status: "needs_review", estValueCents: 600 });
     const target = add({ manualValueCents: 100 });
+    const source = add({ status: "needs_review", estValueCents: 600 });
     expect(mergeInto(source, target, db).ok).toBe(true);
     expect(db.select().from(items).where(eq(items.id, target)).get()).toMatchObject({ manualValueCents: 100, estValueCents: null });
   });
@@ -142,10 +142,10 @@ describe("merge and bulk undo", () => {
     const c = add({ cardNumber: "9" });
     const r = applyBulk({ ids: [a, b, c] }, { type: "set", field: "notes", value: "secret", onlyEmpty: false, clear: false }, db);
     expect("error" in r).toBe(false);
-    expect(mergeInto(a, b, db).ok).toBe(true);
+    expect(mergeInto(b, a, db).ok).toBe(true);
     const undo = JSON.parse(db.select().from(bulkOps).all()[0].undo) as { items: number[][] };
-    expect(undo.items.map((e) => e[0]).sort()).toEqual([b, c].sort());
-    expect(db.select().from(bulkOps).all()[0].undo).not.toContain('"' + a + '"');
+    expect(undo.items.map((e) => e[0]).sort()).toEqual([a, c].sort());
+    expect(db.select().from(bulkOps).all()[0].undo).not.toContain('"' + b + '"');
   });
 });
 
@@ -288,5 +288,34 @@ describe("duplicate kinds (Milestone 11)", () => {
     }
     expect(best).toBeLessThan(2000); // loose for a busy server; about 100 ms when quiet
     expect(found.length).toBeGreaterThan(0);
+  });
+});
+
+describe("mergeInto keeps the older record", () => {
+  it("combines the newer into the older whichever way it is asked", () => {
+    const older = add({ quantity: 2 });
+    const newer = add({ quantity: 3 });
+    db.insert(images).values({ itemId: older, role: "front", file: "o.jpg", thumbFile: "o-t.jpg", width: 1, height: 1, bytes: 1 }).run();
+    db.insert(images).values({ itemId: newer, role: "front", file: "n.jpg", thumbFile: "n-t.jpg", width: 1, height: 1, bytes: 1 }).run();
+    // Started from the OLDER page: the "source" is the older id.
+    const r = mergeInto(older, newer, db);
+    expect(r).toEqual({ ok: true, targetId: older, movedPhotos: 1 });
+    expect(db.select().from(items).where(eq(items.id, newer)).get()).toBeUndefined();
+    expect(row(older).quantity).toBe(5);
+    expect(db.select().from(images).all().map((i) => [i.itemId, i.file])).toEqual([[older, "o.jpg"], [older, "n.jpg"]]);
+  });
+
+  it("takes the newer one's answers only where the older has none", () => {
+    const older = add({ notes: "older note", rookieState: "no", rookieSource: "owner", isRookie: false, manualValueCents: 500 });
+    const newer = add({ notes: "newer note", rookieState: "yes", rookieSource: "owner", isRookie: true, manualValueCents: 900, variation: "Tiffany", versionState: "confirmed", versionSource: "owner" });
+    // Same kind needs equal versions; make both agree by asking with equal version fields.
+    db.update(items).set({ variation: "Tiffany", versionState: "confirmed", versionSource: "owner" }).where(eq(items.id, older)).run();
+    expect(mergeInto(newer, older, db).ok).toBe(true);
+    expect(row(older)).toMatchObject({ notes: "older note", rookieState: "no", isRookie: false, manualValueCents: 500 });
+
+    const o2 = add({ notes: " ", manualValueCents: null });
+    const n2 = add({ notes: "from newer", rookieState: "yes", rookieSource: "owner", isRookie: true, manualValueCents: 900, estValueCents: 700 });
+    expect(mergeInto(o2, n2, db).ok).toBe(true);
+    expect(row(o2)).toMatchObject({ notes: "from newer", rookieState: "yes", isRookie: true, rookieSource: "owner", manualValueCents: 900 });
   });
 });

@@ -44,7 +44,7 @@ export function CatalogBlock({ item }: { item: Item }) {
                 <p className="text-sm font-semibold">Some details differ from the catalog:</p>
                 <ul className="flex flex-col gap-1 text-sm">
                   {differences.map((d) => (
-                    <li key={d.field} className="break-words">Scanner read {FIELD_WORDS[d.field]}: {String(d.itemValue)}. Catalog says: {String(d.catalogValue)}</li>
+                    <li key={d.field} className="break-words">Scanner read {FIELD_WORDS[d.field]}: {d.itemValue == null ? "" : String(d.itemValue)}. Catalog says: {d.catalogValue == null ? "" : String(d.catalogValue)}</li>
                   ))}
                 </ul>
                 <form action={catalogValuesOnItemAction}>

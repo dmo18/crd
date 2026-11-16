@@ -188,6 +188,14 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
     delete patch.serialNumber;
     Object.assign(patch, extras.patch);
   }
+  // A new variation means the version must be chosen again, unless it is the current version's name.
+  if (typeof patch.variation === "string" || patch.variation === null) {
+    const sameName = (a: string | null | undefined) => (a ?? "").trim().toLowerCase();
+    if (sameName(patch.variation) !== sameName(existing.variation)) {
+      patch.versionState = null;
+      patch.versionSource = null;
+    }
+  }
   // Every catalog field the owner changed is theirs from now on. `firstSuggestion` is never part of a patch.
   const fieldSources = markOwnerChanges(existing, patch);
   if (fieldSources !== undefined) patch.fieldSources = fieldSources;

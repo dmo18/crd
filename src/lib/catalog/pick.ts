@@ -106,7 +106,7 @@ export function pickCandidate(itemId: number, position: number, sourceId: string
         version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
       } else if (name) {
         // The owner's own variation says something else: nothing is decided, the difference is shown.
-        differences = [...differences.filter((d) => d.field !== "variation"), { field: "variation", itemValue: String(after.variation), catalogValue: name }];
+        differences = [...differences.filter((d) => d.field !== "variation"), { field: "variation", itemValue: after.variation ?? "", catalogValue: name }];
       }
     }
     const confirmed = differences.length === 0;
@@ -247,7 +247,7 @@ export function reviewCatalogView(item: Item, db: Db = getDb(), now: Date = new 
       const { differences } = applyCatalogCard(item, row);
       linked = {
         line: cardLine(row), url: sourceUrl(src?.url),
-        differences: differences.map((d) => ({ label: FIELD_WORDS[d.field], read: String(d.itemValue), catalog: String(d.catalogValue) })),
+        differences: differences.map((d) => ({ label: FIELD_WORDS[d.field], read: d.itemValue == null ? "" : String(d.itemValue), catalog: d.catalogValue == null ? "" : String(d.catalogValue) })),
       };
     }
   }

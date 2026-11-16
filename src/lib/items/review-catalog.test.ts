@@ -155,6 +155,19 @@ describe("This is my card (one tap pick in Review)", () => {
   });
 });
 
+describe("differences never show the word null", () => {
+  it("shows an empty value when the owner's own variation is empty", () => {
+    const base = { ...griffey, variation: "Tiffany", sourceId: "551099", tags: [] as string[] };
+    const item = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps" }, [base]);
+    db.update(items).set({ variation: null, fieldSources: JSON.stringify({ ...marks(item), variation: "owner" }) }).where(eq(items.id, item.id)).run();
+    const r = pick.pickCandidate(item.id, 0, "551099", db);
+    expect(JSON.stringify(r)).not.toMatch(/null"/);
+    if (r.ok) for (const d of r.differences) expect(String(d.itemValue)).not.toBe("null");
+    const view = pick.reviewCatalogView(get(item.id), db)!;
+    expect(JSON.stringify(view.linked?.differences ?? [])).not.toContain("null");
+  });
+});
+
 describe("None of these, Confirm and old lists", () => {
   it("None of these clears the list and leaves the reading", async () => {
     const item = scanned({ player: "Ken Griffey" });

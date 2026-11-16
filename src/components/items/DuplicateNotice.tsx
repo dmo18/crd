@@ -13,6 +13,10 @@ export function DuplicateNotice({ itemId, title, quantity, db, match }: { itemId
   const found = match === undefined ? findDuplicateMatches(itemId, db)[0] ?? null : match;
   if (!found) return null;
   const old = found.item;
+  // The older record (lower id) is always the one kept; the server decides the same way.
+  const thisIsOlder = itemId < old.id;
+  const keepId = Math.min(itemId, old.id);
+  const goneId = Math.max(itemId, old.id);
   const oldLink = <Link href={`/items/${old.id}`} className="font-semibold underline">{old.title}</Link>;
   const serial = found.kind === "same_numbered" ? serialText(old) : null;
 
@@ -20,7 +24,9 @@ export function DuplicateNotice({ itemId, title, quantity, db, match }: { itemId
     <Notice tone={found.kind === "maybe" ? "warn" : "accent"}>
       <div className="flex flex-col gap-3">
         {found.kind === "same" ? (
-          <p>You already have this card: {oldLink} (quantity {old.quantity}).</p>
+          thisIsOlder
+            ? <p>This card was entered again later: {oldLink} (quantity {old.quantity}).</p>
+            : <p>You already have this card: {oldLink} (quantity {old.quantity}).</p>
         ) : found.kind === "maybe" ? (
           <p>This may be a card you already have: {oldLink}. The version differs or is open, or only one of them has a grade.</p>
         ) : (
@@ -29,16 +35,25 @@ export function DuplicateNotice({ itemId, title, quantity, db, match }: { itemId
 
         {found.kind !== "maybe" ? (
           <form action={mergeDuplicateAction} className="flex flex-col gap-2">
-            <input type="hidden" name="sourceId" value={itemId} />
-            <input type="hidden" name="targetId" value={old.id} />
-            <p>
-              {found.kind === "same"
-                ? `The old one then has a quantity of ${old.quantity + quantity}. `
-                : `The old one keeps its quantity of ${old.quantity}. `}
-              It keeps its own details. The photos of this record move to the old one, then this record is removed.
-            </p>
-            <Button type="submit" variant="secondary" className="w-full" aria-label={found.kind === "same" ? `Count ${title} with the old one` : `Remove the double entry ${title}`}>
-              {found.kind === "same" ? "Count it with the old one" : "Remove this double entry"}
+            <input type="hidden" name="sourceId" value={goneId} />
+            <input type="hidden" name="targetId" value={keepId} />
+            {thisIsOlder ? (
+              <p>
+                {found.kind === "same"
+                  ? `This one then has a quantity of ${quantity + old.quantity}. `
+                  : `This one keeps its quantity of ${quantity}. `}
+                It keeps its own details. The photos of the newer record move to this one, then the newer record is removed.
+              </p>
+            ) : (
+              <p>
+                {found.kind === "same"
+                  ? `The old one then has a quantity of ${old.quantity + quantity}. `
+                  : `The old one keeps its quantity of ${old.quantity}. `}
+                It keeps its own details. The photos of this record move to the old one, then this record is removed.
+              </p>
+            )}
+            <Button type="submit" variant="secondary" className="w-full" aria-label={found.kind === "same" ? (thisIsOlder ? `Count the newer one with ${title}` : `Count ${title} with the old one`) : `Remove the double entry ${thisIsOlder ? old.title : title}`}>
+              {found.kind === "same" ? (thisIsOlder ? "Count the newer one with this" : "Count it with the old one") : (thisIsOlder ? "Remove the newer double entry" : "Remove this double entry")}
             </Button>
           </form>
         ) : null}

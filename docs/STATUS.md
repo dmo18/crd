@@ -390,6 +390,20 @@
   kept record and takes them off the old scan. When that scan still has a
   whole-sheet photo, the scan stays (with no cards) so the sheet is kept. A
   kept record can then hold two fronts; the page shows both.
+- Milestone 11 builder choices not listed before:
+  - 11.3: "Show versions" is limited to 6 per minute in total, counted from
+    the activity log. A version picked in Review writes the variation as the
+    owner's own.
+  - 11.4: the paid AI's rookie "yes" is only a note now. Catalog rookie
+    evidence (RC tags) is not shown, because catalog tags are not stored
+    (known gap).
+  - The duplicates filter took about 100 ms on 5,000 items. The test limit is
+    2000 ms so busy servers do not fail it.
+  - Combining always keeps the older record (lower number), whichever page
+    the owner starts from. Answers given on the newer record (version,
+    rookie, own value, notes) come over only where the older one has none.
+  - Changing the variation in the item form clears the version answer, so
+    the version is chosen again, unless the new text is the same name.
 - No paid price feed yet. The `PriceSource` interface is where one plugs in.
 
 ## Open security findings

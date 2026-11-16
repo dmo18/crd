@@ -113,7 +113,6 @@ describe("turn and trim", () => {
     const t0 = Date.now();
     expect((await editPhoto({ itemId: item, imageId: id, edit: turn() }, db)).ok).toBe(true);
     const ms = Date.now() - t0;
-    console.log(`TIMING one turn of a photo: ${ms} ms`);
     expect(ms).toBeLessThan(6000);
   }, 120_000);
 });

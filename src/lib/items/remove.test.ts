@@ -98,6 +98,9 @@ describe("merge of the last card of a scan", () => {
     // Make the second card a duplicate of an older confirmed one from somewhere else.
     const target = db.insert(items).values({ kind: "card", title: "T", status: "confirmed", year: 1989, brand: "Upper Deck", cardNumber: "2", player: "Ken Griffey Jr." }).returning().get();
     await forever(itemIds[0]!);
+    // The kept record must be the older one (lower id): take the id the removed first card had.
+    db.update(items).set({ id: itemIds[0]! }).where(eq(items.id, target.id)).run();
+    target.id = itemIds[0]!;
     const crop = db.select().from(images).where(eq(images.itemId, itemIds[1]!)).get()!;
     const left = db.select().from(images).all();
     const r = mergeInto(itemIds[1]!, target.id, db);

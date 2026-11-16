@@ -106,3 +106,19 @@ describe("updateItem location", () => {
   });
 });
 
+
+describe("updateItem version", () => {
+  const chosen = { variation: "Tiffany", versionState: "confirmed", versionSource: "owner" } as const;
+
+  it("clears the version answer when the owner changes the variation", () => {
+    const id = insert(chosen);
+    expect(updateItem(id, { ...base, variation: "Gold" }, db)).toEqual({ ok: true });
+    expect(get(id)).toMatchObject({ variation: "Gold", versionState: null, versionSource: null });
+  });
+
+  it("keeps the answer when the variation is the current version's name", () => {
+    const id = insert(chosen);
+    expect(updateItem(id, { ...base, variation: " tiffany " }, db)).toEqual({ ok: true });
+    expect(get(id)).toMatchObject({ versionState: "confirmed", versionSource: "owner" });
+  });
+});

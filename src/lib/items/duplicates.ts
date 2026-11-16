@@ -7,6 +7,8 @@ import { liveItem } from "./live";
 import { scrubUndo } from "./undo-scrub";
 import { removeItemRows } from "./remove";
 import { formatSerial, splitSerial } from "./serial";
+import { withRookie } from "./rookie";
+import { buildTitle } from "@/lib/title";
 
 /**
  * Possible duplicates (PLAN.md Milestone 11, "Design: duplicates"). The app
@@ -273,14 +275,19 @@ class PhotoWouldBeDeleted extends Error {}
  * Fold the source into the target, in one transaction. Only for `same`
  * (quantities add up) and `same_numbered` (a double entry: the quantity
  * stays). Refused for `maybe` and for anything that is not a duplicate,
- * whatever a form sends. The target keeps its own fields; when it has no
+ * whatever a form sends. The older record is always the target and keeps its own fields (version,
+ * rookie mark, own value and notes of the newer one come over only where the
+ * older has none); when it has no
  * value at all it takes the source's value and history. The source's
  * photos, with their kept originals, MOVE to the target: a combine never
  * deletes a photo. Then the source is removed for good (not the bin: its
  * count now lives in the target, so a restore would count it twice).
  */
-export function mergeInto(sourceId: number, targetId: number, db: Db = getDb()): MergeResult {
-  if (sourceId === targetId) return refuse("not_same");
+export function mergeInto(askedSourceId: number, askedTargetId: number, db: Db = getDb()): MergeResult {
+  if (askedSourceId === askedTargetId) return refuse("not_same");
+  // The older record (lower id) is always the one kept, whichever page the owner started from.
+  const targetId = Math.min(askedSourceId, askedTargetId);
+  const sourceId = Math.max(askedSourceId, askedTargetId);
   try {
     return db.transaction((tx): MergeResult => {
       const t = tx as unknown as Db;
@@ -288,7 +295,8 @@ export function mergeInto(sourceId: number, targetId: number, db: Db = getDb()):
       const source = tx.select().from(items).where(and(eq(items.id, sourceId), liveItem)).get();
       const target = tx.select().from(items).where(and(eq(items.id, targetId), liveItem)).get();
       if (!source || !target) return refuse("gone");
-      const match = findDuplicateMatches(sourceId, t).find((d) => d.item.id === targetId);
+      // Asked the way the owner named the pair: the other record must be a confirmed one.
+      const match = findDuplicateMatches(askedSourceId, t).find((d) => d.item.id === askedTargetId);
       if (!match) return refuse("not_same");
       if (match.kind === "maybe") return refuse("maybe");
       const quantity = match.kind === "same_numbered" ? target.quantity : target.quantity + source.quantity;
@@ -301,6 +309,20 @@ export function mergeInto(sourceId: number, targetId: number, db: Db = getDb()):
       if (takeValue) {
         for (const key of VALUE_FIELDS) (patch as Record<string, unknown>)[key] = source[key];
       }
+      // Answers the owner gave on the newer record are kept only where the older one has none.
+      if (target.manualValueCents == null && source.manualValueCents != null) patch.manualValueCents = source.manualValueCents;
+      if (target.versionState == null && source.versionState != null) {
+        patch.variation = source.variation;
+        patch.versionState = source.versionState;
+        patch.versionSource = source.versionSource;
+        patch.versionOptions = source.versionOptions;
+        patch.title = buildTitle({ ...target, variation: source.variation });
+      }
+      const noRookie = (s: Item["rookieState"]) => s == null || s === "unknown";
+      if (noRookie(target.rookieState) && !noRookie(source.rookieState)) {
+        Object.assign(patch, withRookie(source.rookieState!, source.rookieSource ?? "owner", source.rookieNote));
+      }
+      if (!target.notes?.trim() && source.notes?.trim()) patch.notes = source.notes;
       tx.update(items).set(patch).where(eq(items.id, targetId)).run();
       if (takeValue) tx.update(valuations).set({ itemId: targetId }).where(eq(valuations.itemId, sourceId)).run();
 
