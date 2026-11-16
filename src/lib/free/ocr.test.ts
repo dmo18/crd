@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
+import { setLogSink } from "@/lib/log";
 import { boxOf, createTextReader, LONG_EDGE, MAX_PASSES, readerSettings, sidewaysTurn, textReaderStatus, type OcrEngine, type WorkerRead } from "./ocr";
-import { WorkerClient } from "./ocr-worker";
+import { ReaderDownError, removeJobFolders, WorkerClient } from "./ocr-worker";
 
 /**
  * The text reader with a fake worker (tests/helpers/fake-ocr-worker.mjs, run
@@ -162,6 +163,134 @@ describe("text reader over the worker", () => {
   });
 });
 
+describe("a dead reader is told apart from an unreadable picture (12R final review)", () => {
+  it("a crash, a time out, a bad answer and a reader that never starts are reader failures", async () => {
+    await expect(createTextReader(fake("crash")).read(await photo())).rejects.toBeInstanceOf(ReaderDownError);
+    await expect(createTextReader(fake("slow", { jobTimeoutMs: 300 })).read(await photo())).rejects.toBeInstanceOf(ReaderDownError);
+    await expect(createTextReader(fake("garbage")).read(await photo())).rejects.toBeInstanceOf(ReaderDownError);
+    await expect(createTextReader(fake("noready", { startTimeoutMs: 300 })).read(await photo())).rejects.toBeInstanceOf(ReaderDownError);
+  });
+
+  it("a picture the worker could not read is not a reader failure", async () => {
+    const err = await createTextReader(fake("error")).read(await photo()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ReaderDownError);
+  });
+
+  it("a missing program is a reader failure and is logged by kind and code only", async () => {
+    const lines: string[] = [];
+    setLogSink((l) => lines.push(l));
+    try {
+      const missing = path.join(os.tmpdir(), "no-such-python-here-secret-place");
+      const client = new WorkerClient({ command: missing, args: [] });
+      clients.push(client);
+      await expect(createTextReader(client).read(await photo())).rejects.toBeInstanceOf(ReaderDownError);
+      const logged = lines.map((l) => JSON.parse(l)).filter((l) => l.event === "text_reader_start_failed");
+      expect(logged.length).toBeGreaterThan(0);
+      expect(logged[0]).toMatchObject({ level: "warn", errno: "ENOENT" });
+      expect(lines.join("\n")).not.toContain("secret-place");
+      expect(lines.join("\n")).not.toContain(os.tmpdir());
+    } finally {
+      setLogSink();
+    }
+  });
+});
+
+describe("a failed re-read keeps the good first read (12R final review)", () => {
+  it("corner re-reads the worker could not read leave the first read standing", async () => {
+    const back = await createTextReader(fake("okthenerror")).read(await photo(), { back: true });
+    expect(back.text).toContain("size 700x500");
+    expect(back.crops).toBe(0);
+  });
+
+  it("a reader that dies on a re-read keeps the first read and tries no more re-reads", async () => {
+    const client = fake("okthencrash");
+    const back = await createTextReader(client).read(await photo(), { back: true });
+    expect(back.text).toContain("size 700x500");
+    expect(back.crops).toBe(0);
+    // No fresh worker was started for the other corners.
+    expect(client.status()).toBe("down");
+  });
+
+  it("a failed sideways re-read keeps the first read", async () => {
+    // The first (sideways) read works, then the reader dies on the upright re-read.
+    const engine: OcrEngine = {
+      calls: 0,
+      async read() {
+        this.calls++;
+        if (this.calls > 1) throw new ReaderDownError();
+        return { width: 500, height: 700, lines: [
+          { text: "BILL RIPKEN", score: 0.9, box: [[10, 100], [40, 100], [40, 400], [10, 400]], turned: true },
+          { text: "1989 FLEER CORP", score: 0.9, box: [[60, 100], [80, 100], [80, 500], [60, 500]], turned: true },
+        ] };
+      },
+      status: () => "ready",
+      close: async () => undefined,
+    } as OcrEngine & { calls: number };
+    const result = await createTextReader(engine).read(await photo(500, 700));
+    expect(result.text).toContain("BILL RIPKEN");
+    expect(result.passes).toBe(1);
+  });
+
+  it("a dead reader on the first read still fails the read", async () => {
+    const engine: OcrEngine = { read: async () => { throw new ReaderDownError(); }, status: () => "down", close: async () => undefined };
+    await expect(createTextReader(engine).read(await photo(), { back: true })).rejects.toBeInstanceOf(ReaderDownError);
+  });
+});
+
+describe("the worker stops when idle (12R final review)", () => {
+  it("stops after the idle time with an unref'd timer, shows waiting, and starts again on the next job", async () => {
+    const client = fake("ok", { idleMs: 200 });
+    const reader = createTextReader(client);
+    await reader.read(await photo());
+    expect(client.status()).toBe("ready");
+    const timer = (client as unknown as { idleTimer: { hasRef(): boolean } | null }).idleTimer;
+    expect(timer).not.toBeNull();
+    expect(timer!.hasRef()).toBe(false);
+    const folder = client.jobFolder()!;
+    await new Promise((r) => setTimeout(r, 500));
+    expect(client.status()).toBe("waiting");
+    expect(client.jobFolder()).toBeNull();
+    expect(fs.existsSync(folder)).toBe(false);
+    const again = await reader.read(await photo());
+    expect(again.text).toContain("size 700x500");
+    expect(client.status()).toBe("ready");
+  });
+
+  it("idle 0 keeps the worker running", async () => {
+    const client = fake("ok", { idleMs: 0 });
+    await createTextReader(client).read(await photo());
+    expect((client as unknown as { idleTimer: unknown }).idleTimer).toBeNull();
+    expect(client.status()).toBe("ready");
+  });
+});
+
+describe("job folders are not left behind (12R final review)", () => {
+  it("a restarted worker removes the folder of the one before", async () => {
+    const state = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "crd-fake-")), "state");
+    const client = fake("crashonce", {}, state);
+    const reader = createTextReader(client);
+    await expect(reader.read(await photo())).rejects.toThrow();
+    const first = client.jobFolder()!;
+    expect(fs.existsSync(first)).toBe(true);
+    await reader.read(await photo());
+    const second = client.jobFolder()!;
+    expect(second).not.toBe(first);
+    expect(fs.existsSync(first)).toBe(false);
+    expect(fs.existsSync(second)).toBe(true);
+    fs.rmSync(path.dirname(state), { recursive: true, force: true });
+  });
+
+  it("folders still on disk are removed when the process exits", async () => {
+    const client = fake("ok");
+    await createTextReader(client).read(await photo());
+    const folder = client.jobFolder()!;
+    expect(process.listeners("exit")).toContain(removeJobFolders);
+    removeJobFolders();
+    expect(fs.existsSync(folder)).toBe(false);
+  });
+});
+
 describe("sidewaysTurn", () => {
   const line = (box: [number, number][], turned: boolean, text = "SOME TEXT") => ({ text, score: 0.9, box, turned });
   const tall: [number, number][] = [[0, 0], [30, 0], [30, 300], [0, 300]];
@@ -207,10 +336,16 @@ describe("readerSettings", () => {
     expect(s.worker).toBe(path.join(process.cwd(), "ocr", "worker.py"));
     expect(s.modelsDir).toBe("");
     expect(s.threads).toBe(4);
+    expect(s.idleMinutes).toBe(10);
+  });
+  it("takes the idle minutes, 0 meaning never stop", () => {
+    expect(readerSettings({ OCR_IDLE_MINUTES: "3" }).idleMinutes).toBe(3);
+    expect(readerSettings({ OCR_IDLE_MINUTES: "0" }).idleMinutes).toBe(0);
+    expect(() => readerSettings({ OCR_IDLE_MINUTES: "-1" })).toThrow();
   });
   it("takes paths and threads from the settings and refuses bad values", () => {
     const s = readerSettings({ OCR_PYTHON: "/opt/ocr/venv/bin/python", OCR_WORKER: "/app/ocr/worker.py", OCR_MODELS_DIR: "/opt/ocr/models", OCR_THREADS: "2" });
-    expect(s).toEqual({ python: "/opt/ocr/venv/bin/python", worker: "/app/ocr/worker.py", modelsDir: "/opt/ocr/models", threads: 2 });
+    expect(s).toEqual({ python: "/opt/ocr/venv/bin/python", worker: "/app/ocr/worker.py", modelsDir: "/opt/ocr/models", threads: 2, idleMinutes: 10 });
     expect(() => readerSettings({ OCR_THREADS: "64" })).toThrow();
     expect(() => readerSettings({ OCR_PYTHON: "py\0thon" })).toThrow();
   });

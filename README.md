@@ -18,8 +18,9 @@ sealed packs and boxes and bulk lots.
 6. Run `npm run dev` and open http://localhost:3000.
 
 Cards are read for free on the server: no API keys, no accounts. The app
-reads the printed text (Tesseract, offline), checks a built-in list of key
-1980 to 1995 cards, and confirms players on Wikidata, a free public database.
+reads the printed text (RapidOCR, offline on this server), checks a built-in
+list of key 1980 to 1995 cards, and confirms players on Wikidata, a free
+public database.
 Values come from you: each card has one-tap links to real sold listings and a
 box to type the price you see. To try the app with made-up cards instead, set
 `RECOGNITION_MODE=sample` in `.env.local`.

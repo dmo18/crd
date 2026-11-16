@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { log } from "@/lib/log";
+import { errorKind, log } from "@/lib/log";
 
 /**
  * Talks to the text reader worker (ocr/worker.py, RapidOCR) running as one
@@ -11,7 +11,8 @@ import { log } from "@/lib/log";
  * stops the worker, and the next job starts a fresh one. Pictures go to the
  * worker as PNG files in a private folder (only this process can open it),
  * never through a shell. Every answer is checked with zod and capped in size.
- * Never logs image data or read text.
+ * After some idle minutes the worker is stopped to free its memory; the next
+ * job starts it again. Never logs image data or read text.
  */
 
 /** One line of text as the worker found it, in the picture's pixels. */
@@ -39,6 +40,8 @@ export type WorkerOptions = {
   startTimeoutMs?: number;
   /** Longest time one picture may take. */
   jobTimeoutMs?: number;
+  /** The worker is stopped after this long without a job; 0 keeps it running. */
+  idleMs?: number;
 };
 
 export const MAX_REPLY_BYTES = 2 * 1024 * 1024;
@@ -46,6 +49,7 @@ const MAX_LINES = 400;
 const MAX_TEXT = 200;
 const DEFAULT_START_MS = 90_000;
 const DEFAULT_JOB_MS = 60_000;
+const DEFAULT_IDLE_MS = 10 * 60_000;
 
 const Point = z.tuple([z.number().finite(), z.number().finite()]);
 const LineSchema = z.object({
@@ -65,9 +69,48 @@ const Failed = z.object({ id: z.number().int(), error: z.string().max(64) });
 
 type Pending = { id: number; resolve: (r: WorkerRead) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
 
-/** Plain error for the app: the cause stays out of messages shown to the owner. */
+const READ_FAILED = "Could not read text from the photo.";
+
+/**
+ * The reader itself is not working (could not start, crashed, took too long
+ * or answered nonsense), as opposed to one picture it could not read. The
+ * scan should fail, not end with an empty card.
+ */
+export class ReaderDownError extends Error {
+  constructor() {
+    super(READ_FAILED);
+    this.name = "ReaderDownError";
+  }
+}
+
+/** One picture the worker could not read; the worker itself is fine. */
 function readError(): Error {
-  return new Error("Could not read text from the photo.");
+  return new Error(READ_FAILED);
+}
+
+/** Job folders still on disk, removed when the process ends (best effort). */
+const liveDirs = new Set<string>();
+let exitHookSet = false;
+
+/** Removes every job folder still on disk. Runs when the process ends. */
+export function removeJobFolders(): void {
+  for (const d of [...liveDirs]) removeDir(d);
+}
+
+function removeDir(dir: string) {
+  liveDirs.delete(dir);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Best effort: a folder left in the temp folder is harmless.
+  }
+}
+
+function trackDir(dir: string) {
+  liveDirs.add(dir);
+  if (exitHookSet) return;
+  exitHookSet = true;
+  process.on("exit", removeJobFolders);
 }
 
 export class WorkerClient implements OcrEngine {
@@ -80,6 +123,8 @@ export class WorkerClient implements OcrEngine {
   private nextId = 1;
   private queue: Promise<unknown> = Promise.resolve();
   private jobDir: string | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private jobs = 0;
   private readonly opts: Required<Omit<WorkerOptions, "modelsDir">> & { modelsDir: string };
 
   constructor(options: WorkerOptions) {
@@ -90,6 +135,7 @@ export class WorkerClient implements OcrEngine {
       threads: options.threads ?? 4,
       startTimeoutMs: options.startTimeoutMs ?? DEFAULT_START_MS,
       jobTimeoutMs: options.jobTimeoutMs ?? DEFAULT_JOB_MS,
+      idleMs: options.idleMs ?? DEFAULT_IDLE_MS,
     };
   }
 
@@ -107,38 +153,79 @@ export class WorkerClient implements OcrEngine {
 
   async close(): Promise<void> {
     await this.queue.catch(() => undefined);
+    this.clearIdle();
     this.stop();
-    if (this.jobDir) {
-      fs.rmSync(this.jobDir, { recursive: true, force: true });
-      this.jobDir = null;
-    }
+    this.dropDir();
   }
 
-  private privateDir(): string {
-    if (!this.jobDir || !fs.existsSync(this.jobDir)) {
-      // mkdtemp makes the folder readable by this user only (mode 700).
-      this.jobDir = fs.mkdtempSync(path.join(os.tmpdir(), "crd-ocr-"));
-      // A running worker only reads from the folder it was started with.
-      this.stop();
-    }
+  /** The job folder of the running worker, for tests. */
+  jobFolder(): string | null {
     return this.jobDir;
   }
 
+  private dropDir() {
+    if (this.jobDir) removeDir(this.jobDir);
+    this.jobDir = null;
+  }
+
+  /** A fresh private folder for a new worker; the old one is removed. */
+  private freshDir(): string {
+    this.dropDir();
+    // mkdtemp makes the folder readable by this user only (mode 700).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crd-ocr-"));
+    trackDir(dir);
+    this.jobDir = dir;
+    return dir;
+  }
+
+  private clearIdle() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
+
+  /** After the last job, stop the worker when no new job comes for a while. */
+  private armIdle() {
+    this.clearIdle();
+    if (this.opts.idleMs <= 0 || !this.child) return;
+    const timer = setTimeout(() => {
+      if (this.idleTimer !== timer) return;
+      this.idleTimer = null;
+      if (this.jobs > 0 || this.pending || this.starting) return;
+      // Stopped to free memory, not broken: health shows "waiting".
+      this.stop();
+      this.failed = false;
+      this.dropDir();
+    }, this.opts.idleMs);
+    // Never the reason the app keeps running.
+    timer.unref?.();
+    this.idleTimer = timer;
+  }
+
   private async runJob(png: Buffer): Promise<WorkerRead> {
-    const dir = this.privateDir();
-    const child = await this.ensureStarted();
-    const id = this.nextId++;
-    const file = path.join(dir, `job-${id}.png`);
-    fs.writeFileSync(file, png, { mode: 0o600 });
+    this.clearIdle();
+    this.jobs++;
     try {
-      return await new Promise<WorkerRead>((resolve, reject) => {
-        if (this.child !== child) return reject(readError());
-        const timer = setTimeout(() => this.broken(), this.opts.jobTimeoutMs);
-        this.pending = { id, resolve, reject, timer };
-        child.stdin.write(`${JSON.stringify({ id, image: file })}\n`);
-      });
+      // A running worker only reads from the folder it was started with: if
+      // that folder is gone, start a fresh worker with a fresh folder.
+      if (this.child && (!this.jobDir || !fs.existsSync(this.jobDir))) this.stop();
+      const child = await this.ensureStarted();
+      const dir = this.jobDir!;
+      const id = this.nextId++;
+      const file = path.join(dir, `job-${id}.png`);
+      fs.writeFileSync(file, png, { mode: 0o600 });
+      try {
+        return await new Promise<WorkerRead>((resolve, reject) => {
+          if (this.child !== child) return reject(new ReaderDownError());
+          const timer = setTimeout(() => this.broken(), this.opts.jobTimeoutMs);
+          this.pending = { id, resolve, reject, timer };
+          child.stdin.write(`${JSON.stringify({ id, image: file })}\n`);
+        });
+      } finally {
+        fs.rmSync(file, { force: true });
+      }
     } finally {
-      fs.rmSync(file, { force: true });
+      this.jobs--;
+      if (this.jobs === 0) this.armIdle();
     }
   }
 
@@ -156,7 +243,15 @@ export class WorkerClient implements OcrEngine {
   }
 
   private start(): Promise<ChildProcessWithoutNullStreams> {
-    const dir = this.privateDir();
+    // Each worker gets a fresh folder; the last worker's folder is removed.
+    let dir: string;
+    try {
+      dir = this.freshDir();
+    } catch (err) {
+      this.failed = true;
+      log.warn("text_reader_start_failed", { kind: errorKind(err), errno: codeOf(err) });
+      return Promise.reject(new ReaderDownError());
+    }
     const childEnv: Record<string, string> = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       LANG: "C.UTF-8",
@@ -181,9 +276,10 @@ export class WorkerClient implements OcrEngine {
           cwd: dir,
           env: childEnv as NodeJS.ProcessEnv,
         });
-      } catch {
+      } catch (err) {
         this.failed = true;
-        reject(readError());
+        log.warn("text_reader_start_failed", { kind: errorKind(err), errno: codeOf(err) });
+        reject(new ReaderDownError());
         return;
       }
       this.child = child;
@@ -194,8 +290,9 @@ export class WorkerClient implements OcrEngine {
         if (settled) return;
         settled = true;
         this.failed = true;
+        log.warn("text_reader_start_failed", { kind: "timeout", errno: "" });
         this.stop();
-        reject(readError());
+        reject(new ReaderDownError());
       }, this.opts.startTimeoutMs);
       const onReady = () => {
         if (settled) return;
@@ -210,12 +307,15 @@ export class WorkerClient implements OcrEngine {
       // The worker's own messages are drained and dropped: they may hold paths.
       child.stderr.on("data", () => undefined);
       child.stdin.on("error", () => undefined);
-      child.on("error", () => {
+      child.on("error", (err) => {
+        // Only the kind and code (like ENOENT for a missing Python): the
+        // message holds the program's path.
+        log.warn("text_reader_start_failed", { kind: errorKind(err), errno: codeOf(err) });
         if (!settled) {
           settled = true;
           clearTimeout(timer);
           this.failed = true;
-          reject(readError());
+          reject(new ReaderDownError());
         }
         this.onExit(child);
       });
@@ -224,7 +324,7 @@ export class WorkerClient implements OcrEngine {
           settled = true;
           clearTimeout(timer);
           this.failed = true;
-          reject(readError());
+          reject(new ReaderDownError());
         }
         if (this.child === child) {
           this.failed = true;
@@ -299,7 +399,7 @@ export class WorkerClient implements OcrEngine {
     if (this.child !== child) return;
     this.child = null;
     this.ready = false;
-    this.fail(readError());
+    this.fail(new ReaderDownError());
   }
 
   /** Stops the worker now. The next job starts a fresh one. */
@@ -311,6 +411,12 @@ export class WorkerClient implements OcrEngine {
       child.stdout.removeAllListeners("data");
       child.kill("SIGKILL");
     }
-    this.fail(readError());
+    this.fail(new ReaderDownError());
   }
+}
+
+/** A system error code like ENOENT, never a message or path. */
+function codeOf(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/.test(code) ? code : "";
 }

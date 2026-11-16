@@ -1121,8 +1121,22 @@ function findCardNumber(back: Line[], front: Line[]): NumberFind | null {
   // Each place that read a number: the back's corners, its first marker, the front's first marker.
   const reads = [onlyValue(top.map((x) => x.c.number)), backMarks[0]?.n ?? null, frontMarks[0]?.n ?? null].filter((v): v is string => v !== null);
   if (reads.some((v) => v !== n)) return null;
-  const places = reads.filter((v) => v === n).length;
-  const bottomAgree = top.length === 0 && reads.length > 0 && cornerLines.some((x) => !x.c.top && x.c.number === n);
+  // One line is one sign (12R final review): a lone "#336" in a corner is
+  // both a corner number and a marker, yet it was read once. Places that
+  // share a line with a place already counted add nothing.
+  const groups: Line[][] = [
+    top.filter((x) => x.c.number === n).map((x) => x.l),
+    backMarks[0]?.n === n ? [backMarks[0].l] : [],
+    frontMarks[0]?.n === n ? [frontMarks[0].l] : [],
+  ];
+  const counted = new Set<Line>();
+  let places = 0;
+  for (const g of groups) {
+    if (g.length === 0 || g.some((l) => counted.has(l))) continue;
+    places++;
+    for (const l of g) counted.add(l);
+  }
+  const bottomAgree = top.length === 0 && reads.length > 0 && cornerLines.some((x) => !x.c.top && x.c.number === n && !counted.has(x.l));
   const twice = from.some((l) => l.twice);
   return { number: n, sure: places >= 2 || bottomAgree || twice };
 }
@@ -2240,11 +2254,47 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
   return { player, names, agree, keyMatch, hint, header, nameLines, corrected, echo };
 }
 
-/** The surname, or the first name, of a read name used as a word in other lines of the back. */
+/**
+ * Names that are also everyday English words ("Young", "Will", "Rice"). In
+ * a bio such a word proves the name only where its capital letter cannot
+ * come from anything else: inside a sentence, or right beside the other
+ * half of the name (12R final review). Lower case, letters only.
+ */
+const COMMON_NAME_WORDS = new Set(`
+young will rice brown white green black gray grey hill king price long little bell wood woods stone rose bird fox
+strong hunter cash may best moon hope grant frank mark bill art rich chase drew pat rusty jack ray guy rod sandy
+dusty mo bob rob van miles major marshall bishop parker cook baker mason miller walker carter porter fisher taylor
+turner page hall house ford field fields lane love joy sharp short small swift wise wolf lamb bass pike nice early
+law lord earl duke prince knight hale hart west north south east sims day night winter summer spring snow frost hay
+lee rush lynch power powers temple wells banks ball bush case cross dean dale hand bonds lucky storm reed
+`.trim().split(/\s+/));
+
+/** The surname, or the first name, of a read name used as a name in other lines of the back. */
 function nameEcho(name: NameRead, back: Line[], nameLines: ReadonlySet<Line>): boolean {
   const key = (w: string) => normalizeName(w).replace(/[^a-z]/g, "");
-  const words = [name.words[name.words.length - 1], name.words[0]].map(key).filter((w) => w.length >= 3);
-  return back.some((l) => l !== name.line && !nameLines.has(l) && normalizeName(l.raw).split(" ").some((t) => words.includes(t.replace(/s$/, "")) || words.includes(t)));
+  const surname = key(name.words[name.words.length - 1]);
+  const given = key(name.words[0]);
+  const words = [surname, given].filter((w) => w.length >= 3);
+  if (words.length === 0) return false;
+  return back.some((l) => {
+    if (l === name.line || nameLines.has(l)) return false;
+    // A heading in capitals: every word is capitalised, which proves nothing for an everyday word.
+    const allCaps = /\p{Lu}/u.test(l.raw) && !/\p{Ll}/u.test(l.raw);
+    const toks = [...l.raw.matchAll(/\p{L}+/gu)].map((m) => ({ text: m[0], at: m.index ?? 0, key: key(m[0]) }));
+    return toks.some((t, i) => {
+      const hit = words.find((w) => t.key === w || (t.key.endsWith("s") && t.key.slice(0, -1) === w));
+      if (!hit) return false;
+      // The surname as a name: written with a capital ("the young passer" is a word).
+      if (!/^\p{Lu}/u.test(t.text)) return false;
+      if (!COMMON_NAME_WORDS.has(hit)) return true;
+      const before = l.raw.slice(0, t.at).trimEnd();
+      const sentenceStart = before === "" || /[.!?:;"(\u201c]$/.test(before);
+      if (!allCaps && !sentenceStart) return true;
+      // At a sentence start or in a heading: only with the other half of the name beside it.
+      const other = hit === surname ? given : surname;
+      return toks[i - 1]?.key === other || toks[i + 1]?.key === other;
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2298,7 +2348,7 @@ function findSlab(lines: Line[]): SlabFind | null {
  * first year), "1990 TOPPS #336 KEN GRIFFEY JR.". Any maker or product of
  * the brand table counts, with its era.
  */
-function slabLabelYearBrand(lines: Line[]): { year: number; brand: string } | null {
+function slabLabelYearBrand(lines: Line[]): { year: number; brand: string; line: Line } | null {
   for (const l of lines) {
     // Copyright lines are read by findYear with their own rules (Leaf, Inc. and Donruss).
     if (isCopyrightLine(l)) continue;
@@ -2310,10 +2360,10 @@ function slabLabelYearBrand(lines: Line[]): { year: number; brand: string } | nu
     for (const h of brandHits([rest])) {
       if (h.def.copyrightOnly || h.def.key === "leafinc" || h.def.key === "udc") continue;
       const brand = hitNames(h.def, year).brand;
-      if (brand && rest.lz.search(h.def.re) <= 1) return { year, brand };
+      if (brand && rest.lz.search(h.def.re) <= 1) return { year, brand, line: l };
     }
     // Labels cut short often keep only "1997 UPPER".
-    if (/^UPPER\b/.test(rest.lz)) return { year, brand: "Upper Deck" };
+    if (/^UPPER\b/.test(rest.lz)) return { year, brand: "Upper Deck", line: l };
   }
   return null;
 }
@@ -2458,12 +2508,21 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   }
   out.year = yearFind?.year ?? slabLabel?.year ?? null;
   out.yearSigns = yearFind?.signs ?? (slabLabel ? 1 : 0);
-  if (yearFind && slabLabel && yearFind.how !== "front") out.yearSigns = Math.min(3, out.yearSigns + 1);
   out.yearFromStats = yearFind?.how === "stats";
   const pick = pickBrand(hits, out.year);
   out.brand = pick?.brand ?? slabLabel?.brand ?? (yearFind && label && !slab ? label.brand : null);
   out.brandSigns = pick?.signs ?? (slabLabel ? 1 : 0);
-  if (pick && slabLabel && slabLabel.brand === pick.brand) out.brandSigns = Math.min(3, out.brandSigns + 1);
+  if (slabLabel) {
+    // The holder label's line is one sign (12R final review): the label and
+    // the card's own print read from that same line are not two. A field is
+    // sure from the label only when a line other than the label agrees.
+    const notLabel = (ls: Line[]) => ls.filter((l) => l !== slabLabel.line);
+    const otherHits = hits.filter((h) => h.line !== slabLabel.line);
+    const otherYear = findCardYear(notLabel(front), notLabel(back), notLabel(lines), new Set(otherHits.map((h) => h.line)));
+    if (out.year === slabLabel.year) out.yearSigns = Math.min(3, 1 + (otherYear?.year === slabLabel.year ? otherYear.signs : 0));
+    const otherPick = pickBrand(otherHits, out.year);
+    if (out.brand === slabLabel.brand) out.brandSigns = Math.min(3, 1 + (otherPick?.brand === slabLabel.brand ? otherPick.signs : 0));
+  }
   if (!yearFind && slabLabel) ev.push(`Read ${slabLabel.year} ${slabLabel.brand} on the holder label`);
 
   if (yearFind?.how === "front") {

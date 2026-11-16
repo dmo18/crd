@@ -10,6 +10,8 @@
 //   error     answers every job with an error
 //   noready   never says it is ready
 //   sideways  answers with tall boxes that read upside down, or wide ones for a wide picture
+//   okthenerror  answers the first job like ok, every later job with an error
+//   okthencrash  answers the first job like ok, exits on the second
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -27,8 +29,12 @@ function pngSize(file) {
 if (mode !== "noready") send({ ready: true });
 
 const rl = readline.createInterface({ input: process.stdin });
+let jobs = 0;
 rl.on("line", (raw) => {
   const job = JSON.parse(raw);
+  jobs++;
+  if (mode === "okthenerror" && jobs > 1) return send({ id: job.id, error: "bad_image" });
+  if (mode === "okthencrash" && jobs > 1) process.exit(3);
   if (mode === "slow" || mode === "noready") return;
   if (mode === "crash") process.exit(3);
   if (mode === "crashonce" && !fs.existsSync(stateFile)) {

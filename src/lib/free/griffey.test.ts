@@ -21,8 +21,7 @@ import type { PlayerFacts } from "./wikidata";
  * is not read from these photos (script logo, tiny copyright print), so the
  * brand is Topps or empty.
  *
- * Recorded again in 12R.3 with the RapidOCR reader (the old recording was
- * tesseract text): it reads "89 MARINERS" exactly in the stat table with
+ * Recorded in 12R.3 with the RapidOCR reader, the reader the app uses: it reads "89 MARINERS" exactly in the stat table with
  * baseball stat headers, so the team is read from the card. Before, the
  * reader saw only "89 MARMNERS", a hint that Wikidata had to confirm.
  */

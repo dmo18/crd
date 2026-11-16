@@ -1,8 +1,8 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { REVIEW_THRESHOLD, type RecognitionPhoto } from "@/lib/recognition/types";
-import type { OcrResult, TextReader } from "./ocr";
-import { FreeRecognizer } from "./recognizer";
+import { RecognitionError, REVIEW_THRESHOLD, type RecognitionPhoto } from "@/lib/recognition/types";
+import { ReaderDownError, type OcrResult, type TextReader } from "./ocr";
+import { FreeRecognizer, READER_DOWN } from "./recognizer";
 import type { PlayerFacts } from "./wikidata";
 
 /** A fake reader that returns set text per photo, keyed by the photo's first byte. */
@@ -181,5 +181,43 @@ describe("FreeRecognizer passes what it saw as evidence, not as fields", () => {
   it("the word ROOKIE and REPRINT travel as evidence", async () => {
     const item = await run("NO. 414\nFRANK THOMAS\nROOKIE\nREPRINT\n© 1990 THE TOPPS COMPANY, INC.");
     expect(item.evidence).toMatchObject({ rookieWord: true, reprint: true });
+  });
+});
+
+describe("FreeRecognizer when the text reader itself is not working (12R final review)", () => {
+  const dead: TextReader = { read: async () => { throw new ReaderDownError(); } };
+  const source = () => sharp({ create: { width: 1000, height: 1400, channels: 3, background: "#225533" } }).jpeg().toBuffer();
+
+  it("fails a single card scan with a plain message instead of an empty card", async () => {
+    const r = new FreeRecognizer({ reader: dead, lookup: async () => null });
+    const err = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RecognitionError);
+    expect((err as RecognitionError).userMessage).toBe(READER_DOWN);
+    expect(READER_DOWN).toBe("The text reader is not working. Try again later.");
+  });
+
+  it("fails a many-card scan instead of making one empty card per box", async () => {
+    let reads = 0;
+    const r = new FreeRecognizer({
+      reader: { read: async () => { reads++; throw new ReaderDownError(); } },
+      findBoxes: async () => [{ x: 0.05, y: 0.05, w: 0.4, h: 0.4 }, { x: 0.55, y: 0.05, w: 0.4, h: 0.4 }],
+      lookup: async () => null,
+    });
+    await expect(r.recognize({ mode: "multi", photos: [{ role: "source", data: await source(), width: 1000, height: 1400 }] })).rejects.toBeInstanceOf(RecognitionError);
+    expect(reads).toBe(1);
+    const whole = new FreeRecognizer({ reader: dead, findBoxes: async () => [], lookup: async () => null });
+    await expect(whole.recognize({ mode: "multi", photos: [{ role: "source", data: await source(), width: 1000, height: 1400 }] })).rejects.toBeInstanceOf(RecognitionError);
+  });
+
+  it("fails a product scan", async () => {
+    const r = new FreeRecognizer({ reader: dead, lookup: async () => null });
+    await expect(r.recognize({ mode: "sealed", photos: [photo(5, "source")] })).rejects.toBeInstanceOf(RecognitionError);
+  });
+
+  it("a photo the reader simply could not read still gives an empty card to fill in", async () => {
+    const r = new FreeRecognizer({ reader: { read: async () => { throw new Error("Could not read text from the photo."); } }, lookup: async () => null });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1)] });
+    expect(item.kind).toBe("card");
+    expect(item.notes).toContain("Could not read the printed text clearly");
   });
 });

@@ -3,7 +3,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import type { Box } from "@/lib/recognition/types";
 import { cornerBoxes, cropBox, findCard, joinSpacedLetters, keepCornerLine, mapBox, overlapShare, spacedBands, toView } from "./card-picture";
-import { WorkerClient, type OcrEngine, type ReaderStatus, type WorkerLine, type WorkerRead } from "./ocr-worker";
+import { ReaderDownError, WorkerClient, type OcrEngine, type ReaderStatus, type WorkerLine, type WorkerRead } from "./ocr-worker";
 
 /**
  * Reads printed text from card photos on the server, fully offline, with
@@ -86,12 +86,13 @@ const Settings = z.object({
   OCR_WORKER: z.string().trim().min(1).max(1024).optional(),
   OCR_MODELS_DIR: z.string().trim().max(1024).default(""),
   OCR_THREADS: z.coerce.number().int().min(1).max(8).default(4),
+  OCR_IDLE_MINUTES: z.coerce.number().int().min(0).max(1440).default(10),
 });
 
 /** Where the reader's Python and worker are, from env settings (see .env.example). */
 export function readerSettings(source: Record<string, string | undefined> = process.env) {
   const raw = Object.fromEntries(
-    ["OCR_PYTHON", "OCR_WORKER", "OCR_MODELS_DIR", "OCR_THREADS"]
+    ["OCR_PYTHON", "OCR_WORKER", "OCR_MODELS_DIR", "OCR_THREADS", "OCR_IDLE_MINUTES"]
       .filter((k) => source[k] !== undefined && source[k]!.trim() !== "")
       .map((k) => [k, source[k]]),
   );
@@ -104,6 +105,7 @@ export function readerSettings(source: Record<string, string | undefined> = proc
     worker: path.resolve(s.OCR_WORKER ?? path.join(process.cwd(), "ocr", "worker.py")),
     modelsDir: s.OCR_MODELS_DIR ? path.resolve(s.OCR_MODELS_DIR) : "",
     threads: s.OCR_THREADS,
+    idleMinutes: s.OCR_IDLE_MINUTES,
   };
 }
 
@@ -115,6 +117,7 @@ export function pythonEngine(settings = readerSettings()): OcrEngine {
     args: ["-I", "-B", settings.worker],
     modelsDir: settings.modelsDir,
     threads: settings.threads,
+    idleMs: settings.idleMinutes * 60_000,
   });
 }
 
@@ -278,12 +281,27 @@ function placed(lines: OcrLine[], where: Region, source: OcrSource): OcrLine[] {
   return lines.map((l) => ({ ...l, box: mapBox(l.box, where), source }));
 }
 
-/** Reads a photo through the given engine. Exported for tests with a fake engine. */
+/**
+ * Reads a photo through the given engine. Exported for tests with a fake engine.
+ * A failure of the first read is passed on (a dead reader must fail the scan);
+ * a failed re-read only loses that re-read, the best read so far stays.
+ */
 export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOptions = {}): Promise<OcrResult> {
   const base = await oriented(image);
   const pic = await part(base, { edge: LONG_EDGE });
   if (pic.width < 8 || pic.height < 8) return summarize([], 0);
   const first = await engine.read(pic.png);
+  // After the reader itself stopped working, no more re-reads are tried.
+  let dead = false;
+  const reread = async (png: Buffer): Promise<WorkerRead | null> => {
+    if (dead) return null;
+    try {
+      return await engine.read(png);
+    } catch (err) {
+      if (err instanceof ReaderDownError) dead = true;
+      return null;
+    }
+  };
   let best = linesFrom(first);
   let passes = 1;
   let crops = 0;
@@ -310,10 +328,11 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
   if (turn || worthCrop) {
     const region = worthCrop ? card! : undefined;
     const upright = await part(base, { region, turn, edge: LONG_EDGE, maxUp: region ? MAX_UP : 1 });
-    const second = linesFrom(await engine.read(upright.png));
-    passes++;
+    const secondRead = await reread(upright.png);
+    const second = secondRead ? linesFrom(secondRead) : [];
+    if (secondRead) passes++;
     // The new read is kept unless it read clearly less.
-    if (score(second) >= UPRIGHT_SHARE * score(best)) {
+    if (secondRead && score(second) >= UPRIGHT_SHARE * score(best)) {
       firstOnView = firstOnView.flatMap((l) => {
         const box = toView(l.box, region, turn);
         return box ? [{ ...l, box }] : [];
@@ -335,8 +354,10 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
     const reads: OcrLine[][] = [];
     for (const squeeze of BAND_SQUEEZES) {
       const strip = await part(view, { region: band, scale, squeeze, pad: true });
-      reads.push(unpad(linesFrom(await engine.read(strip.png)), strip));
-      crops++;
+      const got = await reread(strip.png);
+      // A failed re-read counts as reading nothing: the band is skipped.
+      reads.push(got ? unpad(linesFrom(got), strip) : []);
+      if (got) crops++;
     }
     // Same letters in the same order, spaces aside; the read that kept the
     // words apart ("DONRUSS" "1992", not "DONRUSS1992") is the one used.
@@ -352,7 +373,9 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
   if (options.back) {
     for (const corner of cornerBoxes()) {
       const zoomed = await part(view, { region: corner, edge: CORNER_EDGE, maxUp: CORNER_MAX_UP, pad: true });
-      const read = unpad(linesFrom(await engine.read(zoomed.png)), zoomed);
+      const got = await reread(zoomed.png);
+      if (!got) continue;
+      const read = unpad(linesFrom(got), zoomed);
       crops++;
       for (const g of placed(read.filter((l) => keepCornerLine(l.text, l.box)), corner, "corner")) {
         // Already read as part of a longer line: nothing new. Read exactly the
@@ -424,4 +447,5 @@ export async function closeTextReader(): Promise<void> {
   await e?.close();
 }
 
+export { ReaderDownError };
 export type { OcrEngine, ReaderStatus, WorkerLine, WorkerRead };

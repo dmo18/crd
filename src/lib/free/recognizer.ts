@@ -2,9 +2,11 @@ import sharp from "sharp";
 import type { Sport } from "@/db/schema";
 import { createScanBudget, lookupCard, lookupConfidence, type LookupResult } from "@/lib/catalog/lookup";
 import type { Catalog } from "@/lib/catalog/types";
+import { errorKind, log } from "@/lib/log";
 import { checkPhotoCount } from "@/lib/recognition/limits";
 import {
   CERTAIN_FIELDS,
+  RecognitionError,
   recognizedItemSchema,
   type FieldCertainty,
   type Box,
@@ -18,7 +20,7 @@ import {
 } from "@/lib/recognition/types";
 import { cardTilt, findCardBoxes } from "./find-cards";
 import { keyCardsFor, matchKeyCard, normalizeBrand, normalizeName, type KeyCard } from "./key-cards";
-import { getTextReader, type OcrResult, type ReadOptions, type TextReader } from "./ocr";
+import { getTextReader, ReaderDownError, type OcrResult, type ReadOptions, type TextReader } from "./ocr";
 import { parseCardText, parseProductText, teamFromList, type ParsedCard } from "./parse";
 import { lookupPlayer, type PlayerFacts } from "./wikidata";
 
@@ -57,6 +59,8 @@ const MAX_LOOKUPS_PER_CARD = 2;
 /** Cards turned less than this are read as they are. */
 const MIN_STRAIGHTEN_DEG = 5;
 const FREE_NOTE = "Read with free text recognition. Check the details, then add a value from sold listings.";
+/** Shown when the text reader itself is not working: the scan fails, no empty cards. */
+export const READER_DOWN = "The text reader is not working. Try again later.";
 const UNREAD_NOTE = "Could not read the printed text clearly. Fill in the details by hand, or try a sharper photo without glare.";
 const ADD_BACK_NOTE = "Add a photo of the back; the year and number are usually there.";
 const KEY_CONFIDENCE = 0.9;
@@ -232,10 +236,19 @@ export class FreeRecognizer implements Recognizer {
     return cards.map((c) => c.item);
   }
 
+  /**
+   * The read text, or null when this photo gave no text. When the reader
+   * itself is not working the scan fails with a plain message, so it is not
+   * saved as empty cards and the alerts count it.
+   */
   private async read(image: Buffer, options?: ReadOptions): Promise<OcrResult | null> {
     try {
       return await this.reader.read(image, options);
-    } catch {
+    } catch (err) {
+      if (err instanceof ReaderDownError) {
+        log.warn("text_reader_down", { kind: errorKind(err) });
+        throw new RecognitionError(READER_DOWN, { cause: err });
+      }
       return null;
     }
   }
@@ -267,7 +280,8 @@ export class FreeRecognizer implements Recognizer {
         try {
           // Many cards per photo: quick reads keep a big sheet inside the time limit.
           text = await this.read(await this.straighten(await cropPhoto(photo, box)), { quick: true });
-        } catch {
+        } catch (err) {
+          if (err instanceof RecognitionError) throw err;
           text = null;
         }
         out.push(await this.cardFromText(text, null, { sourceIndex: index, box }));
