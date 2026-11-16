@@ -13,7 +13,7 @@ export default async function ScanPage() {
   const options = getDb().select({ id: locations.id, name: locations.name }).from(locations).orderBy(asc(locations.name)).all();
   return (
     <>
-      <PageHeader title="Scan" subtitle="The app reads the card and files it. Add values from sold listings." />
+      <PageHeader title="Scan" subtitle="Pick the photos and tap Save. Then scan the next one while the app reads." />
       <ScanFlow rules={PHOTO_RULES} locations={options} />
     </>
   );

@@ -26,15 +26,24 @@ export function waitingText(scan: Pick<ScanView, "status" | "queuePosition"> | n
   return ahead === 1 ? "Waiting in line: 1 scan ahead of this one." : `Waiting in line: ${ahead} scans ahead of this one.`;
 }
 
-export type QueueStatus = "waiting" | "sending" | "reading" | "done" | "failed";
+/** Seconds to wait before each automatic try after a failed upload: 3 more tries. */
+export const RETRY_DELAYS_MS = [2_000, 8_000, 20_000] as const;
+export const NOT_SAVED_MESSAGE = "Could not send the photos. Check your connection.";
+
+/** "backoff" means the upload failed and the page will try again on its own soon. */
+export type QueueStatus = "waiting" | "sending" | "backoff" | "reading" | "done" | "failed";
 
 export type QueueEntry = {
   /** Local id, unique in this visit. */
   key: number;
+  /** Random id sent as `clientKey` on every try, so a repeat never makes a second scan. */
+  clientKey: string;
   name: string;
   previewUrl: string | null;
   status: QueueStatus;
   scanId: number | null;
+  /** Automatic retries used so far (0 to 3). */
+  attempt: number;
   /** When the upload finished (ms), used for the give-up timer. */
   uploadedAt: number | null;
   error: string | null;
@@ -45,8 +54,10 @@ export type QueueEntry = {
 export type QueueState = { entries: QueueEntry[] };
 
 export type QueueAction =
-  | { type: "add"; key: number; name: string; previewUrl: string | null }
+  | { type: "add"; key: number; clientKey: string; name: string; previewUrl: string | null }
   | { type: "sending"; key: number }
+  | { type: "uploadFailed"; key: number; message: string }
+  | { type: "retryDue"; key: number }
   | { type: "uploaded"; key: number; scanId: number; at: number }
   | { type: "update"; scan: ScanView }
   | { type: "failed"; key: number; message: string }
@@ -75,11 +86,20 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       return {
         entries: [
           ...state.entries,
-          { key: action.key, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, uploadedAt: null, error: null, scan: null },
+          { key: action.key, clientKey: action.clientKey, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, attempt: 0, uploadedAt: null, error: null, scan: null },
         ],
       };
     case "sending":
       return patch(state, action.key, (e) => (e.status === "waiting" ? { ...e, status: "sending", error: null } : e));
+    case "uploadFailed":
+      // Try again on its own 3 times (after 2, 8 and 20 seconds), then give up and keep the photo.
+      return patch(state, action.key, (e) => {
+        if (e.status !== "sending") return e;
+        if (e.attempt < RETRY_DELAYS_MS.length) return { ...e, status: "backoff", attempt: e.attempt + 1, error: action.message };
+        return { ...e, status: "failed", error: action.message };
+      });
+    case "retryDue":
+      return patch(state, action.key, (e) => (e.status === "backoff" ? { ...e, status: "waiting" } : e));
     case "uploaded":
       return patch(state, action.key, (e) =>
         e.status === "sending" ? { ...e, status: "reading", scanId: action.scanId, uploadedAt: action.at } : e,
@@ -102,7 +122,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "retry":
       // Upload again: only for photos the server never accepted.
       return patch(state, action.key, (e) =>
-        e.status === "failed" && e.scanId === null ? { ...e, status: "waiting", error: null, scan: null, uploadedAt: null } : e,
+        e.status === "failed" && e.scanId === null ? { ...e, status: "waiting", attempt: 0, error: null, scan: null, uploadedAt: null } : e,
       );
     case "requeued":
       // The server runs the same scan again with the photos it already has.
@@ -161,4 +181,124 @@ export function summaryText(s: QueueSummary): string {
 
 export function atCap(state: QueueState): boolean {
   return state.entries.length >= MAX_QUEUE;
+}
+
+/** True while any photo is not yet safely on the server: the leave warning is on. */
+export function hasUnsaved(state: QueueState): boolean {
+  return state.entries.some((e) => e.scanId === null && e.status !== "done");
+}
+
+/** How long to wait before the next automatic try for an entry in "backoff". */
+export function retryDelayMs(e: Pick<QueueEntry, "attempt">): number {
+  return RETRY_DELAYS_MS[Math.min(Math.max(e.attempt, 1), RETRY_DELAYS_MS.length) - 1];
+}
+
+export type EntryKind = "saving" | "saved" | "read" | "check" | "empty" | "not_saved" | "did_not_work" | "slow";
+
+/** What one entry says to the owner, in plain words. */
+export function entryState(e: Pick<QueueEntry, "status" | "scanId" | "scan" | "error">): { kind: EntryKind; text: string } {
+  switch (e.status) {
+    case "waiting":
+    case "sending":
+      return { kind: "saving", text: "Saving" };
+    case "backoff":
+      return { kind: "saving", text: "Saving, trying again soon" };
+    case "reading":
+      return { kind: "saved", text: e.scan?.status === "queued" ? "Saved, waiting to be read" : "Saved, being read" };
+    case "done":
+      if (!e.scan || e.scan.items.length === 0) return { kind: "empty", text: "No card found" };
+      if (e.scan.items.some((i) => i.status === "needs_review")) return { kind: "check", text: "Check this one" };
+      return { kind: "read", text: "Read" };
+    case "failed":
+      if (e.scanId === null) return { kind: "not_saved", text: "Not saved" };
+      if (e.scan?.status === "failed") return { kind: "did_not_work", text: "Did not work" };
+      return { kind: "slow", text: "Saved, taking longer than usual" };
+  }
+}
+
+// ---- Sending ----
+
+/** Everything needed to send one entry. Kept in page memory until the server has it. */
+export type ScanJob = {
+  mode: string;
+  clientKey: string;
+  hint: string;
+  locationId: string;
+  front?: File;
+  back?: File;
+  source: File[];
+};
+
+export function buildScanBody(job: ScanJob): FormData {
+  const body = new FormData();
+  body.set("mode", job.mode);
+  body.set("clientKey", job.clientKey);
+  if (job.hint.trim()) body.set("hint", job.hint.trim());
+  if (job.locationId) body.set("locationId", job.locationId);
+  if (job.front) body.set("front", job.front);
+  if (job.back) body.set("back", job.back);
+  for (const f of job.source) body.append("source", f);
+  return body;
+}
+
+export type SendResult = { ok: true; scanId: number } | { ok: false; message: string };
+
+/**
+ * One try. Saved only when the server answered 201 (new) or 200 (it already
+ * had this clientKey), with a scan id.
+ */
+export async function postScan(fetchFn: typeof fetch, job: ScanJob): Promise<SendResult> {
+  try {
+    const res = await fetchFn("/api/scans", { method: "POST", body: buildScanBody(job) });
+    const data = (await res.json().catch(() => ({}))) as { scanId?: number; error?: string };
+    if ((res.status === 201 || res.status === 200) && typeof data.scanId === "number") return { ok: true, scanId: data.scanId };
+    return { ok: false, message: data.error ?? "Something went wrong. Please try again." };
+  } catch {
+    return { ok: false, message: NOT_SAVED_MESSAGE };
+  }
+}
+
+export type UploaderDeps = {
+  getState: () => QueueState;
+  dispatch: (a: QueueAction) => void;
+  /** One try for an entry. */
+  send: (key: number) => Promise<SendResult>;
+  /** Run `fn` after `ms`. */
+  later: (fn: () => void, ms: number) => void;
+  now: () => number;
+  /** Called once per entry when the server has it. */
+  onSaved: (key: number) => void;
+};
+
+/**
+ * Starts waiting entries (at most MAX_PARALLEL at once, one try per entry at
+ * a time) and schedules the automatic retries. Call `pump` after every state change.
+ */
+export function createUploader(deps: UploaderDeps): { pump: () => void } {
+  const inFlight = new Set<number>();
+  function pump() {
+    for (const key of nextToSend(deps.getState(), MAX_PARALLEL)) {
+      if (inFlight.has(key)) continue;
+      inFlight.add(key);
+      deps.dispatch({ type: "sending", key });
+      void deps.send(key).then((r) => {
+        inFlight.delete(key);
+        if (r.ok) {
+          deps.dispatch({ type: "uploaded", key, scanId: r.scanId, at: deps.now() });
+          deps.onSaved(key);
+        } else {
+          deps.dispatch({ type: "uploadFailed", key, message: r.message });
+          const e = deps.getState().entries.find((x) => x.key === key);
+          if (e?.status === "backoff") {
+            deps.later(() => {
+              deps.dispatch({ type: "retryDue", key });
+              pump();
+            }, retryDelayMs(e));
+          }
+        }
+        pump();
+      });
+    }
+  }
+  return { pump };
 }

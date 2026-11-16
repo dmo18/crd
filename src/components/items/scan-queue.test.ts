@@ -1,14 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ScanView } from "@/lib/scans/view";
 import {
-  atCap, emptyQueue, GIVE_UP_AFTER_START_MS, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
+  atCap, buildScanBody, createUploader, emptyQueue, entryState, hasUnsaved, postScan, RETRY_DELAYS_MS, retryDelayMs, type ScanJob, type SendResult, GIVE_UP_AFTER_START_MS, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
   TIMEOUT_MESSAGE, waitingText, type QueueAction, type QueueState,
 } from "./scan-queue";
 
 function run(actions: QueueAction[], from: QueueState = emptyQueue): QueueState {
   return actions.reduce(queueReducer, from);
 }
-const add = (key: number): QueueAction => ({ type: "add", key, name: `p${key}.jpg`, previewUrl: null });
+const add = (key: number): QueueAction => ({ type: "add", key, clientKey: `k${key}`, name: `p${key}.jpg`, previewUrl: null });
 function view(id: number, status: ScanView["status"], itemStatuses: string[] = []): ScanView {
   return {
     id, mode: "single", status, error: status === "failed" ? "Bad photo" : null, itemCount: itemStatuses.length, createdAt: 0,
@@ -152,5 +152,170 @@ describe("retry", () => {
     const failed = run([add(1), { type: "sending", key: 1 }, { type: "failed", key: 1, message: "No connection" }]);
     expect(retryKind({ ...failed.entries[0], previewUrl: "blob:x" })).toBe("upload");
     expect(retryKind(failed.entries[0])).toBeNull();
+  });
+});
+
+describe("automatic upload retries", () => {
+  const sending = (): QueueState => run([add(1), { type: "sending", key: 1 }]);
+  const fail = (s: QueueState) => run([{ type: "uploadFailed", key: 1, message: "Offline" }], s);
+
+  it("waits 2, 8 and 20 seconds, then stops with Not saved", () => {
+    expect([...RETRY_DELAYS_MS]).toEqual([2000, 8000, 20000]);
+    let s = fail(sending());
+    expect(s.entries[0]).toMatchObject({ status: "backoff", attempt: 1 });
+    expect(retryDelayMs(s.entries[0])).toBe(2000);
+    s = fail(run([{ type: "retryDue", key: 1 }, { type: "sending", key: 1 }], s));
+    expect(retryDelayMs(s.entries[0])).toBe(8000);
+    s = fail(run([{ type: "retryDue", key: 1 }, { type: "sending", key: 1 }], s));
+    expect(retryDelayMs(s.entries[0])).toBe(20000);
+    s = fail(run([{ type: "retryDue", key: 1 }, { type: "sending", key: 1 }], s));
+    expect(s.entries[0]).toMatchObject({ status: "failed", error: "Offline" });
+    expect(entryState(s.entries[0]).text).toBe("Not saved");
+    expect(retryKind({ ...s.entries[0], previewUrl: "blob:x" })).toBe("upload");
+    // The manual Retry starts the count again.
+    expect(run([{ type: "retry", key: 1 }], s).entries[0]).toMatchObject({ status: "waiting", attempt: 0 });
+  });
+
+  it("never offers an entry that is sending or waiting to retry, so never two uploads of one entry", () => {
+    let s = run([add(1), add(2)]);
+    expect(nextToSend(s)).toEqual([1, 2]);
+    s = run([{ type: "sending", key: 1 }], s);
+    expect(nextToSend(s)).toEqual([2]);
+    expect(run([{ type: "sending", key: 1 }], s)).toBe(s);
+    s = run([{ type: "uploadFailed", key: 1, message: "x" }], s);
+    expect(s.entries[0].status).toBe("backoff");
+    expect(nextToSend(s)).toEqual([2]);
+    expect(run([{ type: "sending", key: 1 }], s)).toBe(s);
+    expect(run([{ type: "retry", key: 1 }], s)).toBe(s);
+    expect(run([{ type: "retryDue", key: 1 }], s).entries[0].status).toBe("waiting");
+  });
+
+  it("keeps the leave warning on until every entry is saved", () => {
+    expect(hasUnsaved(emptyQueue)).toBe(false);
+    let s = sending();
+    expect(hasUnsaved(s)).toBe(true);
+    s = fail(s);
+    expect(hasUnsaved(s)).toBe(true);
+    const saved = run([{ type: "retryDue", key: 1 }, { type: "sending", key: 1 }, { type: "uploaded", key: 1, scanId: 4, at: 0 }], s);
+    expect(hasUnsaved(saved)).toBe(false);
+    const notSaved = run([add(2), { type: "sending", key: 2 }, { type: "failed", key: 2, message: "x" }]);
+    expect(hasUnsaved(notSaved)).toBe(true);
+  });
+});
+
+describe("entryState", () => {
+  const e = (status: QueueState["entries"][number]["status"], scanId: number | null, scan: ScanView | null) => entryState({ status, scanId, scan, error: null });
+  it("uses plain words", () => {
+    expect(e("sending", null, null)).toEqual({ kind: "saving", text: "Saving" });
+    expect(e("reading", 1, view(1, "processing")).text).toBe("Saved, being read");
+    expect(e("reading", 1, view(1, "queued")).text).toBe("Saved, waiting to be read");
+    expect(e("done", 1, view(1, "done", ["confirmed"]))).toEqual({ kind: "read", text: "Read" });
+    expect(e("done", 1, view(1, "done", ["confirmed", "needs_review"])).text).toBe("Check this one");
+    expect(e("done", 1, view(1, "done")).text).toBe("No card found");
+    expect(e("failed", 1, view(1, "failed")).text).toBe("Did not work");
+    expect(e("failed", 1, view(1, "processing")).kind).toBe("slow");
+  });
+});
+
+describe("sending with a fake fetch", () => {
+  const job = (key: string): ScanJob => ({
+    mode: "single", clientKey: key, hint: " 1989 ", locationId: "", front: new File(["x"], "f.jpg", { type: "image/jpeg" }), source: [],
+  });
+
+  /** Acts like the server: one scan per clientKey, 201 first time, 200 for a repeat. */
+  function fakeServer(failFirst: number) {
+    const scans = new Map<string, number>();
+    let calls = 0;
+    const fetchFn = (async (_url: string, init: RequestInit) => {
+      calls += 1;
+      if (calls <= failFirst) throw new TypeError("offline");
+      const key = (init.body as FormData).get("clientKey") as string;
+      const had = scans.has(key);
+      if (!had) scans.set(key, scans.size + 1);
+      return Response.json({ scanId: scans.get(key) }, { status: had ? 200 : 201 });
+    }) as unknown as typeof fetch;
+    return { fetchFn, scans, calls: () => calls };
+  }
+
+  it("builds the form with the clientKey and trimmed hint", () => {
+    const body = buildScanBody(job("abc"));
+    expect(body.get("clientKey")).toBe("abc");
+    expect(body.get("hint")).toBe("1989");
+    expect(body.get("front")).toBeInstanceOf(File);
+  });
+
+  it("answers saved only for 200 or 201 with a scan id", async () => {
+    const reply = (status: number, json: object) => (async () => Response.json(json, { status })) as unknown as typeof fetch;
+    expect(await postScan(reply(201, { scanId: 5 }), job("a"))).toEqual({ ok: true, scanId: 5 });
+    expect(await postScan(reply(200, { scanId: 5 }), job("a"))).toEqual({ ok: true, scanId: 5 });
+    expect(await postScan(reply(400, { error: "Bad" }), job("a"))).toEqual({ ok: false, message: "Bad" });
+    expect(await postScan(reply(500, {}), job("a"))).toMatchObject({ ok: false });
+    expect(await postScan(reply(201, {}), job("a"))).toMatchObject({ ok: false });
+  });
+
+  it("fails twice, then works: one scan, retried after 2 s and 8 s", async () => {
+    const server = fakeServer(2);
+    let state: QueueState = emptyQueue;
+    const timers: { fn: () => void; ms: number }[] = [];
+    const saved: number[] = [];
+    const dispatch = (a: QueueAction) => { state = queueReducer(state, a); };
+    const up = createUploader({
+      getState: () => state,
+      dispatch,
+      send: (key) => postScan(server.fetchFn, job(state.entries.find((x) => x.key === key)!.clientKey)),
+      later: (fn, ms) => timers.push({ fn, ms }),
+      now: () => 0,
+      onSaved: (k) => saved.push(k),
+    });
+    dispatch(add(1));
+    up.pump();
+    await vi.waitFor(() => expect(timers).toHaveLength(1));
+    expect(state.entries[0].status).toBe("backoff");
+    expect(timers[0].ms).toBe(2000);
+    timers[0].fn();
+    await vi.waitFor(() => expect(timers).toHaveLength(2));
+    expect(timers[1].ms).toBe(8000);
+    expect(saved).toEqual([]);
+    timers[1].fn();
+    await vi.waitFor(() => expect(state.entries[0].status).toBe("reading"));
+    expect(server.calls()).toBe(3);
+    expect(server.scans.size).toBe(1);
+    expect(state.entries[0].scanId).toBe(1);
+    expect(saved).toEqual([1]);
+  });
+
+  it("a repeat after a lost answer gives the same scan, not a second one", async () => {
+    const server = fakeServer(0);
+    const a = await postScan(server.fetchFn, job("same"));
+    const b = await postScan(server.fetchFn, job("same"));
+    expect(a).toEqual(b);
+    expect(server.scans.size).toBe(1);
+  });
+
+  it("never runs more than 2 uploads at once and keeps the failed one after 3 retries", async () => {
+    let active = 0, peak = 0;
+    const resolvers: ((r: SendResult) => void)[] = [];
+    let state: QueueState = emptyQueue;
+    const dispatch = (a: QueueAction) => { state = queueReducer(state, a); };
+    const timers: (() => void)[] = [];
+    const up = createUploader({
+      getState: () => state, dispatch,
+      send: () => new Promise<SendResult>((res) => { active += 1; peak = Math.max(peak, active); resolvers.push((r) => { active -= 1; res(r); }); }),
+      later: (fn) => timers.push(fn), now: () => 0, onSaved: () => {},
+    });
+    [1, 2, 3].forEach((k) => dispatch(add(k)));
+    up.pump();
+    expect(resolvers).toHaveLength(2);
+    up.pump();
+    expect(resolvers).toHaveLength(2);
+    for (let round = 0; round < 4; round++) {
+      resolvers.shift()!({ ok: false, message: "Offline" });
+      await vi.waitFor(() => expect(resolvers.length + timers.length).toBeGreaterThan(0));
+      await Promise.resolve();
+      while (timers.length) timers.shift()!();
+      await vi.waitFor(() => expect(resolvers.length).toBeGreaterThan(0));
+    }
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(state.entries.find((e) => e.key === 1)?.status).not.toBe("reading");
   });
 });
