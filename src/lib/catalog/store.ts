@@ -22,10 +22,15 @@ export const NOT_ENOUGH_FACTS = "This listing is missing facts the catalog needs
  * canonical key gives back the row that is already there.
  */
 export function saveCatalogCard(card: CatalogCard, db: Db = getDb(), now: Date = new Date()): SaveCardResult {
+  return db.transaction((tx) => saveCatalogCardIn(tx as unknown as Db, card, now), { behavior: "immediate" });
+}
+
+/** The same, for a caller that is already inside a transaction (`tx`). Opens no transaction of its own. */
+export function saveCatalogCardIn(tx: Db, card: CatalogCard, now: Date = new Date()): SaveCardResult {
   const key = canonicalKey(card);
   const { sport, year, brand, player } = card;
   if (!key || !sport || year == null || !brand || !player) return { ok: false, error: NOT_ENOUGH_FACTS };
-  return db.transaction((tx) => {
+  {
     const known = tx.select({ id: catalogSources.catalogCardId }).from(catalogSources)
       .where(and(eq(catalogSources.source, card.source), eq(catalogSources.sourceId, card.sourceId))).get();
     if (known) return { ok: true, catalogCardId: known.id } as const;
@@ -45,7 +50,7 @@ export function saveCatalogCard(card: CatalogCard, db: Db = getDb(), now: Date =
       sourceSetId: card.sourceSetId, fetchedAt: now,
     }).run();
     return { ok: true, catalogCardId: row.id } as const;
-  }, { behavior: "immediate" });
+  }
 }
 
 /**
@@ -58,7 +63,7 @@ export function addCardToCollection(
   card: CatalogCard, db: Db = getDb(), now: Date = new Date(),
 ): { ok: true; itemId: number; catalogCardId: number } | { ok: false; error: string } {
   return db.transaction((tx) => {
-    const saved = saveCatalogCard(card, tx as unknown as Db, now);
+    const saved = saveCatalogCardIn(tx as unknown as Db, card, now);
     if (!saved.ok) return saved;
     const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get()!;
     const fields = {

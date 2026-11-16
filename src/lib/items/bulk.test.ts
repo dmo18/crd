@@ -172,6 +172,20 @@ describe("set a field", () => {
   });
 });
 
+describe("description for every kind", () => {
+  it("set and find and replace change description on cards and sealed items", () => {
+    const card = add({ kind: "card", description: "red border" });
+    const sealed = add({ kind: "sealed", title: "Box", description: "red wrapper" });
+    expect(ok(applyBulk(ids(card, sealed), set("description", "new text"), db)).changed).toBe(2);
+    expect(get(card).description).toBe("new text");
+    expect(get(sealed).description).toBe("new text");
+    const r = ok(applyBulk(ids(card), { type: "replace", field: "description", find: "NEW", replace: "old", matchCase: false } as BulkAction, db));
+    expect(r.changed).toBe(1);
+    expect(get(card).description).toBe("old text");
+    expect(get(sealed).description).toBe("new text");
+  });
+});
+
 describe("find and replace", () => {
   it("treats %, _, backslash, quotes and pattern characters as plain text", () => {
     expect(replaceText("100% junk_wax", "%", " percent", true)).toBe("100 percent junk_wax");

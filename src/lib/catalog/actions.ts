@@ -69,6 +69,9 @@ export async function searchCardsAction(_prev: SearchState, formData: FormData):
   return { status: "done", message: null, rows, asked: q };
 }
 
+/** Shown when "This is my card" is tried on an item that already has a catalog link. */
+const ALREADY_LINKED = "This item is already linked. Unlink it first.";
+
 /**
  * Add to my collection, or (with `itemId`) "This is my card". The card is
  * fetched again here by its source id through the gate, so what is stored is
@@ -88,9 +91,10 @@ export async function addCatalogCardAction(_prev: AddState, formData: FormData):
   }
   const db = getDb();
   if (itemId !== null) {
-    const item = db.select({ kind: items.kind }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
+    const item = db.select({ kind: items.kind, catalogCardId: items.catalogCardId }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
     if (!item) return { message: "This item no longer exists." };
     if (item.kind !== "card") return { message: "Only a single card can be linked to a catalog card." };
+    if (item.catalogCardId != null) return { message: ALREADY_LINKED };
   }
   const read = formData.get("readDetails") === "on";
   const got = await getCatalog().card(sourceId.data, "now");

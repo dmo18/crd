@@ -165,6 +165,14 @@ describe("this is my card (link)", () => {
     expect(db.select().from(items).all()).toHaveLength(1);
     expect(db.select().from(auditEvents).where(eq(auditEvents.event, "catalog_card_linked")).all()).toHaveLength(1);
   });
+  it("refuses an item that already has a catalog link, and changes nothing", async () => {
+    const id = insertItem({ player: "Junior" });
+    await redirectOf(actions.addCatalogCardAction({ message: null }, form({ sourceId: "551033", itemId: String(id) })));
+    const before = db.select().from(items).where(eq(items.id, id)).get()!;
+    const r = await actions.addCatalogCardAction({ message: null }, form({ sourceId: "551033", itemId: String(id) }));
+    expect(r.message).toBe("This item is already linked. Unlink it first.");
+    expect(db.select().from(items).where(eq(items.id, id)).get()).toEqual(before);
+  });
   it("refuses an item that is not a single card", async () => {
     const id = insertItem({ kind: "bulk" });
     const r = await actions.addCatalogCardAction({ message: null }, form({ sourceId: "551033", itemId: String(id) }));
