@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ScanView } from "@/lib/scans/view";
 import {
   atCap, isFinished, listFull, buildScanBody, canRelease, createUploader, emptyQueue, entryState, failureFor, hasUnsaved, KEEP_OPEN_MESSAGE, liveText, postScan, RETRY_DELAYS_MS, retryDelayMs, type ScanJob, type SendResult, GIVE_UP_AFTER_START_MS, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
-  TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MS, waitingText, type QueueAction, type QueueState, type UploadFailure,
+  maySignOut, queuedTooLong, SIGN_OUT_QUESTION, TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MS, waitingText, type QueueAction, type QueueState, type UploadFailure,
 } from "./scan-queue";
 
 function run(actions: QueueAction[], from: QueueState = emptyQueue): QueueState {
@@ -487,5 +487,37 @@ describe("liveText and canRelease", () => {
     const notSaved = run([add(2), { type: "sending", key: 2 }, { type: "uploadFailed", key: 2, message: "x", failure: "rejected" }]);
     expect(canRelease(notSaved.entries[0])).toBe(false);
     expect(run([{ type: "released", key: 1 }], run([add(1)])).entries[0].previewUrl).toBeNull();
+  });
+});
+
+describe("sign out with photos not saved", () => {
+  it("goes ahead without asking when everything is saved", () => {
+    const ask = vi.fn(() => false);
+    expect(maySignOut(false, ask)).toBe(true);
+    expect(ask).not.toHaveBeenCalled();
+  });
+  it("asks first when photos are not saved; Cancel keeps the owner on the page", () => {
+    const ask = vi.fn(() => false);
+    expect(maySignOut(true, ask)).toBe(false);
+    expect(ask).toHaveBeenCalledWith("Some photos are not saved yet. Sign out anyway and lose them?");
+    expect(SIGN_OUT_QUESTION).toBe("Some photos are not saved yet. Sign out anyway and lose them?");
+    expect(maySignOut(true, () => true)).toBe(true);
+  });
+});
+
+describe("signed out and long waits", () => {
+  it("marks only entries being read as signed out, and clears it again", () => {
+    let s = run([add(1), add(2), { type: "sending", key: 1 }, { type: "uploaded", key: 1, scanId: 9, at: 0 }]);
+    s = queueReducer(s, { type: "signedOut", value: true });
+    expect(s.entries.map((e) => e.signedOut)).toEqual([true, false]);
+    s = queueReducer(s, { type: "signedOut", value: false });
+    expect(s.entries.map((e) => e.signedOut)).toEqual([false, false]);
+    expect(queueReducer(s, { type: "signedOut", value: false })).toBe(s);
+  });
+  it("a scan waiting in line is given up on 6 minutes after it was saved, by the page clock", () => {
+    const e = { status: "reading" as const, scan: view(1, "queued"), uploadedAt: 1000 };
+    expect(queuedTooLong(e, 1000 + GIVE_UP_AFTER_START_MS)).toBe(false);
+    expect(queuedTooLong(e, 1001 + GIVE_UP_AFTER_START_MS)).toBe(true);
+    expect(queuedTooLong({ ...e, scan: view(1, "processing") }, 1e9)).toBe(false);
   });
 });

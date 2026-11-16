@@ -8,7 +8,7 @@ import { readPhoto, uploadsDir } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan, ScanInputError } from "./create";
 import { enqueueScan, processScan, queueIdle, queueOrder, RECOGNITION_DEADLINE_MS, recoverScans, retryScan, TOO_SLOW } from "./process";
-import { getScanView, recentScans, scanPhotoThumbs, scanStatusCounts } from "./view";
+import { getScanView, recentScans, scanPhotoThumbs, scanStatusCounts, scanViews } from "./view";
 
 async function photo(color = "#336699"): Promise<Buffer> {
   return sharp({ create: { width: 900, height: 1200, channels: 3, background: color } }).jpeg().toBuffer();
@@ -323,6 +323,25 @@ describe("scanStatusCounts", () => {
 
   it("is all zero on an empty database", () => {
     expect(scanStatusCounts(db)).toEqual({ reading: 0, failed: 0, toReview: 0 });
+  });
+});
+
+describe("scanViews (many scans in one go)", () => {
+  it("gives the same answer as getScanView for each scan, with places in line", () => {
+    const mk = (status: "queued" | "processing" | "done" | "failed") => db.insert(scans).values({ mode: "single", status }).returning({ id: scans.id }).get().id;
+    const ids = [mk("done"), mk("processing"), mk("queued"), mk("queued"), mk("failed"), mk("queued")];
+    db.insert(items).values([
+      { kind: "card", status: "confirmed", title: "a", scanId: ids[0] },
+      { kind: "card", status: "needs_review", title: "b", scanId: ids[0] },
+      { kind: "card", status: "confirmed", title: "c", scanId: ids[4] },
+    ]).run();
+    for (const order of [[], [ids[1]!, ids[5]!, ids[2]!], [ids[3]!, ids[2]!]]) {
+      const many = scanViews([...ids].reverse(), db, order, 5);
+      expect(many.map((v) => v.id)).toEqual(ids);
+      expect(many).toEqual(ids.map((id) => getScanView(id, db, order, 5)));
+    }
+    expect(scanViews([], db)).toEqual([]);
+    expect(scanViews([12345], db)).toEqual([]);
   });
 });
 

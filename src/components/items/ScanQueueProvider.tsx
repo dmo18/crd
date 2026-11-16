@@ -31,6 +31,13 @@ export function ScanQueueProvider({ children }: { children: React.ReactNode }) {
   return <ScanQueueContext.Provider value={store}>{children}</ScanQueueContext.Provider>;
 }
 
+/** Only the store, for parts that read the shared status (the pill), not the list. */
+export function useScanStore(): ScanStore {
+  const store = useContext(ScanQueueContext);
+  if (!store) throw new Error("useScanStore needs ScanQueueProvider");
+  return store;
+}
+
 /** The shared scan list and its actions. Use inside the (app) layout only. */
 export function useScanQueue(): { state: QueueState; store: ScanStore } {
   const store = useContext(ScanQueueContext);

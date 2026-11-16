@@ -86,6 +86,42 @@ export function getScanView(scanId: number, db: Db = getDb(), order: number[] = 
   };
 }
 
+/**
+ * Many scans at once, for the scan screen's one batched status call. A fixed
+ * number of queries however many ids (no query per scan). Ids that do not
+ * exist are left out. Same shape as `getScanView`.
+ */
+export function scanViews(scanIds: number[], db: Db = getDb(), order: number[] = [], now: number = Date.now()): ScanView[] {
+  if (scanIds.length === 0) return [];
+  const rows = db.select().from(scans).where(inArray(scans.id, scanIds)).orderBy(asc(scans.id)).all();
+  if (rows.length === 0) return [];
+  const itemRows = db.select().from(items).where(inArray(items.scanId, rows.map((r) => r.id))).orderBy(asc(items.id)).all();
+  const summaries = summarize(itemRows, db);
+  const byScan = new Map<number, ItemSummary[]>();
+  itemRows.forEach((r, i) => {
+    const list = byScan.get(r.scanId!) ?? [];
+    list.push(summaries[i]!);
+    byScan.set(r.scanId!, list);
+  });
+  // Place in line, worked out from one list of unfinished scans (same rules as queuePositionOf).
+  const active = rows.some((r) => r.status === "queued")
+    ? db.select({ id: scans.id, status: scans.status }).from(scans).where(inArray(scans.status, ["queued", "processing"])).orderBy(asc(scans.id)).all()
+    : [];
+  const headProcessing = order.length > 0 && active.some((a) => a.id === order[0] && a.status === "processing");
+  const position = (id: number): number => {
+    const at = order.indexOf(id);
+    if (at >= 0) return at + 1 - (at > 0 && headProcessing ? 1 : 0);
+    return active.filter((a) => a.id < id).length + 1;
+  };
+  return rows.map((scan) => ({
+    id: scan.id, mode: scan.mode, status: scan.status, error: scan.error, itemCount: scan.itemCount,
+    createdAt: scan.createdAt.getTime(), startedAt: scan.startedAt?.getTime() ?? null,
+    queuePosition: scan.status === "queued" ? position(scan.id) : null,
+    serverTime: now,
+    items: byScan.get(scan.id) ?? [],
+  }));
+}
+
 /** The most recent scans, newest first, for the rapid-fire queue list. */
 export function recentScans(limit = 20, db: Db = getDb(), order: number[] = []): ScanView[] {
   const rows = db.select({ id: scans.id }).from(scans).orderBy(desc(scans.id)).limit(Math.min(Math.max(limit, 1), 50)).all();

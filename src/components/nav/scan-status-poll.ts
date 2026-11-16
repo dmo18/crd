@@ -5,9 +5,12 @@ export const STATUS_POLL_MS = 5000;
  * When to ask the server again, in ms, or null for "do not ask on a timer".
  * Only asks while something is being read and the tab is on screen. The pill
  * still asks once when a page loads, when the tab comes back, and when the
- * scan screen saves a photo; those are not timers.
+ * scan screen saves a photo; those are not timers. While the scan list
+ * (scan-store.ts) asks on its own timer, the pill uses its answer instead.
  */
-export function nextStatusAskMs(reading: number, hidden: boolean): number | null {
+export function nextStatusAskMs(reading: number, hidden: boolean, shared: { polling: boolean; signedOut: boolean } = { polling: false, signedOut: false }): number | null {
+  // The scan list is already asking every 5 seconds and shares its counts, or the owner is signed out.
+  if (shared.polling || shared.signedOut) return null;
   if (hidden || reading <= 0) return null;
   return STATUS_POLL_MS;
 }

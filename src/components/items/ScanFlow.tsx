@@ -7,7 +7,7 @@ import { shrinkPhoto } from "@/components/capture/shrink";
 import { Badge, Button, Card, INPUT_CLASS, LinkButton, Notice } from "@/components/ui";
 import type { ScanMode } from "@/db/schema";
 import {
-  entryState, hasUnsaved, KEEP_OPEN_MESSAGE, listFull, liveText, retryKind, summary, summaryText, waitingText, type QueueEntry,
+  entryState, hasUnsaved, KEEP_OPEN_MESSAGE, SIGNED_OUT_MESSAGE, listFull, liveText, retryKind, summary, summaryText, waitingText, type QueueEntry,
 } from "./scan-queue";
 import { useScanQueue } from "./ScanQueueProvider";
 
@@ -240,7 +240,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
           <ul className="flex flex-col gap-3">
             {list.map(({ entry, n }) => (
               <li key={entry.key}>
-                <EntryRow entry={entry} n={n} onRetry={() => void store.retry(entry.key)} />
+                <EntryRow entry={entry} n={n} onRetry={() => void store.retry(entry.key)} onCheck={() => void store.poll()} />
               </li>
             ))}
           </ul>
@@ -254,7 +254,22 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
   );
 }
 
-function EntryRow({ entry, n, onRetry }: { entry: QueueEntry; n: number; onRetry: () => void }) {
+function SignInLink({ n }: { n: number }) {
+  // A new tab, so this page keeps the photos while the owner signs in.
+  return (
+    <a
+      href="/login"
+      target="_blank"
+      rel="noopener"
+      aria-label={`Sign in again for scan ${n}, opens a new tab`}
+      className="inline-flex min-h-11 items-center text-accent underline"
+    >
+      Sign in again
+    </a>
+  );
+}
+
+function EntryRow({ entry, n, onRetry, onCheck }: { entry: QueueEntry; n: number; onRetry: () => void; onCheck: () => void }) {
   const { kind, text } = entryState(entry);
   const kindOfRetry = retryKind(entry);
   const items = entry.scan?.items ?? [];
@@ -283,6 +298,13 @@ function EntryRow({ entry, n, onRetry }: { entry: QueueEntry; n: number; onRetry
         <p className="text-xs text-muted break-words">Scan {n}: {entry.name}</p>
         <p className={`font-semibold ${tone}`}>{kind === "read" || kind === "check" ? (kind === "check" ? text : "Read") : text}</p>
         {wait ? <p className="text-sm text-muted">{wait}</p> : null}
+        {entry.status === "reading" && entry.signedOut ? (
+          <>
+            <p className="text-sm break-words text-danger">{SIGNED_OUT_MESSAGE}</p>
+            <SignInLink n={n} />
+            <Button variant="secondary" onClick={onCheck} aria-label={`Check scan ${n} again`}>Check again</Button>
+          </>
+        ) : null}
         {kind === "saving" && entry.status === "backoff" && entry.error ? <p className="text-sm text-muted">{entry.error}</p> : null}
         {kind === "read" || kind === "check" ? (
           <ul className="flex flex-col gap-1">
@@ -307,18 +329,7 @@ function EntryRow({ entry, n, onRetry }: { entry: QueueEntry; n: number; onRetry
         {entry.status === "failed" ? (
           <>
             {kind !== "slow" ? <p className="text-sm break-words text-danger">{entry.error}</p> : null}
-            {entry.failure === "signIn" && entry.scanId === null ? (
-              // A new tab, so this page keeps the photos while the owner signs in.
-              <a
-                href="/login"
-                target="_blank"
-                rel="noopener"
-                aria-label={`Sign in again for scan ${n}, opens a new tab`}
-                className="inline-flex min-h-11 items-center text-accent underline"
-              >
-                Sign in again
-              </a>
-            ) : null}
+            {entry.failure === "signIn" && entry.scanId === null ? <SignInLink n={n} /> : null}
             {entry.failure === "signIn" && kindOfRetry ? <p className="text-sm text-muted">Sign in, then come back and tap Retry.</p> : null}
             {kindOfRetry ? (
               <Button variant="secondary" onClick={onRetry} aria-label={`Retry scan ${n}`}>Retry</Button>

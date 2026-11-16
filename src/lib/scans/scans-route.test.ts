@@ -1,7 +1,8 @@
 import sharp from "sharp";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, setDbForTests } from "@/db";
-import { scans } from "@/db/schema";
+import { items, scans } from "@/db/schema";
+import { getScanView } from "@/lib/scans/view";
 
 // Real guard unless a test signs in. Outside a request there is no cookie store, so the real guard answers 401.
 const signedIn = vi.hoisted(() => ({ value: false }));
@@ -82,5 +83,43 @@ describe("GET /api/scans/status", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ reading: 1, failed: 1, toReview: 0 });
+  });
+});
+
+describe("GET /api/scans/status?ids=", () => {
+  const ask = (q: string) => STATUS(new Request(`http://localhost/api/scans/status?ids=${q}`));
+
+  it("needs the owner session", async () => {
+    signedIn.value = false;
+    expect((await ask("1,2")).status).toBe(401);
+  });
+
+  it("refuses a bad list with a short message", async () => {
+    const tooMany = Array.from({ length: 101 }, (_, i) => i + 1).join(",");
+    for (const q of ["", "a", "0", "-1", "1.5", "1,,2", "1,x", "99999999999", tooMany]) {
+      const res = await ask(q);
+      expect(res.status, q).toBe(400);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(await res.json()).toEqual({ error: "Bad list of scans." });
+    }
+  });
+
+  it("returns the counts and each scan's progress, uncached, repeats removed, unknown ids left out", async () => {
+    const [a, b] = db.insert(scans).values([{ mode: "single", status: "queued" }, { mode: "multi", status: "done", itemCount: 1 }]).returning({ id: scans.id }).all();
+    db.insert(items).values({ scanId: b!.id, kind: "card", status: "needs_review", title: "1990 Topps Ken Griffey Jr." }).run();
+    const res = await ask(`${b!.id},${a!.id},${b!.id},999`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = await res.json();
+    expect(body).toMatchObject({ reading: 1, failed: 0, toReview: 1 });
+    expect(body.scans).toHaveLength(2);
+    expect(body.scans[0]).toMatchObject({ id: a!.id, status: "queued", queuePosition: 1, items: [] });
+    expect(body.scans[1]).toMatchObject({ id: b!.id, status: "done", items: [{ status: "needs_review", title: "1990 Topps Ken Griffey Jr." }] });
+    // Same answer as the one scan route gives.
+    expect(body.scans[1]).toEqual({ ...getScanView(b!.id, db), serverTime: body.scans[1].serverTime });
+  });
+
+  it("100 ids is allowed", async () => {
+    expect((await ask(Array.from({ length: 100 }, (_, i) => i + 1).join(","))).status).toBe(200);
   });
 });

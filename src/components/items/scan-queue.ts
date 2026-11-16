@@ -10,12 +10,24 @@ export const MAX_PARALLEL = 2;
  * scan waiting in line is never timed out, however long the line is.
  */
 export const GIVE_UP_AFTER_START_MS = 6 * 60 * 1000;
+/** Shown on entries still being read after the status route said "not signed in" 3 times in a row. */
+export const SIGNED_OUT_MESSAGE = "Signed out. Sign in again in a new tab, then come back; your photos stay here.";
 export const TIMEOUT_MESSAGE = "This is taking too long. It may still finish: check Review or Inventory later.";
 
 /** True when the server has been reading this scan for longer than the page waits. Uses the server's clock only. */
 export function scanTimedOut(scan: Pick<ScanView, "status" | "startedAt" | "serverTime"> | null): boolean {
   if (!scan || scan.status !== "processing" || scan.startedAt === null) return false;
   return scan.serverTime - scan.startedAt > GIVE_UP_AFTER_START_MS;
+}
+
+/**
+ * True when a scan has waited in line for longer than the page waits, timed
+ * from when the page handed it to the server (`uploadedAt`, page clock).
+ * The page then stops asking about it and shows "taking longer".
+ */
+export function queuedTooLong(e: Pick<QueueEntry, "status" | "scan" | "uploadedAt">, now: number): boolean {
+  if (e.status !== "reading" || e.scan?.status !== "queued" || e.uploadedAt === null) return false;
+  return now - e.uploadedAt > GIVE_UP_AFTER_START_MS;
 }
 
 /** A short line about where a scan is, for the waiting screen and the queue list. */
@@ -70,6 +82,8 @@ export type QueueEntry = {
   /** Why the last upload failed, while it is not saved. */
   failure: UploadFailure | null;
   scan: ScanView | null;
+  /** True while the page cannot ask about this scan because the owner is signed out. */
+  signedOut: boolean;
 };
 
 /** Entries in the order they were added (oldest first). */
@@ -86,7 +100,9 @@ export type QueueAction =
   | { type: "update"; scan: ScanView }
   | { type: "failed"; key: number; message: string }
   | { type: "retry"; key: number }
-  | { type: "requeued"; key: number; scan: ScanView | null }
+  | { type: "requeued"; key: number; scan: ScanView | null; at?: number }
+  /** The status route said "not signed in" 3 times in a row (true), or answered again (false). */
+  | { type: "signedOut"; value: boolean }
   | { type: "retryError"; key: number; message: string }
   | { type: "timeout"; key: number }
   /** The list is full: drop the oldest finished entry to make room. Never drops one the server may not have. */
@@ -112,7 +128,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       return {
         entries: [
           ...state.entries,
-          { key: action.key, clientKey: action.clientKey, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, attempt: 0, uploadedAt: null, error: null, failure: null, scan: null },
+          { key: action.key, clientKey: action.clientKey, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, attempt: 0, uploadedAt: null, error: null, failure: null, scan: null, signedOut: false },
         ],
       };
     case "sending":
@@ -159,12 +175,24 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     case "requeued":
       // The server runs the same scan again with the photos it already has.
       return patch(state, action.key, (e) =>
-        e.status === "failed" && e.scanId !== null ? { ...e, status: "reading", error: null, scan: action.scan } : e,
+        e.status === "failed" && e.scanId !== null
+          ? { ...e, status: "reading", error: null, scan: action.scan, uploadedAt: action.at ?? e.uploadedAt }
+          : e,
       );
     case "retryError":
       return patch(state, action.key, (e) => (e.status === "failed" ? { ...e, error: action.message } : e));
     case "timeout":
-      return patch(state, action.key, (e) => (e.status === "reading" ? { ...e, status: "failed", error: TIMEOUT_MESSAGE } : e));
+      return patch(state, action.key, (e) => (e.status === "reading" ? { ...e, status: "failed", error: TIMEOUT_MESSAGE, signedOut: false } : e));
+    case "signedOut": {
+      let changed = false;
+      const entries = state.entries.map((e) => {
+        const want = action.value && e.status === "reading";
+        if (e.signedOut === want) return e;
+        changed = true;
+        return { ...e, signedOut: want };
+      });
+      return changed ? { entries } : state;
+    }
     case "makeRoom": {
       if (state.entries.length < MAX_QUEUE) return state;
       const at = state.entries.findIndex(isFinished);
@@ -276,6 +304,16 @@ export function listFull(state: QueueState): boolean {
 /** True while any photo is not yet safely on the server: the leave warning is on. */
 export function hasUnsaved(state: QueueState): boolean {
   return state.entries.some((e) => e.scanId === null && e.status !== "done");
+}
+
+export const SIGN_OUT_QUESTION = "Some photos are not saved yet. Sign out anyway and lose them?";
+
+/**
+ * Whether the Sign out button may go ahead. With unsaved photos it asks first
+ * (`ask` is `window.confirm`); Cancel keeps the owner on the page.
+ */
+export function maySignOut(unsaved: boolean, ask: (question: string) => boolean): boolean {
+  return !unsaved || ask(SIGN_OUT_QUESTION);
 }
 
 /** How long to wait before the next automatic try for an entry in "backoff". */
