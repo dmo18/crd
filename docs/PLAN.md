@@ -2248,3 +2248,12 @@ repeats) or 2.2M delegated tokens, inside what is left of the roadmap cap.
 - Bulk "set rookie: no" skips cards with no rookie mark and isRookie 0
   (nothing to change); the preview count shows only real changes.
 - Test: undo of a bulk change stored before 0009 (only isRookie saved).
+
+**11.2 decisions (2026-11-16, main session; done in 11.3)**
+- Choosing "base" on an item linked to another version links the catalog's
+  base card when it is in the list (unlink first, then link, normal filling
+  rules); when no base card is in the list, it unlinks. Choosing a known-list
+  version (no catalog card) while linked to the base card unlinks it.
+- A version pick sets state and source only (isParallel untouched): kept.
+- Known list of 12 rows with source notes: kept; Topps Gold for any sport.
+- 11.7 (why a look up waited) is dropped for budget; deferred.
