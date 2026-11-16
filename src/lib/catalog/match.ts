@@ -32,8 +32,16 @@ export function dropQualifiers(raw: string): string {
 }
 
 /**
+ * Words that belong to the surname when they stand before it ("De La Cruz",
+ * "St. Claire", "La Russa", "O Neill"). Such a word is never a first name or
+ * the start of one. normalizeName has already dropped the dot of "St.".
+ */
+const PARTICLES: ReadonlySet<string> = new Set(["de", "la", "del", "los", "las", "da", "di", "le", "van", "von", "st", "mc", "o"]);
+
+/**
  * Lowercase, no accents, no punctuation, bracketed qualifiers dropped, "jr"
- * and "sr" set apart. Null when there is no usable surname.
+ * and "sr" set apart, particles joined into the surname ("Elly De La Cruz"
+ * gives surname "delacruz"). Null when there is no usable surname.
  */
 export function parseName(raw: string | null | undefined): NameParts | null {
   const tokens = normalizeName(dropQualifiers(String(raw ?? "").slice(0, MAX_NAME))).split(" ").filter(Boolean);
@@ -47,9 +55,18 @@ export function parseName(raw: string | null | undefined): NameParts | null {
     suffixCut = last === "j" ? "jr" : "sr";
     tokens.pop();
   }
-  const surname = tokens[tokens.length - 1];
+  let surname = tokens.pop();
+  while (surname && tokens.length > 0 && PARTICLES.has(tokens[tokens.length - 1])) surname = tokens.pop() + surname;
   if (!surname || surname.length < 2) return null;
-  return { first: tokens.length >= 2 ? tokens[0] : null, surname, suffix, suffixCut };
+  return { first: tokens.length >= 1 ? tokens[0] : null, surname, suffix, suffixCut };
+}
+
+/**
+ * The reading mix-ups folded away (l, i and 1 to l; 0 to o; 5 to s; 8 to b;
+ * rn to m), so "Wltt" and "Witt" are the same surname. Nothing else is forgiven.
+ */
+export function foldOcr(s: string): string {
+  return s.replace(/rn/g, "m").replace(/[i1]/g, "l").replace(/0/g, "o").replace(/5/g, "s").replace(/8/g, "b");
 }
 
 /** Surname up to 3 letters must be exact; 4 to 7 letters at most 1; 8 or more at most 2. */
@@ -333,6 +350,23 @@ function toCandidate(s: Scored): Candidate {
   return { ...s.row.card, score, why: why(s) };
 }
 
+/**
+ * The number path's name check: surname exact after folding, a read first
+ * name or initial agrees, and a shared surname needs a first name read.
+ */
+function strictName(s: Scored, read: MatchRead, pool: readonly Scored[]): boolean {
+  const truth = s.row.names[0];
+  if (!truth) return false;
+  const surname = foldOcr(truth.surname);
+  const shared = pool.some((o) => o.row.playerKey !== s.row.playerKey && o.row.names.some((n) => foldOcr(n.surname) === surname));
+  return read.spellings.some((r) => {
+    if (foldOcr(r.surname) !== surname) return false;
+    const rs = r.suffix ?? r.suffixCut;
+    if (rs && truth.suffix && rs !== truth.suffix) return false;
+    return r.first ? firstFits(r.first, truth.first) : !shared;
+  });
+}
+
 export type Judgement = {
   sure: Candidate | null;
   /** "number": number and name agree. "name": the one player of a complete set, applied without a read number. */
@@ -355,8 +389,18 @@ export const MAX_CANDIDATES = 5;
  *     fits the read name (first name, surname and suffix compared on parsed
  *     names), and that player has exactly one plain card there.
  * Everything else is a ranked candidate for Review.
+ *
+ * `baseSetIds`: the known base set ids of the read sport, year and brand. A
+ * sure card must come from one of them; an empty list means nothing is sure
+ * (sport, year or brand not read, or no base set known). Left out only by
+ * tests of the name rules alone; lookup always passes it.
+ *
+ * On the number path the surname must be exact after folding the reading
+ * mix-ups (no close spelling), a read first name or initial must agree, and
+ * when another player of the pool carries that surname a first name or
+ * initial must have been read.
  */
-export function judge(rows: readonly SlimRow[], read: MatchRead, wholeSet: boolean): Judgement {
+export function judge(rows: readonly SlimRow[], read: MatchRead, wholeSet: boolean, baseSetIds?: readonly string[]): Judgement {
   const scored: Scored[] = [];
   const seen = new Set<string>();
   rows.forEach((row, i) => {
@@ -376,14 +420,15 @@ export function judge(rows: readonly SlimRow[], read: MatchRead, wholeSet: boole
   const candidates = keep.slice(0, MAX_CANDIDATES).map(toCandidate);
   const verified = scored.filter((s) => s.row.card.verified);
   // Only a clean base card is ever applied: no variation, insert, listing or subset card.
-  const plain = verified.filter((s) => !s.row.special && !s.row.subset);
+  const inBase = (s: Scored) => !baseSetIds || (s.row.card.sourceSetId !== null && baseSetIds.includes(s.row.card.sourceSetId));
+  const plain = verified.filter((s) => !s.row.special && !s.row.subset && inBase(s));
   let sure: Scored | null = null;
   let sureBy: Judgement["sureBy"] = null;
 
   if (read.number) {
     // A read number that disagrees with the best name match is never overwritten.
     const both = plain.filter((s) => s.fits && s.numberAgrees);
-    if (both.length === 1) {
+    if (both.length === 1 && strictName(both[0], read, verified)) {
       sure = both[0];
       sureBy = "number";
     }

@@ -274,13 +274,18 @@ describe("review probes: checklist 9179 (first 500 of 792) in memory, no number 
   });
 
   it("with the number 336 read and the name agreeing, #336 is sure by number from the checklist, no call", async () => {
-    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr.", "Eriffey"]) {
+    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr."]) {
       const { catalog, o } = withChecklist();
       const r = await lookupCard(read({ names: [name], cardNumber: "336" }), "background", o);
       expect(r, name).toMatchObject({ sure: { sourceId: "551033", cardNumber: "336" }, sureBy: "number", callsUsed: 0 });
       expect(lookupConfidence(r, 0.4)).toBe(REVIEW_THRESHOLD);
       expect(catalog.count()).toBe(0);
     }
+    // A close spelling of the surname with the number: the top candidate, never sure.
+    const { o } = withChecklist();
+    const eriffey = await lookupCard(read({ names: ["Eriffey"], cardNumber: "336" }), "background", o);
+    expect(eriffey).toMatchObject({ sure: null, sureBy: null });
+    expect(eriffey.candidates[0].sourceId).toBe("551033");
   });
 
   it("a checklist in memory that gave no sure card: no more searches at all", async () => {
@@ -381,13 +386,14 @@ describe("sport: nothing carries across sports", () => {
     expect(r.sure?.sourceId).toBe("880001");
     expect(Object.fromEntries(scan.setIds)).toEqual({ [BASEBALL_1990_TOPPS]: "9179", "football|1990|topps": "7001" });
   });
-  it("no sport read: the baseball memory of the scan is not used, and nothing is sure by name alone", async () => {
+  it("no sport read: the baseball memory of the scan is not used, and nothing is sure, not even by number and name", async () => {
     const { catalog, o } = withChecklist();
     const r = await lookupCard(read({ sport: null, names: ["Eriffey"] }), "background", o);
     expect(r.sure).toBeNull();
     expect(catalog.count()).toBeGreaterThan(0);
     const numbered = await lookupCard(read({ sport: null, names: ["Ken Griffey Jr."], cardNumber: "336" }), "background", o);
-    expect(numbered).toMatchObject({ sure: { sourceId: "551033" }, sureBy: "number" });
+    expect(numbered).toMatchObject({ sure: null, sureBy: null });
+    expect(numbered.candidates[0].sourceId).toBe("551033");
   });
   it("memory is per scan: a new scan starts empty, there is no global map", async () => {
     const first = setup();
@@ -421,10 +427,11 @@ describe("year or brand unknown", () => {
     expect(r.sure).toBeNull();
     expect(catalog.calls).toEqual([{ tool: "search", arg: "Topps Ken Griffey Jr." }]);
   });
-  it("unknown brand: exactly one clean entry agreeing with number and name is applied", async () => {
+  it("unknown brand: even one clean entry agreeing with number and name is a candidate only", async () => {
     const { catalog, o } = setup();
     const r = await lookupCard(read({ brands: [], names: ["Ken Griffey Jr."], cardNumber: "336" }), "background", o);
-    expect(r.sure?.sourceId).toBe("551033");
+    expect(r).toMatchObject({ sure: null, sureBy: null });
+    expect(r.candidates[0].sourceId).toBe("551033");
     expect(catalog.count("checklist")).toBe(0);
   });
   it("misread name and unknown brand: nothing, plain reading stands", async () => {
@@ -608,5 +615,120 @@ describe("speed on this server", () => {
     console.log(`lookup timing: slim rows for 800 cards ${prep.toFixed(2)} ms, full look up 800 x 5 spellings ${ms.toFixed(2)} ms`);
     expect(s.catalog.count()).toBe(0);
     expect(ms).toBeLessThan(50); // plan limit; measured about 7 ms when the server is quiet
+  });
+});
+
+describe("third review: sure needs sport, year, brand, the known base set and an exact surname on the number path", () => {
+  const griffey = CHECKLIST_CARDS.find((c) => c.sourceId === "551033") as CatalogCard;
+  function fake(id: string, number: string, player: string, over: Partial<CatalogCard> = {}): CatalogCard {
+    const set = over.sourceSetId ?? "9179";
+    const sport = over.sport ?? "baseball";
+    return { ...griffey, sourceId: id, cardNumber: number, player, url: `https://mycardfolio.com/sports/${sport}/${over.year ?? 1990}/topps-2129/base-set-${set}/${number}-x-${id}`, ...over };
+  }
+
+  it("Nolan Ryan #1 with no year read: the search shows the 1991 card, it is not sure", async () => {
+    const ryan1991 = fake("991001", "1", "Nolan Ryan", { year: 1991, sourceSetId: "9300" });
+    const { catalog, o } = setup({ searches: { "topps nolan ryan": [ryan1991] } });
+    const r = await lookupCard(read({ year: null, names: ["Nolan Ryan"], cardNumber: "1" }), "background", o);
+    expect(r).toMatchObject({ sure: null, sureBy: null });
+    expect(r.candidates.map((c) => c.sourceId)).toContain("991001");
+    expect(catalog.log()).toEqual(["search:Topps Nolan Ryan"]);
+  });
+
+  it("Bo Jackson #300 with no sport read: the search shows a football card, it is not sure", async () => {
+    const football = fake("880300", "300", "Bo Jackson", { sport: "football", sourceSetId: "7001" });
+    const { catalog, o } = setup({ everySearch: () => [football] });
+    const r = await lookupCard(read({ sport: null, names: ["Bo Jackson"], cardNumber: "300" }), "background", o);
+    expect(r).toMatchObject({ sure: null, sureBy: null });
+    expect(r.candidates.map((c) => c.sourceId)).toContain("880300");
+    expect(catalog.count()).toBeGreaterThan(0);
+  });
+
+  describe("names with particles in a complete set", () => {
+    const pairs = [
+      { read: "De La Cruz", wrong: fake("990701", "701", "Deivi Cruz"), right: fake("990702", "702", "Elly De La Cruz") },
+      { read: "St. Claire", wrong: fake("990703", "703", "Steve Claire"), right: fake("990704", "704", "Randy St. Claire") },
+      { read: "La Russa", wrong: fake("990705", "705", "Larry Russa"), right: fake("990706", "706", "Tony La Russa") },
+      // Paul O'Neill is the real #332 of the recording.
+      { read: "O Neill", wrong: fake("990707", "707", "Otis Neill"), right: CHECKLIST_CARDS.find((c) => c.player === "Paul O'Neill") as CatalogCard },
+    ];
+    const extra = pairs.flatMap((p) => (p.right.sourceId.startsWith("9907") ? [p.wrong, p.right] : [p.wrong]));
+    it("Paul O'Neill is #332 of the recording", () => expect(pairs[3].right).toMatchObject({ cardNumber: "332", sourceSetId: "9179" }));
+    function complete(whole: boolean) {
+      const s = setup();
+      s.scan.memory.put("9179", BASEBALL_1990_TOPPS, [...CHECKLIST_CARDS, ...extra], whole);
+      s.scan.setIds.set(BASEBALL_1990_TOPPS, "9179");
+      return s;
+    }
+    for (const p of pairs) {
+      it(`"${p.read}" is never ${p.wrong.player}; sure only for ${p.right.player} when exactly one player fits`, async () => {
+        const { catalog, o } = complete(true);
+        const r = await lookupCard(read({ names: [p.read] }), "background", o);
+        expect(r.sure?.sourceId).not.toBe(p.wrong.sourceId);
+        expect(r.candidates[0].sourceId).toBe(p.right.sourceId);
+        if (p.read === "O Neill") {
+          // "oneill" is one letter from "neill": two players fit, so neither is sure.
+          expect(r).toMatchObject({ sure: null, sureBy: null });
+        } else {
+          expect(r).toMatchObject({ sure: { sourceId: p.right.sourceId }, sureBy: "name" });
+        }
+        // With the wrong player's number read: the surname is not exact, never sure.
+        const numbered = await lookupCard(read({ names: [p.read], cardNumber: p.wrong.cardNumber }), "background", o);
+        expect(numbered.sure).toBeNull();
+        expect(catalog.count()).toBe(0);
+        // The same set cut short: nothing is sure by name.
+        const cut = complete(false);
+        expect((await lookupCard(read({ names: [p.read] }), "background", cut.o)).sure).toBeNull();
+      });
+    }
+  });
+
+  describe("misread numbers in checklist 9179", () => {
+    it('"Williamson" + #41 (Matt Williams) and "Costello" + #427 (Carmen Castillo): close surnames, not sure, no call', async () => {
+      for (const [name, number, player] of [["Williamson", "41", "Matt Williams"], ["Costello", "427", "Carmen Castillo"]] as const) {
+        const { catalog, o } = withChecklist();
+        const r = await lookupCard(read({ names: [name], cardNumber: number }), "background", o);
+        expect(r, name).toMatchObject({ sure: null, sureBy: null, callsUsed: 0 });
+        expect(r.candidates.map((c) => c.player), name).toContain(player);
+        expect(catalog.count()).toBe(0);
+      }
+    });
+    it('"Griffey" + #581 (Ken Griffey Sr., past the cut): another Griffey is in the set and no first name was read, not sure', async () => {
+      const senior = fake("999581", "581", "Ken Griffey Sr.");
+      const { catalog, o } = withChecklist({ searches: { "1990 topps 581": [senior] } });
+      const r = await lookupCard(read({ names: ["Griffey"], cardNumber: "581" }), "background", o);
+      expect(r).toMatchObject({ sure: null, sureBy: null });
+      expect(r.candidates.map((c) => c.sourceId)).toContain("999581");
+      expect(catalog.log()).toEqual(["search:1990 Topps 581"]);
+      // With the first name and suffix read, the one card is sure.
+      const named = await lookupCard(read({ names: ["Ken Griffey Sr."], cardNumber: "581" }), "background", o);
+      expect(named).toMatchObject({ sure: { sourceId: "999581" }, sureBy: "number" });
+    });
+  });
+
+  describe("a second clean set of the same year and brand", () => {
+    const real792 = RECORDED["1990 topps 792"].find((c) => c.cardNumber === "792" && c.sourceSetId === "9179" && !c.variation) as CatalogCard;
+    const clone792: CatalogCard = { ...real792, sourceId: "999792", sourceSetId: "9999", url: real792.url.replace("base-set-9179", "base-set-9999").replace(real792.sourceId, "999792") };
+    it("the recorded #792 is in base set 9179", () => {
+      expect(real792).toMatchObject({ player: "Gerald Perry", sourceSetId: "9179" });
+    });
+    it("same number and name in set 9999: not sure; the card of the known base set 9179 is", async () => {
+      const only = withChecklist({ searches: { "1990 topps 792": [clone792] } });
+      const r = await lookupCard(read({ names: ["Gerald Perry"], cardNumber: "792" }), "background", only.o);
+      expect(r).toMatchObject({ sure: null, sureBy: null });
+      expect(r.candidates.map((c) => c.sourceId)).toContain("999792");
+      const both = withChecklist({ searches: { "1990 topps 792": [clone792, real792] } });
+      const b = await lookupCard(read({ names: ["Gerald Perry"], cardNumber: "792" }), "background", both.o);
+      expect(b).toMatchObject({ sure: { sourceId: real792.sourceId, sourceSetId: "9179" }, sureBy: "number" });
+    });
+    it("a step 1 answer from the second set is never sure when the base set is known; the checklist card is", async () => {
+      const clone336: CatalogCard = { ...griffey, sourceId: "999336", sourceSetId: "9999", url: griffey.url.replace("base-set-9179", "base-set-9999").replace("551033", "999336") };
+      const s = setup({ searches: { "1990 topps ken griffey jr.": [clone336] } });
+      s.scan.setIds.set(BASEBALL_1990_TOPPS, "9179");
+      const r = await lookupCard(read({ names: ["Ken Griffey Jr."], cardNumber: "336" }), "background", s.o);
+      expect(r.sure).toMatchObject({ sourceId: "551033", sourceSetId: "9179" });
+      expect(r.candidates.map((c) => c.sourceId)).toContain("999336");
+      expect(s.catalog.log()).toEqual(["search:1990 Topps Ken Griffey Jr.", "search:1990 Topps Griffey", "search:1990 Topps 336", "checklist:9179"]);
+    });
   });
 });

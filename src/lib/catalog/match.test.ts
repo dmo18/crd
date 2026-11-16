@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CatalogCard } from "./types";
 import { parseChecklist } from "./mycardfolio";
-import { allowedDistance, editDistance, firstFits, isSpecial, isSubset, judge, matchRead, nameDistance, parseName, slimRow, slimRows, type NameParts } from "./match";
+import { allowedDistance, editDistance, firstFits, foldOcr, isSpecial, isSubset, judge, matchRead, nameDistance, parseName, slimRow, slimRows, type NameParts } from "./match";
 
 function fixture(name: string) {
   return JSON.parse(fs.readFileSync(path.join(process.cwd(), "tests/fixtures/catalog", name), "utf8"));
@@ -206,9 +206,14 @@ describe("a checklist that was cut short (9179: the first 500 of 792)", () => {
     expect(j.sure).toBeNull();
     expect(j.candidates.map((c) => c.cardNumber).sort()).toEqual(["450", "7"]);
   });
-  it("with the read number 336 and an agreeing name, #336 is sure by number", () => {
-    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr.", "Eriffey"]) {
+  it("with the read number 336 and an agreeing name, #336 is sure by number; a close spelling of the surname is not enough", () => {
+    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr."]) {
       expect(partial(name, "336"), name).toMatchObject({ sure: { sourceId: "551033" }, sureBy: "number" });
+    }
+    for (const name of ["Eriffey", "Ken Griff", "Ken Grifey"]) {
+      const j = partial(name, "336");
+      expect(j.sure, name).toBeNull();
+      expect(j.candidates[0]?.sourceId, name).toBe("551033");
     }
     expect(partial("Dwight Smith", "311")).toMatchObject({ sure: { cardNumber: "311" }, sureBy: "number" });
   });
@@ -343,5 +348,59 @@ describe("speed on this server", () => {
     const ms = time(() => judge(rows, read, true));
     console.log(`match timing: judge 800 x 5 spellings ${ms.toFixed(2)} ms`);
     expect(ms).toBeLessThan(50); // plan limit; measured about 7 ms when the server is quiet
+  });
+});
+
+describe("third review: particles, folding and the stricter sure rule", () => {
+  it("particles join the surname on both sides and are never a first name", () => {
+    expect(parseName("De La Cruz")).toEqual({ first: null, surname: "delacruz", suffix: null, suffixCut: null });
+    expect(parseName("Elly De La Cruz")).toMatchObject({ first: "elly", surname: "delacruz" });
+    expect(parseName("St. Claire")).toMatchObject({ first: null, surname: "stclaire" });
+    expect(parseName("Randy St. Claire")).toMatchObject({ first: "randy", surname: "stclaire" });
+    expect(parseName("La Russa")).toMatchObject({ first: null, surname: "larussa" });
+    expect(parseName("O Neill")).toMatchObject({ first: null, surname: "oneill" });
+    expect(parseName("Paul O'Neill")).toMatchObject({ first: "paul", surname: "oneill" });
+    expect(parseName("Mark Mc Gwire Jr")).toMatchObject({ first: "mark", surname: "mcgwire", suffix: "jr" });
+    expect(parseName("Ken Griffey Jr.")).toMatchObject({ first: "ken", surname: "griffey", suffix: "jr" });
+    expect(nameDistance(p("De La Cruz"), p("Deivi Cruz"), 3)).toBe(Infinity);
+    expect(nameDistance(p("St. Claire"), p("Steve Claire"), 1)).toBe(Infinity);
+    expect(nameDistance(p("La Russa"), p("Larry Russa"), 1)).toBe(Infinity);
+    expect(nameDistance(p("O Neill"), p("Paul O'Neill"), 0)).toBe(0);
+  });
+  it("folding forgives only the reading mix-ups", () => {
+    expect(foldOcr("wltt")).toBe(foldOcr("witt"));
+    expect(foldOcr("srnith")).toBe(foldOcr("smith"));
+    expect(foldOcr("8onds")).toBe(foldOcr("bonds"));
+    expect(foldOcr("eriffey")).not.toBe(foldOcr("griffey"));
+    expect(foldOcr("williamson")).not.toBe(foldOcr("williams"));
+  });
+  const rows = slimRows(CARDS);
+  it("number path: a close surname is not sure (Williamson #41, Costello #427), an exact or folded one is", () => {
+    for (const [name, number] of [["Williamson", "41"], ["Costello", "427"], ["Eriffey", "336"]] as const) {
+      for (const whole of [true, false]) expect(judge(rows, matchRead([name], number), whole).sure, name).toBeNull();
+    }
+    expect(judge(rows, matchRead(["Matt Williams"], "41"), false).sure?.cardNumber).toBe("41");
+    expect(judge(rows, matchRead(["Ken Griffey Jr."], "336"), false).sure?.sourceId).toBe("551033");
+    expect(judge(rows, matchRead(["Dwlght Srnith"], "311"), false).sure?.cardNumber).toBe("311");
+  });
+  it("number path: a shared surname needs a first name read, and a read first name must agree", () => {
+    const senior581 = card({ sourceId: "999581", cardNumber: "581", player: "Ken Griffey Sr." });
+    const both = slimRows([...CARDS, senior581]);
+    expect(judge(both, matchRead(["Griffey"], "581"), false).sure).toBeNull();
+    expect(judge(both, matchRead(["K Griffey"], "581"), false).sure?.sourceId).toBe("999581");
+    expect(judge(both, matchRead(["Kevin Griffey"], "336"), false).sure).toBeNull();
+    // Alone in the pool, the surname is enough.
+    expect(judge(slimRows([senior581]), matchRead(["Griffey"], "581"), false).sure?.sourceId).toBe("999581");
+  });
+  it("a sure card must come from a known base set: none known or another set gives no sure card", () => {
+    const read = matchRead(["Ken Griffey Jr."], "336");
+    expect(judge(rows, read, true, ["9179"]).sure?.sourceId).toBe("551033");
+    expect(judge(rows, read, true, []).sure).toBeNull();
+    expect(judge(rows, read, true, ["9999"]).sure).toBeNull();
+    expect(judge(rows, matchRead(["Eriffey"], null), true, ["9999"]).sure).toBeNull();
+    const other = card({ sourceId: "999336", sourceSetId: "9999" });
+    const j = judge(slimRows([other, griffey]), read, false, ["9179"]);
+    expect(j.sure?.sourceId).toBe("551033");
+    expect(j.candidates.map((c) => c.sourceId)).toContain("999336");
   });
 });

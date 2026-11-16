@@ -251,15 +251,15 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     return noise.slice(0, 3).map((c) => ({ ...c, score: 0, why: "Unverified listing" }));
   }
 
-  // ---- Step 3: year or brand unknown. No checklist is fetched.
+  // ---- Step 3: year or brand unknown. No checklist is fetched, and a search
+  // answer here is a candidate only: nothing is sure without year and brand.
   if (r.year === null || r.brands.length === 0) {
     const full = r.names[0];
     if (!full) return done(nothing, []);
     const text = r.year !== null ? `${r.year} ${full}` : r.brands.length > 0 ? `${r.brands[0]} ${full}` : full;
     const cards = await search(text, r.year, true);
     const rows = rowsOf(cards, r.year, r.brands[0] ? normalizeBrand(r.brands[0]) : null);
-    // Applied only when exactly one clean entry agrees with a read number and the name.
-    const j = judge(rows, m, false);
+    const j = judge(rows, m, false, []);
     return done(j, mergeCandidates(j.candidates, noiseCandidates()));
   }
 
@@ -268,6 +268,11 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   const targets: Target[] = r.brands.map((brand) => ({ year, brand })).slice(0, MAX_SETS);
   if (targets.length < MAX_SETS && r.yearFromStats) targets.push({ year: year - 1, brand: r.brands[0] });
   const knownSetId = (t: Target) => setIds.get(keyOf(t)) ?? (sport ? memory.setIdFor(keyOf(t)) : null);
+  /**
+   * A sure card needs sport, year and brand read and must come from a known
+   * base set of the sets tried. Looked up at each judging: searches teach set ids.
+   */
+  const baseIds = (): string[] => (sport ? targets.map(knownSetId).filter((id): id is string => id !== null) : []);
 
   /**
    * The end of step 2: judges the fetched checklists. `allTargets`: every set
@@ -289,7 +294,7 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     }
     // "No other player fits" counts only over complete sets, and only when the sport is known.
     const whole = Boolean(sport) && allTargets && sets.every((s) => s.complete);
-    const j = judge(pool, m, whole);
+    const j = judge(pool, m, whole, baseIds());
     return done(j, mergeCandidates(j.candidates, others, noiseCandidates()));
   }
 
@@ -304,7 +309,7 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   if (remembered.length === targets.length) return decide(remembered, true, true, []);
   if (remembered.length > 0 && m.number) {
     // Number and name agree in a set we already have: nothing to ask.
-    const j = judge(remembered.flatMap((s) => s.rows.filter((row) => sportFits(row.card))), m, false);
+    const j = judge(remembered.flatMap((s) => s.rows.filter((row) => sportFits(row.card))), m, false, baseIds());
     if (j.sure) return done(j, j.candidates);
   }
 
@@ -321,11 +326,11 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   if (r.number) queries.push(`${year} ${brand} ${r.number}`);
   for (const text of queries) {
     step1.push(...rowsOf(await search(text, year, true), year, normalizeBrand(brand)));
-    const j = judge(step1, m, false);
+    const j = judge(step1, m, false, baseIds());
     if (j.sure) return done(j, j.candidates);
     if (halted()) break;
   }
-  const step1Judged = judge(step1, m, false);
+  const step1Judged = judge(step1, m, false, []);
 
   // ---- Step 2: checklist and close spelling, at most 2 sets.
   const fetched: FetchedSet[] = [];
