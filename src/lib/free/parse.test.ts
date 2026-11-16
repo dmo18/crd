@@ -514,6 +514,100 @@ describe("parsing rules from the Griffey card (task 9.11)", () => {
     expect(parseCardText(null, ocr([["MET", 0.4]])).team).toBeNull();
   });
 
+  it("does not turn surnames and plain words into teams (9.11 review)", () => {
+    // The real team is read: a surname one letter from a nickname must not beat it.
+    const brewer = parseCardText(ocr([["TOM BREWER", 0.85], ["PITCHER", 0.9]]), ocr([["RED SOX", 0.1]]));
+    expect(brewer.team).toBe("Boston Red Sox");
+    expect(brewer.playerCandidates[0]).toBe("Tom Brewer");
+    const brown = parseCardText(ocr([["KEVIN BROWN", 0.85], ["PITCHER", 0.9]]), null);
+    expect(brown.team).toBeNull();
+    expect(brown.sport).toBe("baseball");
+    for (const line of [
+      "JIM BROWN", "ALL-STAR ROOKIES", "CAPITAL CITY", "A GIANT SEASON", "MINERS", "TIGER", "RANGER", "ROYAL", "BRAVE",
+      "RAIDER", "CARDINAL", "INDIAN", "LAKER", "MAKERS", "ROOKIE", "ROOKIES", "CAPITAL", "BREWER", "GIANT", "PHILLIPS",
+      "INDIANA", "MARINES", "RANGES", "CHARGES", "RODGERS", "GRAVES", "SPARKS", "LAKES", "TIERS", "BOILERS",
+    ]) {
+      const p = parseCardText(ocr([[line, 0.4]]), null);
+      expect(p.team, line).toBeNull();
+      expect(p.sport, line).toBeNull();
+    }
+  });
+
+  it("keeps close team spellings narrow (9.11 review)", () => {
+    const team = (line: string) => parseCardText(null, ocr([[line, 0.4]])).team;
+    // One letter wrong, or one left out that is not one of the last two.
+    expect(team("MARMNERS")).toBe("Seattle Mariners");
+    expect(team("MARNERS")).toBe("Seattle Mariners");
+    expect(team("PHILIES")).toBe("Philadelphia Phillies");
+    // The last letters left out, a wrong first letter, an added letter, two letters wrong: no team.
+    expect(team("MARINER")).toBeNull();
+    expect(team("MARINES")).toBeNull();
+    expect(team("NARINERS")).toBeNull();
+    expect(team("MARIINERS")).toBeNull();
+    expect(team("MARMNFRS")).toBeNull();
+    // Never from a line that gave a player name candidate.
+    const named = parseCardText(ocr([["DARRYL BREWFRS", 0.85]]), null);
+    expect(named.playerCandidates).toEqual(["Darryl Brewfrs"]);
+    expect(named.team).toBeNull();
+  });
+
+  it("uses a close team spelling only when no team was read exactly, at half weight (9.11 review)", () => {
+    // Two close spellings in big letters on the front lose to one exact team in a long line on the back.
+    const p = parseCardText(
+      ocr([["BREWFRS", 0.1], ["BREWFRS", 0.9]]),
+      ocr([["Traded to the RED SOX for two players in 1989", 0.6]]),
+    );
+    expect(p.team).toBe("Boston Red Sox");
+    // On its own a close spelling still gives the team and its sport.
+    expect(parseCardText(null, ocr([["BREWFRS", 0.4]]))).toMatchObject({ team: "Milwaukee Brewers", sport: "baseball" });
+    // An exact team outvotes a position on the sport; a close spelling does not.
+    expect(parseCardText(null, ocr([["COWBOYS", 0.4], ["SS", 0.5]])).sport).toBe("football");
+    const close = parseCardText(null, ocr([["COWBQYS", 0.4], ["SS", 0.5]]));
+    expect(close.team).toBe("Dallas Cowboys");
+    expect(close.sport).toBe("baseball");
+  });
+
+  it("does not call a name with a small lowercase word a sentence (9.11 review)", () => {
+    for (const [line, name] of [
+      ["Jose de Jesus", "Jose De Jesus"],
+      ["Andy van Slyke", "Andy Van Slyke"],
+      ["Luis de Leon", "Luis De Leon"],
+      ["Ed von Ohlen", "Ed Von Ohlen"],
+    ]) {
+      const p = parseCardText(null, ocr([[line, 0.06]]));
+      expect(p.playerCandidates, line).toEqual([name]);
+      expect(p.firstNameHint, line).toBeNull();
+    }
+    // A small word does not hide a real sentence.
+    for (const line of ["Jose de Jesus pitched for the Royals", "Ken la played", "Jose graduated de Jesus"]) {
+      expect(parseCardText(null, ocr([[line, 0.5]])).playerCandidates, line).toEqual([]);
+    }
+  });
+
+  it("takes no year from header lines that look like stat rows (9.11 review)", () => {
+    const stats = (p: ParsedCard) => p.evidence.filter((e) => /stat table/.test(e));
+    // A season followed by a brand name is a header, with or without numbers.
+    for (const rows of [
+      [["88 UPPER DECK", 0.3], ["89 UPPER DECK", 0.34]],
+      [["1988 UPPER DECK", 0.3], ["1989 UPPER DECK", 0.34]],
+      [["88 TOPPS", 0.3], ["89 TOPPS 336", 0.34]],
+      [["88 DONRUSS 1 2 3", 0.3], ["89 FLEER 1 2 3", 0.34]],
+    ] as Row[][]) {
+      const p = parseCardText(null, ocr(rows));
+      expect(stats(p), rows[0][0]).toEqual([]);
+      expect(p.year, rows[0][0]).not.toBe(1990);
+    }
+    expect(parseCardText(null, ocr([["88 UPPER DECK", 0.3], ["89 UPPER DECK", 0.34]])).year).toBeNull();
+    // A full year needs numbers after the club; only a two digit season may stand with the club alone.
+    expect(parseCardText(null, ocr([["1988 MONTHLY SCOREBOARD", 0.3], ["1989 MONTHLY SCOREBOARD", 0.34]])).year).toBeNull();
+    expect(parseCardText(null, ocr([["1988 VERMONT", 0.3], ["1989 MARINERS", 0.34]])).year).toBeNull();
+    expect(parseCardText(null, ocr([["1988 VERMONT 17 61 10", 0.3], ["1989 MARINERS 127 455 61", 0.34]])).year).toBe(1990);
+    expect(parseCardText(null, ocr([["88 VERMONT", 0.3], ["89 MARINERS", 0.34]])).year).toBe(1990);
+    // A header above a real table does not get in the way.
+    const p = parseCardText(null, ocr([["86 UPPER DECK", 0.2], ["88 VERMONT 17 61 10", 0.3], ["89 MARINERS 127 455 61", 0.34]]));
+    expect(p.year).toBe(1990);
+  });
+
   it("takes the team from the last stat table row", () => {
     const p = parseCardText(null, ocr([
       ["87 PADRES 50 120 10", 0.3],

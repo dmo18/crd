@@ -20,6 +20,17 @@
   is trusted, team names match with one letter wrong ("MARMNERS"), the last
   stat table row gives the team, and split stat rows with a repeated season
   give the year.
+- 9.11 review fixes: a close team spelling is now narrow (same first
+  letter, 6 or more letters, one letter wrong or one left out but not one
+  of the last two, a stop list of surnames and plain words, never on a line
+  that gave a player name, half weight, and only when no team was read
+  exactly). So "TOM BREWER" with "RED SOX" is Red Sox and "KEVIN BROWN" is
+  no team. Names with a small word ("Jose de Jesus") are not sentences. A
+  header such as "1989 UPPER DECK" is not a stat row. Known limit: a row
+  with the club but no numbers still counts with a two digit season
+  ("89 MARINERS"), because the reader splits the Griffey rows that way.
+  The end to end Griffey test checks only stable fields; the exact name
+  words are checked on the recorded text.
 - Griffey photos end to end now: sport baseball, year 1990, team Seattle
   Mariners, player "Ken Griffey Jr." (matched to the key card list from the
   header), no number, no wrong names. Whole scan about 13 to 19 s.
