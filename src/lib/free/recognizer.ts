@@ -1,5 +1,7 @@
 import sharp from "sharp";
 import type { Sport } from "@/db/schema";
+import { createScanBudget, lookupCard, lookupConfidence, type LookupResult } from "@/lib/catalog/lookup";
+import type { Catalog } from "@/lib/catalog/types";
 import { checkPhotoCount } from "@/lib/recognition/limits";
 import {
   recognizedItemSchema,
@@ -7,6 +9,7 @@ import {
   type RecognitionPhoto,
   type RecognitionRequest,
   type RecognizedItem,
+  type RecognizedCatalog,
   type RecognizedItemInput,
   type Recognizer,
 } from "@/lib/recognition/types";
@@ -31,7 +34,20 @@ export type FreeDeps = {
   /** Degrees a cropped card is turned from upright, clockwise positive. */
   tilt?: (image: Buffer) => Promise<number>;
   lookup?: (name: string, opts: { sport?: Sport | null; year?: number | null }) => Promise<PlayerFacts | null>;
+  /**
+   * The card catalog. When given, each read card is looked up after the
+   * reading, in the `background` line, within the scan's call budget.
+   * Left out: no catalog call at all, the reading stands as it is.
+   */
+  catalog?: Catalog;
+  /** Longest time the catalog part of one scan may take. */
+  catalogTimeMs?: number;
+  /** Milliseconds now; tests pass a fake clock. */
+  clock?: () => number;
 };
+
+/** A card as read, with the name spellings the catalog look up may try. */
+type ReadCard = { item: RecognizedItem; names: string[] };
 
 const MAX_CARDS_PER_PHOTO = 30;
 const MAX_LOOKUPS_PER_CARD = 2;
@@ -44,6 +60,56 @@ const KEY_CONFIDENCE = 0.9;
 /** Below the review line (REVIEW_THRESHOLD), so the owner checks it. */
 const CHECK_CONFIDENCE = 0.7;
 const MAX_WITHOUT_KEY = 0.8;
+/**
+ * The catalog part of a scan stops starting look ups after this long, so the
+ * whole scan stays well inside its 5 minute limit. Cards after that keep the
+ * plain reading and show "Catalog not checked" in Review.
+ */
+export const CATALOG_TIME_MS = 2 * 60 * 1000;
+/**
+ * And never later than this after the scan's reading began: the scan has 5
+ * minutes in all (RECOGNITION_DEADLINE_MS), and the catalog must never be
+ * the reason a scan runs out of time.
+ */
+export const CATALOG_LATEST_MS = 4 * 60 * 1000;
+const TIMED_OUT = Symbol("timed out");
+
+/** Resolves like `work`, or with TIMED_OUT after `ms`. The timer is always cleared. */
+async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<typeof TIMED_OUT>((resolve) => { timer = setTimeout(() => resolve(TIMED_OUT), ms); });
+  work.catch(() => undefined);
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The catalog with a stop switch. lookupCard has no way to be told to stop, so
+ * when the scan's catalog time runs out the switch is thrown and every catalog
+ * call the look up in progress makes after that is refused at once (no network
+ * call). The one call already in flight when time ran out may still finish.
+ */
+function stoppable(inner: Catalog): Catalog & { stop(): void } {
+  let stopped = false;
+  const refused = { ok: false as const, reason: "busy" as const, tries: 0 };
+  return {
+    stop() { stopped = true; },
+    search: (q, line, limits) => (stopped ? Promise.resolve(refused) : inner.search(q, line, limits)),
+    card: (id, line, limits) => (stopped ? Promise.resolve(refused) : inner.card(id, line, limits)),
+    checklist: (id, line, limits) => (stopped ? Promise.resolve(refused) : inner.checklist(id, line, limits)),
+  };
+}
+
+/** The look up's answer as the catalog part of a recognized card. */
+export function catalogPart(result: LookupResult, readingConfidence: number): RecognizedCatalog {
+  if (result.sure) return { status: "sure", card: result.sure, confidence: lookupConfidence(result, readingConfidence) };
+  if (result.candidates.length > 0) return { status: "candidates", candidates: result.candidates };
+  if (result.stopped) return { status: "not_checked", reason: result.stopped };
+  return { status: "none" };
+}
 
 function clamp01(n: number) {
   return Math.min(1, Math.max(0, n));
@@ -79,22 +145,76 @@ export class FreeRecognizer implements Recognizer {
   private readonly findBoxes: (image: Buffer) => Promise<Box[]>;
   private readonly lookup: NonNullable<FreeDeps["lookup"]>;
   private readonly tilt: NonNullable<FreeDeps["tilt"]>;
+  private readonly catalog: Catalog | undefined;
+  private readonly catalogTimeMs: number;
+  private readonly clock: () => number;
 
   constructor(deps: FreeDeps = {}) {
     this.reader = deps.reader ?? getTextReader();
     this.findBoxes = deps.findBoxes ?? findCardBoxes;
     this.lookup = deps.lookup ?? ((name, opts) => lookupPlayer(name, opts));
     this.tilt = deps.tilt ?? cardTilt;
+    this.catalog = deps.catalog;
+    this.catalogTimeMs = deps.catalogTimeMs ?? CATALOG_TIME_MS;
+    this.clock = deps.clock ?? Date.now;
   }
 
   async recognize(request: RecognitionRequest): Promise<RecognizedItem[]> {
     checkPhotoCount(request);
+    const startedAt = this.clock();
     switch (request.mode) {
-      case "single": return [await this.single(request.photos)];
-      case "multi": return this.multi(request.photos);
+      case "single": return this.withCatalog([await this.single(request.photos)], startedAt);
+      case "multi": return this.withCatalog(await this.multi(request.photos), startedAt);
       case "sealed": return [await this.product(request.photos, "sealed")];
       case "bulk": return [await this.product(request.photos, "bulk")];
     }
+  }
+
+  /**
+   * After the reading: each card is looked up in the catalog, one at a time,
+   * in the `background` line and within one budget for the whole scan. The
+   * catalog never fails a scan: any trouble leaves the reading as it is and
+   * the card marked "not checked". Fields are not changed here; the scan
+   * applies a sure card by the filling rule when it files the item.
+   */
+  private async withCatalog(cards: ReadCard[], startedAt: number): Promise<RecognizedItem[]> {
+    const catalog = this.catalog;
+    if (!catalog) return cards.map((c) => c.item);
+    const scan = createScanBudget();
+    const deadline = Math.min(this.clock() + this.catalogTimeMs, startedAt + CATALOG_LATEST_MS);
+    let late = false;
+    const gate = stoppable(catalog);
+    for (const { item, names } of cards) {
+      if (item.kind !== "card" || (names.length === 0 && !item.cardNumber)) continue;
+      if (scan.stopped) {
+        item.catalog = { status: "not_checked", reason: scan.stopped };
+        continue;
+      }
+      const left = deadline - this.clock();
+      if (late || left <= 0) {
+        item.catalog = { status: "not_checked", reason: "time" };
+        continue;
+      }
+      if (scan.used >= scan.max) {
+        item.catalog = { status: "not_checked", reason: "budget" };
+        continue;
+      }
+      try {
+        const result = await within(lookupCard({
+          year: item.year, brands: item.brand ? [item.brand] : [], sport: item.sport, names, cardNumber: item.cardNumber,
+        }, "background", { catalog: gate, scan }), left);
+        if (result === TIMED_OUT) {
+          late = true;
+          gate.stop();
+          item.catalog = { status: "not_checked", reason: "time" };
+        } else {
+          item.catalog = catalogPart(result, item.confidence);
+        }
+      } catch {
+        item.catalog = { status: "not_checked", reason: "failed" };
+      }
+    }
+    return cards.map((c) => c.item);
   }
 
   private async read(image: Buffer, options?: ReadOptions): Promise<OcrResult | null> {
@@ -105,7 +225,7 @@ export class FreeRecognizer implements Recognizer {
     }
   }
 
-  private async single(photos: RecognitionPhoto[]): Promise<RecognizedItem> {
+  private async single(photos: RecognitionPhoto[]): Promise<ReadCard> {
     const front = photos.find((p) => p.role === "front") ?? photos[0];
     const back = photos.find((p) => p.role === "back");
     const frontText = await this.read(front.data);
@@ -113,8 +233,8 @@ export class FreeRecognizer implements Recognizer {
     return this.cardFromText(frontText, backText, { sourceIndex: 0, box: null });
   }
 
-  private async multi(photos: RecognitionPhoto[]): Promise<RecognizedItem[]> {
-    const out: RecognizedItem[] = [];
+  private async multi(photos: RecognitionPhoto[]): Promise<ReadCard[]> {
+    const out: ReadCard[] = [];
     for (const [index, photo] of photos.entries()) {
       let boxes: Box[] = [];
       try {
@@ -167,12 +287,12 @@ export class FreeRecognizer implements Recognizer {
     front: OcrResult | null,
     back: OcrResult | null,
     where: { sourceIndex: number; box: Box | null },
-  ): Promise<RecognizedItem> {
+  ): Promise<ReadCard> {
     const parsed = parseCardText(front, back);
     const readAnything = parsed.year != null || parsed.brand != null || parsed.cardNumber != null || parsed.playerCandidates.length > 0;
     if (!readAnything) {
       const notes = back ? UNREAD_NOTE : `${UNREAD_NOTE} ${ADD_BACK_NOTE}`;
-      return recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes });
+      return { item: recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes }), names: [] };
     }
 
     // 1. The built-in key card list. A match counts only when what was read agrees with it.
@@ -283,7 +403,9 @@ export class FreeRecognizer implements Recognizer {
       item.rarityNotes = "Marked REPRINT: a later copy, usually worth far less than the original card.";
     }
     item.confidence = Math.min(0.95, confidence);
-    return recognizedItemSchema.parse(item);
+    const names: string[] = [];
+    for (const n of [player, ...parsed.playerCandidates]) if (n && !names.includes(n)) names.push(n);
+    return { item: recognizedItemSchema.parse(item), names: names.slice(0, 5) };
   }
 
   private async product(photos: RecognitionPhoto[], kind: "sealed" | "bulk"): Promise<RecognizedItem> {

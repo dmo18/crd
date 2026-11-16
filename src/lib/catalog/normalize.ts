@@ -31,6 +31,18 @@ export function normalizeCardNumber(s: string): string {
   return letters + digits;
 }
 
+/**
+ * Card number as printed, for the catalog key: capitals, no "#", spaces or
+ * punctuation, leading zeros removed, letters kept where they stand. "11T"
+ * and "T11" stay apart; "#0336" and "336" are one.
+ */
+export function printedCardNumber(s: string): string {
+  return String(s ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .replace(/^0+(?=\d)/, "");
+}
+
 /** Plain text key: lowercase, accents and punctuation removed, spaces collapsed. */
 export function normalizeText(s: string): string {
   return stripAccents(String(s ?? ""))

@@ -5,7 +5,9 @@ import { catalogCards, catalogSources, type Item } from "@/db/schema";
 import { cardLine } from "@/lib/catalog/line";
 import { sourceUrl } from "@/lib/catalog/clean";
 import { parseFirstSuggestion } from "@/lib/catalog/sources";
-import { unlinkCatalogAction } from "@/lib/catalog/item-actions";
+import { unlinkCatalogAction, catalogValuesOnItemAction } from "@/lib/catalog/item-actions";
+import { applyCatalogCard } from "@/lib/catalog/apply";
+import { FIELD_WORDS } from "@/lib/catalog/pick";
 import { Button } from "@/components/ui";
 import { SPORT_LABELS } from "@/lib/items/labels";
 
@@ -21,6 +23,8 @@ export function CatalogBlock({ item }: { item: Item }) {
   const src = card ? db.select().from(catalogSources).where(eq(catalogSources.catalogCardId, card.id)).get() : null;
   const href = sourceUrl(src?.url);
   const first = parseFirstSuggestion(item.firstSuggestion);
+  // Fields the scanner read differently from the linked card ("This is my card" keeps them until the owner chooses).
+  const differences = card ? applyCatalogCard(item, card).differences : [];
   const search = new URLSearchParams({ itemId: String(item.id) });
   return (
     <section className="flex flex-col gap-3" aria-labelledby="catalog-heading">
@@ -34,6 +38,21 @@ export function CatalogBlock({ item }: { item: Item }) {
               <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center text-sm font-semibold text-accent underline">
                 From MyCardfolio (opens in a new tab)
               </a>
+            ) : null}
+            {differences.length > 0 ? (
+              <div className="flex flex-col gap-2 rounded-xl border border-warn bg-warn-soft p-3">
+                <p className="text-sm font-semibold">Some details differ from the catalog:</p>
+                <ul className="flex flex-col gap-1 text-sm">
+                  {differences.map((d) => (
+                    <li key={d.field} className="break-words">Scanner read {FIELD_WORDS[d.field]}: {String(d.itemValue)}. Catalog says: {String(d.catalogValue)}</li>
+                  ))}
+                </ul>
+                <form action={catalogValuesOnItemAction}>
+                  <input type="hidden" name="id" value={item.id} />
+                  <Button type="submit" className="w-full">Use the catalog&apos;s values</Button>
+                </form>
+                <p className="text-xs text-muted">Details you typed yourself are never changed.</p>
+              </div>
             ) : null}
             <form action={unlinkCatalogAction}>
               <input type="hidden" name="id" value={item.id} />

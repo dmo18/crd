@@ -158,14 +158,34 @@ describe("linkCatalogCard and unlinkCatalogCard", () => {
     expect(get(box.id).catalogCardId).toBeNull();
   });
 
-  it("unlinking sets the link to null and changes no other field", () => {
+  it("unlinking sets the link to null, keeps every value and turns catalog marks into reading marks", () => {
     const item = scanned({ player: "Ken Griffey Jr.", year: 1990 });
     const card = griffeyCard();
     linkCatalogCard(item.id, card.id, db, { now: later(5) });
     const linked = get(item.id);
+    expect(marks(linked)).toMatchObject({ player: "reading", year: "reading", brand: "catalog", cardNumber: "catalog", sport: "catalog" });
     expect(unlinkCatalogCard(item.id, db)).toEqual({ ok: true });
-    expect(get(item.id)).toEqual({ ...linked, catalogCardId: null });
+    const after = get(item.id);
+    expect({ ...after, fieldSources: null }).toEqual({ ...linked, catalogCardId: null, fieldSources: null });
+    expect(marks(after)).toEqual({ player: "reading", year: "reading", brand: "reading", cardNumber: "reading", sport: "reading" });
     expect(unlinkCatalogCard(999, db)).toEqual({ ok: false });
+  });
+
+  it("after unlinking, a link to another card lists the old catalog values as differences", () => {
+    const item = scanned({ player: "Ken Griffey Jr.", year: 1990 });
+    linkCatalogCard(item.id, griffeyCard().id, db);
+    unlinkCatalogCard(item.id, db);
+    const other = griffeyCard({ cardNumber: "999", player: "Ken Griffey Jr. " });
+    const r = linkCatalogCard(item.id, other.id, db);
+    expect(r).toEqual({ ok: true, differences: [{ field: "cardNumber", itemValue: "336", catalogValue: "999" }] });
+    expect(get(item.id).cardNumber).toBe("336");
+  });
+
+  it("unlinking an old item without marks keeps it without marks", () => {
+    const item = insert({ player: "Ken Griffey Jr." });
+    linkCatalogCard(item.id, griffeyCard().id, db);
+    unlinkCatalogCard(item.id, db);
+    expect(marks(get(item.id))).toEqual({ year: "reading", brand: "reading", cardNumber: "reading", sport: "reading" });
   });
 
   it("deleting a catalog card unlinks its items and removes its source rows", () => {

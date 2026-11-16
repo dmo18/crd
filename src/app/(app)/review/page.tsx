@@ -1,6 +1,7 @@
 import { count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { DeleteFailedScans } from "@/components/items/DeleteFailedScans";
+import { CatalogCandidates } from "@/components/items/CatalogCandidates";
 import { ItemRow } from "@/components/items/ItemRow";
 import { ReviewRowActions } from "@/components/items/ReviewRowActions";
 import { Button, Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
@@ -10,6 +11,8 @@ import { scans } from "@/db/schema";
 import { findDuplicates, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount, reviewItems } from "@/lib/items/duplicates";
 import { mergeDuplicateAction } from "@/lib/items/review-actions";
 import { summarize } from "@/lib/scans/view";
+import { NOT_CHECKED_LINES } from "@/lib/catalog/candidates";
+import { reviewCatalogView } from "@/lib/catalog/pick";
 
 export const metadata = { title: "Review" };
 
@@ -32,6 +35,8 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
   const total = reviewCount(db);
   const rows = reviewItems(LIMIT, db);
   const summaries = summarize(rows, db);
+  const now = new Date();
+  const catalogViews = new Map(rows.map((r) => [r.id, reviewCatalogView(r, db, now)]));
 
   return (
     <div className="flex flex-col gap-4">
@@ -54,6 +59,7 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
         <ul className="flex flex-col gap-4">
           {summaries.map((item) => {
             const dup = findDuplicates(item.id, db)[0];
+            const cat = catalogViews.get(item.id) ?? null;
             return (
               <li key={item.id}>
                 <Card className="flex flex-col gap-3 p-3">
@@ -67,6 +73,12 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
                         Add to existing
                       </Button>
                     </form>
+                  ) : null}
+                  {cat ? (
+                    <CatalogCandidates
+                      id={item.id} title={item.title} view={cat}
+                      notCheckedLine={cat.reason ? NOT_CHECKED_LINES[cat.reason] : null}
+                    />
                   ) : null}
                   <ReviewRowActions id={item.id} title={item.title} />
                 </Card>

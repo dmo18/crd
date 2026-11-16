@@ -1,5 +1,6 @@
 import type { NewItem, ValueSource } from "@/db/schema";
 import { REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
+import { serializeCatalog } from "@/lib/catalog/candidates";
 import { buildFirstSuggestion, sourcesFor } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
 
@@ -12,7 +13,9 @@ export function midpointCents(low: number | null, high: number | null): number |
 /**
  * Turns one recognized item into a database row (not yet saved). The fields
  * the scanner filled are marked `reading`, and what it read is kept once in
- * `firstSuggestion`, which no later change touches.
+ * `firstSuggestion`, which no later change touches. Catalog candidates, or
+ * why the catalog was not checked, are kept for Review. A sure catalog card
+ * is not applied here: the scan does that when it files the item.
  */
 export function itemFromRecognition(
   r: RecognizedItem,
@@ -32,6 +35,11 @@ export function itemFromRecognition(
     team: isCard ? r.team : null,
     variation: r.variation,
   };
+  const cat = isCard ? r.catalog : undefined;
+  let catalogCandidates: string | null = null;
+  if (cat?.status === "candidates") catalogCandidates = serializeCatalog({ status: "candidates", items: cat.candidates }, ctx.now);
+  else if (cat?.status === "none") catalogCandidates = serializeCatalog({ status: "none" }, ctx.now);
+  else if (cat?.status === "not_checked") catalogCandidates = serializeCatalog({ status: "not_checked", reason: cat.reason }, ctx.now);
   return {
     kind: r.kind,
     status: r.confidence >= REVIEW_THRESHOLD ? "confirmed" : "needs_review",
@@ -40,6 +48,7 @@ export function itemFromRecognition(
     ...read,
     yearEnd: r.kind === "bulk" ? r.yearEnd : null,
     fieldSources: sourcesFor(read, "reading"),
+    catalogCandidates,
     firstSuggestion: buildFirstSuggestion(read, { confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now }),
     isRookie: isCard && r.isRookie,
     isError: isCard && r.isError,

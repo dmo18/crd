@@ -3,6 +3,8 @@ import { getDb, type Db } from "@/db";
 import { images, items, scans, valuations, type ImageRow, type ValueSource } from "@/db/schema";
 import { startPhotoArchiver } from "@/lib/images/archive";
 import { cropStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
+import { serializeCatalog } from "@/lib/catalog/candidates";
+import { applyScanCard } from "@/lib/catalog/pick";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
 import { checkScanStreak } from "@/lib/audit/alert-rules";
@@ -95,7 +97,8 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     db.transaction((tx) => {
       recognized.forEach((r: RecognizedItem, i: number) => {
         const row = itemFromRecognition(r, { scanId, locationId: scan.locationId, valueSource, now: at, recognizer: recognizer.name });
-        const item = tx.insert(items).values(row).returning({ id: items.id }).get();
+        const item = tx.insert(items).values(row).returning().get();
+        if (r.kind === "card" && r.catalog?.status === "sure") fileSureCard(tx as unknown as Db, item, r.catalog, at);
         if (row.estValueCents != null) {
           tx.insert(valuations).values({
             itemId: item.id, source: valueSource, lowCents: row.estLowCents, highCents: row.estHighCents,
@@ -126,6 +129,26 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     await checkScanStreak(db);
   }
 }
+
+/**
+ * A sure catalog card is kept and applied by the filling rule, in a savepoint
+ * of its own: when it cannot be kept, the card is left as a candidate for
+ * Review and the scan goes on with its reading. Never throws.
+ */
+function fileSureCard(tx: Db, item: typeof items.$inferSelect, part: { card: RecognizedCatalogCard; confidence: number }, at: Date): void {
+  try {
+    const applied = tx.transaction((sp) => applyScanCard(sp as unknown as Db, item, part.card, part.confidence, at));
+    if (applied) return;
+  } catch (err) {
+    log.warn("catalog_apply_failed", { itemId: item.id, error: errorKind(err) });
+  }
+  try {
+    tx.update(items).set({ catalogCandidates: serializeCatalog({ status: "candidates", items: [part.card] }, at) }).where(eq(items.id, item.id)).run();
+  } catch {
+    // The reading stands as it is.
+  }
+}
+type RecognizedCatalogCard = Extract<NonNullable<RecognizedItem["catalog"]>, { status: "sure" }>["card"];
 
 // One scan is processed at a time, in the order received, inside this server.
 const holder = globalThis as unknown as { __crdQueue?: { tail: Promise<void>; pending: Set<number> } };

@@ -82,15 +82,30 @@ export function linkCatalogCard(
     const card = tx.select().from(catalogCards).where(eq(catalogCards.id, catalogCardId)).get();
     if (!card) return { ok: false, error: "That catalog card no longer exists." };
     const { patch, differences } = applyCatalogCard(item, card, opts);
-    if (Object.keys(patch).length > 0) {
-      tx.update(items).set({ ...patch, updatedAt: opts.now ?? new Date() }).where(and(eq(items.id, itemId), liveItem)).run();
-    }
+    // A linked item has no list of candidates to pick from any more.
+    tx.update(items).set({ ...patch, catalogCandidates: null, updatedAt: opts.now ?? new Date() }).where(and(eq(items.id, itemId), liveItem)).run();
     return { ok: true, differences };
   }, { behavior: "immediate" });
 }
 
-/** Unlinks: sets the catalog link to null and changes no other field. */
+/**
+ * Unlinks: sets the catalog link to null and keeps every value. The fields
+ * the catalog filled are marked `reading` from then on, so a later link to
+ * another card lists or replaces them under the normal rules instead of
+ * treating them as empty or as the owner's.
+ */
 export function unlinkCatalogCard(itemId: number, db: Db = getDb()): { ok: boolean } {
-  const res = db.update(items).set({ catalogCardId: null }).where(and(eq(items.id, itemId), liveItem)).run();
-  return { ok: res.changes > 0 };
+  return db.transaction((tx) => {
+    const item = tx.select({ id: items.id, fieldSources: items.fieldSources }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
+    if (!item) return { ok: false };
+    const patch: Partial<Item> = { catalogCardId: null };
+    const marks = parseFieldSources(item.fieldSources);
+    if (marks) {
+      let changed = false;
+      for (const f of CATALOG_FIELDS) if (marks[f] === "catalog") { marks[f] = "reading"; changed = true; }
+      if (changed) patch.fieldSources = JSON.stringify(marks);
+    }
+    const res = tx.update(items).set(patch).where(and(eq(items.id, itemId), liveItem)).run();
+    return { ok: res.changes > 0 };
+  }, { behavior: "immediate" });
 }

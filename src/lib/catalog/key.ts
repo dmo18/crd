@@ -1,5 +1,5 @@
 import { SPORTS, type Sport } from "@/db/schema";
-import { normalizeBrand, normalizeCardNumber, normalizeName, normalizeText } from "./normalize";
+import { normalizeBrand, normalizeName, normalizeText, printedCardNumber } from "./normalize";
 
 /** The facts a catalog key is built from. */
 export type KeyParts = {
@@ -24,7 +24,8 @@ function setPart(setName: string | null | undefined): string {
 /**
  * The one place a catalog key is built: `v1|sport|year|brand|set|number|player`,
  * plus the variation as a last part only when there is one. Two spellings of
- * the same card give the same key. Returns null when sport, year, brand or
+ * the same card give the same key. The number keeps its printed order
+ * ("11T" and "T11" are two cards). Returns null when sport, year, brand or
  * player is missing: such a record stays a plain item without a catalog link.
  */
 export function canonicalKey(p: KeyParts): string | null {
@@ -34,7 +35,7 @@ export function canonicalKey(p: KeyParts): string | null {
   const brand = normalizeBrand(p.brand ?? "");
   const player = normalizeName(p.player ?? "");
   if (!brand || !player) return null;
-  const parts = [KEY_VERSION, sport, String(p.year), brand, setPart(p.setName), normalizeCardNumber(p.cardNumber ?? ""), player];
+  const parts = [KEY_VERSION, sport, String(p.year), brand, setPart(p.setName), printedCardNumber(p.cardNumber ?? ""), player];
   const variation = normalizeText(p.variation ?? "");
   if (variation) parts.push(variation);
   return parts.join("|");

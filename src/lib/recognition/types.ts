@@ -1,4 +1,7 @@
 import { z } from "zod";
+import type { Candidate } from "@/lib/catalog/match";
+import type { NotCheckedReason } from "@/lib/catalog/candidates";
+import type { CatalogCard } from "@/lib/catalog/types";
 import { CONDITIONS, ITEM_KINDS, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS } from "@/db/schema";
 
 /**
@@ -78,7 +81,20 @@ export const recognizedItemSchema = z.object({
   notes: optionalText(600),
   estimate: estimateSchema.nullish().transform((v) => v ?? null),
 });
-export type RecognizedItem = z.infer<typeof recognizedItemSchema>;
+/**
+ * What the catalog said about a card the free reader read. Never part of the
+ * zod schema: it is added by the server after the check, so an AI answer can
+ * never bring one in (zod drops unknown keys). Left out means the catalog was
+ * not asked (sealed, bulk, sample and AI modes, or no catalog given).
+ */
+export type RecognizedCatalog =
+  /** One card the matching rule is sure of. `confidence`: the item's figure once it is applied. */
+  | { status: "sure"; card: CatalogCard; confidence: number }
+  | { status: "candidates"; candidates: Candidate[] }
+  | { status: "none" }
+  | { status: "not_checked"; reason: NotCheckedReason };
+
+export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog };
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;
 
 export const recognitionResultSchema = z.object({

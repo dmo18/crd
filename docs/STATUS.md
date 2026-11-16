@@ -50,6 +50,20 @@
 - Known gap: a misread name with no number and no earlier clean hit of the
   same year and brand finds no base set id (the broad "year brand" search
   gives only noise, see CATALOG-TRIAL.md), so no checklist is fetched.
+- 10.9 catalog in the scan (branch work/m10-scan): after the free reading
+  each card is looked up in the `background` line within the scan budget;
+  a sure card is kept, linked and fills only empty fields (marked
+  `catalog`), confidence by `lookupConfidence`; otherwise up to 5 candidates
+  wait on the item for one tap in Review. Catalog trouble never fails a
+  scan: Review says "Catalog not checked" with the reason. Choices made
+  (for the review): the catalog part of a scan starts no look up after 2
+  minutes of catalog time or 4 minutes after the reading began (the scan
+  has 5); "Look up again" stores what it finds as candidates (a sure card
+  first) and fills nothing until the owner taps; a pick whose card differs
+  from what the scanner read links and fills, but keeps the item in Review
+  with the differences and "Use the catalog's values" (Confirm keeps the
+  scanner's values); the item page shows the same differences and button
+  after "This is my card". Canonical key keeps the printed number order.
 
 ## Milestone 9: the owner's top three (2026-11-16)
 - Part A live (f1258f6): take, save, move on for every scan mode; uploads
