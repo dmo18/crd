@@ -2257,3 +2257,44 @@ repeats) or 2.2M delegated tokens, inside what is left of the roadmap cap.
 - A version pick sets state and source only (isParallel untouched): kept.
 - Known list of 12 rows with source notes: kept; Topps Gold for any sport.
 - 11.7 (why a look up waited) is dropped for budget; deferred.
+
+## Milestone 12R: make reading right (approved 2026-11-16)
+
+Why: the owner scanned three cards and all three were wrong. Later milestones are parked until this passes.
+
+What happened (live data, scans 2 to 4):
+- 1993-94 Fleer Ultra #65 Tim Hardaway: only the player was read.
+- 1992 Donruss #101 Bob Milacki: read as "Yavapai Az Coll", autograph, serial 14/91.
+- 1991 Impel U.S. Olympic Hall of Fame #24 Billy Mills: read as "1988 Rus Gude", Oakland Athletics.
+
+Causes:
+- tesseract.js misses large stylised card print (it did not read BOB MILACKI or BILLY MILLS on the fronts).
+- With no name, the rules took any capitalised words from back text as the player.
+- "Athletics" (a sport) matched the Oakland Athletics. A date "7/14/91" became a serial. "Signed by Orioles" became an autograph.
+
+Trial (2026-11-16, on this server, 12 old Xeon cores without AVX2, 3 GB memory): RapidOCR 3.10 (PP-OCR models on onnxruntime 1.32, Python) on the 1200 px archive copies read TIM HARDAWAY, BOB MILACKI, ORIOLES PITCHER, DONRUSS, 101, 1991 LEAF, BILLY MILLS, U.S. OLYMPIC CARDS, HALL OF FAME, 24, 1991 Impel, KEN GRIFFEY, 1990 THE TOPPS, sideways backs included, in 1 to 7 seconds a photo. It missed: "Ultra" and #65 (Hardaway), the spaced "DONRUSS 1992" on the Milacki front, #336 (Griffey).
+
+Decisions:
+- D1. Replace tesseract.js with PP-OCR models (detection, direction, recognition) run locally. No outside service, no key.
+- D2. How it runs is settled by task 12R.1 (a spike): first choice is inside Node with onnxruntime-node; fallback is a Python worker started by the app inside the same container image. Either way it deploys as the one Coolify app. Models are pinned files with checksums, kept in the image, not downloaded at run time.
+- D3. Stricter name rule: a player name is taken only from the front, or when front and back agree. Otherwise the field stays empty.
+- D4. Fix the three wrong rules: a team nickname alone needs a second sign of the sport; a date is never a serial; "signed by <team>" is never an autograph.
+- D5. Year, brand, set and number come from the catalog. The search uses the name, maker words and number read. A candidate is offered only when its number or year agrees with the read text. Copyright year Y allows set year Y or Y+1.
+- D6. Blank beats wrong. Unsure fields stay empty and go to Review. AUTO_FILL_SURE stays false.
+- D7. Simulations never spend limited free quotas: catalog answers are recorded once per test card and replayed.
+
+Tasks:
+| # | Task | Model |
+|---|---|---|
+| 12R.1 | Spike: PP-OCR in Node against the owner's 8 photos, compare with the Python trial, measure time and memory, pick D2 | Opus |
+| 12R.2 | Test bench: the owner's 4 cards as fixtures with answers, a runner, a per-field scorecard (right, wrong, blank), old reader baseline | Sonnet |
+| 12R.3 | Simulated phone photos: about 200 public card pictures with known answers, made sideways, tilted, dark, glared, blurred | Sonnet |
+| 12R.4 | New reader in the app behind the existing ocr.ts interface, image and Dockerfile changes | Opus |
+| 12R.5 | Rules: D3, D4, D6 | Opus |
+| 12R.6 | Catalog matching: D5, with recorded answers | Opus |
+| 12R.7 | Scorecard run, fix the top misses, repeat until the bar is met | Opus |
+| 12R.8 | Review (one Fable review of the whole change), security check, deploy through Coolify after a data backup, re-read the owner's 4 cards live | Fable 1, rest main |
+
+Bar to go live: player right on 95 of 100, fewer than 2 in 100 fields filled wrong, all 4 of the owner's cards right (player, year, brand, number; set for Hardaway may be "Fleer Ultra" or blank, never wrong).
+
+Run cap: 12 tasks or 3M delegated tokens. Fable only for the plan review and the final review (owner's wish).
