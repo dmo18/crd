@@ -1,5 +1,27 @@
 # Status
 
+## Milestone 9: the owner's top three (2026-11-16)
+- Part A live (f1258f6): take, save, move on for every scan mode; uploads
+  live in a provider in the app layout and survive page changes; safe
+  repeats with clientKey (migration 0006); one batched status call every
+  5 s only while the tab is visible; "being read" pill; Scan activity page;
+  version in the footer (package version plus deployed commit).
+- Part B live (bb517da): Manage records (search, smart filters, select
+  page or all matching, set a field, find and replace, move, mark, delete),
+  preview before every change with a list fingerprint, undo with summary
+  and date, Recently deleted bin for 30 days with restore, delete forever,
+  empty the bin, purge in batches; undo text scrubbed on purge and merge
+  (migration 0007).
+- Verified: npm run check (598 tests), build, npm audit 0, phone and wide
+  screenshots with sample data, a real delete and undo through the screens,
+  live deploys healthy with migrations applied and data intact (backups in
+  /root/cardvault-db-backups before each deploy).
+- Part C (better free reading) is on branch work/m9c, not live: failed
+  review twice on team guessing; folded into Milestone 10 (see ROADMAP).
+- Test time limit raised to 60 s: AVIF encoding takes about 2 s per photo
+  on the server's old CPU.
+- Known: one test failed once while a build ran in parallel; not reproduced.
+
 ## Milestone 8: blind review, owner-approved updates, backups, logging, agent-ready
 - Blind review in four areas (app, card reading, server, guides); fixes for
   every critical, high and medium finding plus most lows.
