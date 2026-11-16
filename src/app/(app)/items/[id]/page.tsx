@@ -5,6 +5,7 @@ import { GradingAdvice } from "@/components/items/GradingAdvice";
 import { SoldLinks } from "@/components/items/SoldLinks";
 import { QuickValue } from "@/components/items/QuickValue";
 import { ValueTools } from "@/components/items/ValueTools";
+import { CatalogBlock } from "@/components/catalog/CatalogBlock";
 import { DuplicateNotice } from "@/components/items/DuplicateNotice";
 import { DeleteItemButton } from "@/components/items/DeleteItemButton";
 import { ItemBadges } from "@/components/items/ItemRow";
@@ -163,6 +164,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
           </ul>
         </section>
       ) : null}
+
+      <CatalogBlock item={item} />
 
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-semibold">Edit details</h2>

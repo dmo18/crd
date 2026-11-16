@@ -74,13 +74,13 @@ export type UpdateResult = { ok: true } | { ok: false; errors: Record<string, st
 const GONE: UpdateResult = { ok: false, errors: { form: "This item no longer exists." } };
 
 /** Fields each kind may change; the rest stay as they are (mirrors from-recognition.ts). */
-const COMMON = ["sport", "year", "brand", "setName", "variation", "rarityTier", "conditionNotes", "quantity", "notes"] as const;
+const COMMON = ["sport", "year", "brand", "setName", "variation", "rarityTier", "conditionNotes", "quantity", "notes", "description"] as const;
 const CARD_ONLY = [
   "cardNumber", "player", "team", "isRookie", "isError", "isParallel", "isInsert", "isAutograph", "isMemorabilia",
   "serialNumber", "condition", "grader", "grade", "certNumber",
 ] as const;
 const SEALED_ONLY = ["productType", "packCount", "sealState"] as const;
-const BULK_ONLY = ["yearEnd", "estCount", "containerType", "description"] as const;
+const BULK_ONLY = ["yearEnd", "estCount", "containerType"] as const;
 
 export function editableFields(kind: Item["kind"]): readonly string[] {
   if (kind === "card") return [...COMMON, ...CARD_ONLY];
