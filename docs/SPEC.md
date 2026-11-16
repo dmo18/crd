@@ -42,3 +42,25 @@ formal grading.
   free only; no automatic prices).
 - Users: owner only, one password.
 - Preview: phone-size screenshots in chat, sample data.
+
+## Outside sources (Milestone 10)
+The app may call two free outside sources, both without keys: MyCardfolio
+(the card catalog) and Wikidata (player facts). Every call goes through one
+shared gate (`src/lib/outside/gate.ts`): one call at a time, a pause between
+calls, hour and day limits, a short timeout, and a stop when a site asks us
+to slow down. The owner can switch each source off; the app then works as
+it did before the catalog.
+
+Storage policy (the site's terms say "free for personal and assistant use,
+read only, rate limited" and nothing about storing):
+- Search and checklist answers are kept only for a bounded time (search
+  with results 7 days, search with nothing 1 day, card details and set
+  checklists 30 days, 50 MB in total, oldest removed first), only on this
+  private server, only to spare the site repeat calls.
+- Kept for good: only the cards the owner confirmed, each with its link to
+  the source.
+- Never: copying the whole catalog, walking sets the owner did not scan or
+  search, showing catalog data to anyone else, downloading the site's card
+  images (the app links to the card page instead).
+- "Clear stored answers" on the Connections screen empties the stored
+  answers of a source.

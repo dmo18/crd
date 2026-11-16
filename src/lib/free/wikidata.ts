@@ -3,26 +3,22 @@ import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { playerFacts, SPORTS, type Sport } from "@/db/schema";
 import { errorKind, log } from "@/lib/log";
+import { outsideCall } from "@/lib/outside/gate";
+import { wikidataUserAgent, type OutsideRequest } from "@/lib/outside/sources";
+import { clearPause } from "@/lib/outside/usage";
 
 /**
  * Player facts from Wikidata: free, no key, API use allowed.
- * Only two hosts are ever called. A failure returns null and never throws,
- * so a scan never depends on this service being up.
+ * Only two hosts are ever called, through the shared gate
+ * (src/lib/outside/gate.ts), which keeps the pacing, the timeout, the
+ * "slow down" pause and the counters. A failure returns null and never
+ * throws, so a scan never depends on this service being up.
  */
 
-const API_URL = "https://www.wikidata.org/w/api.php";
-const SPARQL_URL = "https://query.wikidata.org/sparql";
-/** Wikimedia asks every client to name a way to contact its operator. */
-const DEFAULT_CONTACT = "https://github.com/dmo18/crd";
 const MAX_CANDIDATES = 7;
-/** How long to pause after a 429 that gives no usable Retry-After, and the longest pause honoured. */
-const DEFAULT_PAUSE_MS = 60_000;
-const MAX_PAUSE_MS = 60 * 60 * 1000;
 export const CACHE_MS = 90 * 24 * 60 * 60 * 1000;
 /** Old cache rows are deleted on the first cache write and then every this many writes. */
 export const PRUNE_EVERY = 100;
-const MIN_GAP_MS = 200;
-const DEFAULT_TIMEOUT_MS = 8000;
 const MAX_TEAMS = 15;
 
 export type PlayerFacts = {
@@ -48,18 +44,8 @@ export type LookupOptions = {
 
 export type RankQuery = { name: string; sport?: Sport | null; year?: number | null };
 
-/**
- * The User-Agent sent to Wikidata, with a contact as Wikimedia's policy asks.
- * WIKIDATA_CONTACT may hold an email address or a web address; anything else
- * falls back to the project page.
- */
-export function userAgent(): string {
-  const raw = (process.env.WIKIDATA_CONTACT ?? "").trim();
-  const email = /^[^\s@()<>,;"]+@[^\s@()<>,;"]+\.[A-Za-z]{2,}$/;
-  const web = /^https?:\/\/[^\s()<>"]+$/;
-  const contact = raw.length > 0 && raw.length <= 200 && (email.test(raw) || web.test(raw)) ? raw : DEFAULT_CONTACT;
-  return `CardVault/1.0 (${contact}) personal sports card collection app`;
-}
+/** The User-Agent sent to Wikidata, with a contact as Wikimedia's policy asks (kept in sources.ts). */
+export const userAgent = wikidataUserAgent;
 
 const SUFFIX_WORDS = ["jr", "sr", "ii", "iii", "iv"];
 
@@ -232,68 +218,20 @@ export function rankCandidates(candidates: PlayerFacts[], query: RankQuery): Pla
   return scored.sort((a, b) => b.score - a.score || a.order - b.order).map((s) => s.c);
 }
 
-// ---------- polite network access ----------
+// ---------- network access through the gate ----------
 
-let chain: Promise<unknown> = Promise.resolve();
-let lastRequestEnd = 0;
-/** After a 429, no requests until this time (ms since epoch). */
-let pausedUntil = 0;
-
-/** For tests only: forget an earlier "too many requests" pause. */
-export function resetWikidataPause(): void {
-  pausedUntil = 0;
+/** For tests only: forget an earlier "too many requests" pause (stored in the database). */
+export function resetWikidataPause(db: Db = getDb()): void {
+  clearPause(db, "wikidata");
 }
 
-function paused(): boolean {
-  return Date.now() < pausedUntil;
-}
+type CallDeps = { fetchImpl?: typeof fetch; db: Db; timeoutMs?: number };
 
-/** Retry-After is either seconds or an HTTP date. */
-function retryAfterMs(value: string | null): number {
-  if (value) {
-    const v = value.trim();
-    if (/^\d+$/.test(v)) return Math.min(MAX_PAUSE_MS, Math.max(1000, Number(v) * 1000));
-    const at = Date.parse(v);
-    if (Number.isFinite(at)) return Math.min(MAX_PAUSE_MS, Math.max(1000, at - Date.now()));
-  }
-  return DEFAULT_PAUSE_MS;
-}
-
-/** One job at a time across the process. */
-function enqueue<T>(job: () => Promise<T>): Promise<T> {
-  const run = chain.then(job, job);
-  chain = run.catch(() => undefined);
-  return run;
-}
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-function aborted(signal: AbortSignal): Promise<never> {
-  return new Promise((_, reject) => {
-    const fail = () => reject(Object.assign(new Error("timeout"), { name: "TimeoutError" }));
-    if (signal.aborted) fail();
-    else signal.addEventListener("abort", fail, { once: true });
-  });
-}
-
-async function getJson(fetchImpl: typeof fetch, url: string, signal: AbortSignal): Promise<unknown> {
-  if (paused()) throw Object.assign(new Error("paused"), { name: "RateLimited" });
-  const wait = lastRequestEnd + MIN_GAP_MS - Date.now();
-  if (wait > 0) await Promise.race([sleep(wait), aborted(signal)]);
-  try {
-    const res = await Promise.race([
-      fetchImpl(url, { headers: { "User-Agent": userAgent(), Accept: "application/json" }, signal }),
-      aborted(signal),
-    ]);
-    if (res.status === 429 || (res.status === 503 && res.headers.get("Retry-After"))) {
-      pausedUntil = Date.now() + retryAfterMs(res.headers.get("Retry-After"));
-      throw Object.assign(new Error("too many requests"), { name: "RateLimited" });
-    }
-    if (res.status !== 200) throw new Error("HttpError");
-    return await Promise.race([res.json(), aborted(signal)]);
-  } finally {
-    lastRequestEnd = Date.now();
-  }
+async function getJson(request: OutsideRequest, deps: CallDeps): Promise<unknown> {
+  const r = await outsideCall("wikidata", request, { line: "background", db: deps.db, fetchImpl: deps.fetchImpl, timeoutMs: deps.timeoutMs });
+  if (!r.ok) throw Object.assign(new Error(r.reason), { name: r.errorKind });
+  if (r.status !== 200) throw new Error("HttpError");
+  return JSON.parse(r.body);
 }
 
 function sparqlFor(ids: string[]): string {
@@ -319,16 +257,16 @@ WHERE {
 GROUP BY ?item`;
 }
 
-async function fetchCandidates(name: string, fetchImpl: typeof fetch, signal: AbortSignal): Promise<PlayerFacts[]> {
-  const search = new URLSearchParams({
+async function fetchCandidates(name: string, deps: CallDeps): Promise<PlayerFacts[]> {
+  const search = {
     action: "wbsearchentities", search: name.slice(0, 120), language: "en", type: "item", limit: "7", format: "json",
-  });
-  const found = searchSchema.parse(await getJson(fetchImpl, `${API_URL}?${search}`, signal));
+  };
+  const found = searchSchema.parse(await getJson({ tool: "wbsearchentities", host: "www.wikidata.org", path: "/w/api.php", query: search }, deps));
   const ids = found.search.map((s) => s.id);
   if (ids.length === 0) return [];
 
-  const sparql = new URLSearchParams({ query: sparqlFor(ids), format: "json" });
-  const data = sparqlSchema.parse(await getJson(fetchImpl, `${SPARQL_URL}?${sparql}`, signal));
+  const sparql = { query: sparqlFor(ids), format: "json" };
+  const data = sparqlSchema.parse(await getJson({ tool: "sparql", host: "query.wikidata.org", path: "/sparql", query: sparql }, deps));
   const byId = new Map<string, PlayerFacts>();
   for (const row of data.results.bindings) {
     const id = row.item.value.split("/").pop() ?? "";
@@ -358,29 +296,21 @@ export async function lookupPlayer(name: string, opts: LookupOptions = {}): Prom
     const cached = readCache(db, key, now);
     if (cached !== undefined) return cached === null ? null : pick(cached);
 
-    // Wikidata asked us to slow down: skip lookups until the pause ends.
-    if (paused()) return null;
-    const fetchImpl = opts.fetchImpl ?? fetch;
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const candidates = await enqueue(async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        return await fetchCandidates(name, fetchImpl, controller.signal);
-      } finally {
-        clearTimeout(timer);
-      }
-    });
+    // The gate skips the call while Wikidata's "slow down" pause lasts.
+    const candidates = await fetchCandidates(name, { db, fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs });
 
     // Cache every candidate whose name matches, then apply this card's year.
     const keep = rankCandidates(candidates, { name: normalized, sport }).slice(0, MAX_CANDIDATES);
     writeCache(db, key, keep.length ? keep : null, now);
     return pick(keep);
   } catch (e) {
-    log.warn("wikidata_lookup_failed", { error: errorKind(e) });
+    // A pause or the owner's switch is expected, not a failure worth a log line.
+    if (!QUIET_ERRORS.has(errorKind(e))) log.warn("wikidata_lookup_failed", { error: errorKind(e) });
     return null;
   }
 }
+
+const QUIET_ERRORS = new Set(["Paused", "Off"]);
 
 /**
  * undefined means "not cached or too old"; null means a cached miss.

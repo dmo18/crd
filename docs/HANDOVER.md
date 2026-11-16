@@ -98,6 +98,24 @@ First-time tasks for this loop (do them, ask the owner only for clicks):
   bootstrap.sh is ever run again it reinstalls the read-only guide but keeps
   `/etc/sudoers.d/zz-ops-agent-owner`.
 
+## Outside sources and what we store (Milestone 10)
+- Every call that leaves the server goes through `src/lib/outside/gate.ts`
+  (`outsideCall`). Never add another `fetch` to an outside address; a test
+  fails if you do. Sources, hosts and limits live in
+  `src/lib/outside/sources.ts`. Alerts (`src/lib/alerts.ts`) are the one
+  other exception.
+- MyCardfolio limits: 1 call at a time (all sources), 2 s between calls,
+  200 per hour, 1,000 per UTC day, 5 s timeout, 2 MB largest answer. A 429
+  or a 403 from its front door pauses it (stored, survives a restart).
+- Storage policy (settled, also in `docs/SPEC.md`): stored answers only for
+  a bounded time (7 days, 1 day for an empty search, 30 days for cards and
+  checklists, 50 MB in total), only on this server, only to spare the site
+  repeat calls. Kept for good: only cards the owner confirmed, with their
+  source link. Never copy the catalog, walk sets nobody asked for, show
+  catalog data to anyone else, or download the site's card images.
+- Counters per source and day: table `outside_usage`. Switch and pause:
+  table `outside_state`. Stored answers: table `outside_cache`.
+
 ## Lessons paid for during setup (do not repeat)
 - This server's awk is gawk. In scripts with `pipefail`, never pipe into a
   reader that quits early (`grep -q`, `awk ... exit`, `head`): the writer dies
