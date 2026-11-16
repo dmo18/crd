@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ScanView } from "@/lib/scans/view";
 import {
-  atCap, buildScanBody, canRelease, createUploader, emptyQueue, entryState, failureFor, hasUnsaved, KEEP_OPEN_MESSAGE, liveText, postScan, RETRY_DELAYS_MS, retryDelayMs, type ScanJob, type SendResult, GIVE_UP_AFTER_START_MS, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
+  atCap, isFinished, listFull, buildScanBody, canRelease, createUploader, emptyQueue, entryState, failureFor, hasUnsaved, KEEP_OPEN_MESSAGE, liveText, postScan, RETRY_DELAYS_MS, retryDelayMs, type ScanJob, type SendResult, GIVE_UP_AFTER_START_MS, MAX_QUEUE, nextToSend, queueReducer, retryKind, scanTimedOut, summary, summaryText,
   TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MESSAGE, UPLOAD_TIMEOUT_MS, waitingText, type QueueAction, type QueueState, type UploadFailure,
 } from "./scan-queue";
 
@@ -79,6 +79,40 @@ describe("queueReducer", () => {
     expect(s.entries).toHaveLength(MAX_QUEUE);
     expect(atCap(s)).toBe(true);
     expect(atCap(emptyQueue)).toBe(false);
+  });
+});
+
+describe("full list drops only finished entries", () => {
+  const saved = (k: number): QueueAction[] => [add(k), { type: "sending", key: k }, { type: "uploaded", key: k, scanId: k, at: 0 }];
+  const fill = (n: number) => Array.from({ length: n }, (_, i) => saved(i + 1)).flat();
+
+  it("knows what is finished: read, or failed on the server; nothing else", () => {
+    const s = run([...fill(4), { type: "update", scan: view(1, "done") }, { type: "update", scan: view(2, "failed") }, { type: "timeout", key: 3 }, add(5)]);
+    expect(s.entries.map(isFinished)).toEqual([true, true, false, false, false]);
+  });
+
+  it("makeRoom does nothing below the limit", () => {
+    const s = run([...fill(2), { type: "update", scan: view(1, "done") }]);
+    expect(run([{ type: "makeRoom" }], s)).toBe(s);
+  });
+
+  it("makeRoom drops the oldest finished entry and skips unfinished ones", () => {
+    const s = run([...fill(MAX_QUEUE), { type: "update", scan: view(2, "done") }, { type: "update", scan: view(3, "failed") }]);
+    expect(listFull(s)).toBe(false);
+    const a = run([{ type: "makeRoom" }], s);
+    expect(a.entries).toHaveLength(MAX_QUEUE - 1);
+    expect(a.entries.some((e) => e.key === 2)).toBe(false);
+    expect(a.entries.some((e) => e.key === 1)).toBe(true);
+    const b = run([{ type: "makeRoom" }], { entries: [...a.entries, ...run(saved(500)).entries] });
+    expect(b.entries.some((e) => e.key === 3)).toBe(false);
+  });
+
+  it("never drops an entry that is not saved or still being read", () => {
+    const unsaved = run([...Array.from({ length: MAX_QUEUE }, (_, i) => add(i + 1)), { type: "sending", key: 1 }, { type: "failed", key: 1, message: "x" }]);
+    expect(listFull(unsaved)).toBe(true);
+    expect(run([{ type: "makeRoom" }], unsaved)).toBe(unsaved);
+    const reading = run(fill(MAX_QUEUE));
+    expect(run([{ type: "makeRoom" }], reading)).toBe(reading);
   });
 });
 

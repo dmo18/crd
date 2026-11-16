@@ -26,6 +26,12 @@ export default async function MorePage() {
       </Card>
 
       <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Scan activity</h2>
+        <p className="text-sm text-muted">What was read, what is waiting and what did not work.</p>
+        <LinkButton href="/scans" variant="secondary">See scan activity</LinkButton>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Export</h2>
         <a
           href="/api/export" download

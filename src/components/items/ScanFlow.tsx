@@ -7,7 +7,7 @@ import { shrinkPhoto } from "@/components/capture/shrink";
 import { Badge, Button, Card, INPUT_CLASS, LinkButton, Notice } from "@/components/ui";
 import type { ScanMode } from "@/db/schema";
 import {
-  atCap, entryState, hasUnsaved, KEEP_OPEN_MESSAGE, liveText, MAX_QUEUE, retryKind, summary, summaryText, waitingText, type QueueEntry,
+  entryState, hasUnsaved, KEEP_OPEN_MESSAGE, listFull, liveText, retryKind, summary, summaryText, waitingText, type QueueEntry,
 } from "./scan-queue";
 import { useScanQueue } from "./ScanQueueProvider";
 
@@ -79,7 +79,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
 
   const single = mode === "single";
   const ready = single ? front.length >= rules.single.min : source.length >= rules[mode].min;
-  const full = state.entries.length >= MAX_QUEUE;
+  const full = listFull(state);
 
   function save() {
     if (!ready || full) return;
@@ -99,15 +99,15 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
 
   async function take(picked: File[]) {
     for (const original of picked) {
-      if (atCap(store.getState())) break;
+      if (listFull(store.getState())) break;
       const photo = await shrinkPhoto(original);
       // Add straight away: the cap check sees this photo before the next one is looked at.
       store.enqueue({ mode: "single", hint: hintRef.current, locationId: locationRef.current, front: photo, source: [] }, photo, photo.name);
     }
   }
 
-  // Newest first; each keeps its number in this visit (1 is the first one saved).
-  const list = state.entries.map((entry, i) => ({ entry, n: i + 1 })).reverse();
+  // Newest first; each keeps its own number for this visit.
+  const list = state.entries.map((entry) => ({ entry, n: entry.key })).reverse();
 
   return (
     <div className="flex flex-col gap-6">
@@ -226,7 +226,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
         )}
       </form>
 
-      {full ? <Notice tone="warn">That is the most for one visit. When all are saved, reload this page to start a new list.</Notice> : null}
+      {full ? <Notice tone="warn">The list is full. Wait for some photos to finish saving and being read, then add more.</Notice> : null}
 
       {/* Always on the page, so screen readers hear every change in the counts and the keep open notice. */}
       <p role="status" aria-live="polite" className="sr-only">{liveText(state)}</p>

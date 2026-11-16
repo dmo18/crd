@@ -16,6 +16,7 @@ const idSchema = z.coerce.number().int().positive();
 function refresh() {
   revalidatePath("/review");
   revalidatePath("/items");
+  revalidatePath("/scans");
 }
 
 export async function mergeDuplicateAction(formData: FormData): Promise<void> {
@@ -51,10 +52,13 @@ export async function deleteFromReviewAction(formData: FormData): Promise<void> 
 }
 
 /** Owner only: removes every failed scan and its photos. */
-export async function deleteFailedScansAction(): Promise<void> {
+const backSchema = z.enum(["review", "scans"]).catch("review");
+
+export async function deleteFailedScansAction(formData?: FormData): Promise<void> {
   await requireOwner();
+  const back = backSchema.parse(formData?.get("back"));
   const removed = await deleteFailedScans(getDb());
   if (removed > 0) await auditThisRequest("failed_scans_deleted", "ok", `${removed} ${removed === 1 ? "scan" : "scans"}`);
   refresh();
-  redirect(`/review?cleared=${removed}`);
+  redirect(`/${back}?cleared=${removed}`);
 }

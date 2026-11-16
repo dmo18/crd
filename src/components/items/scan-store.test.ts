@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ScanView } from "@/lib/scans/view";
+import { MAX_QUEUE } from "./scan-queue";
 import { createScanStore, type ScanStoreDeps } from "./scan-store";
 
 function view(id: number, status: ScanView["status"]): ScanView {
@@ -140,5 +141,27 @@ describe("scan store (the list shared by every page)", () => {
     expect(store.getState().entries[1]).toMatchObject({ status: "failed", previewUrl: null });
     expect(b.revoked).toEqual(["blob:1", "blob:2"]);
     expect(b.intervals.size).toBe(0);
+  });
+
+  it("when the list is full it drops the oldest finished entry, never one that is not saved", async () => {
+    let id = 0;
+    const b = fakeBrowser(async (url) => {
+      if (url === "/api/scans") return Response.json({ scanId: ++id }, { status: 201 });
+      return Response.json(view(Number(url.split("/").pop()), "done"));
+    });
+    const store = createScanStore(b.deps);
+    for (let i = 0; i < MAX_QUEUE; i++) expect(store.enqueue(job, photo(), `s${i}`)).toBe(true);
+    await vi.waitFor(() => expect(store.getState().entries.every((e) => e.status === "reading")).toBe(true));
+    // All still being read: nothing may be dropped, so the 101st is refused.
+    expect(store.enqueue(job, photo(), "extra")).toBe(false);
+    expect(store.getState().entries).toHaveLength(MAX_QUEUE);
+    await store.poll();
+    expect(store.getState().entries.every((e) => e.status === "done")).toBe(true);
+    const oldest = store.getState().entries[0].key;
+    expect(store.enqueue(job, photo(), "new")).toBe(true);
+    const keys = store.getState().entries.map((e) => e.key);
+    expect(keys).toHaveLength(MAX_QUEUE);
+    expect(keys).not.toContain(oldest);
+    expect(keys[keys.length - 1]).toBe(MAX_QUEUE + 1);
   });
 });

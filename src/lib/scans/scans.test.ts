@@ -8,7 +8,7 @@ import { readPhoto, uploadsDir } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan, ScanInputError } from "./create";
 import { enqueueScan, processScan, queueIdle, queueOrder, RECOGNITION_DEADLINE_MS, recoverScans, retryScan, TOO_SLOW } from "./process";
-import { getScanView, scanStatusCounts } from "./view";
+import { getScanView, recentScans, scanPhotoThumbs, scanStatusCounts } from "./view";
 
 async function photo(color = "#336699"): Promise<Buffer> {
   return sharp({ create: { width: 900, height: 1200, channels: 3, background: color } }).jpeg().toBuffer();
@@ -323,5 +323,25 @@ describe("scanStatusCounts", () => {
 
   it("is all zero on an empty database", () => {
     expect(scanStatusCounts(db)).toEqual({ reading: 0, failed: 0, toReview: 0 });
+  });
+});
+
+describe("Scan activity data", () => {
+  it("lists one scan in each state, newest first, with a small photo for scans that have one", async () => {
+    const done = db.insert(scans).values({ mode: "single", status: "done" }).returning({ id: scans.id }).get().id;
+    const failed = db.insert(scans).values({ mode: "single", status: "failed", error: "Could not read this photo." }).returning({ id: scans.id }).get().id;
+    const processing = db.insert(scans).values({ mode: "single", status: "processing", startedAt: new Date() }).returning({ id: scans.id }).get().id;
+    const queued = db.insert(scans).values({ mode: "single", status: "queued" }).returning({ id: scans.id }).get().id;
+    db.insert(items).values({ kind: "card", status: "needs_review", title: "Check me", scanId: done }).run();
+    db.insert(images).values({ scanId: done, role: "back", file: "b.jpg", thumbFile: "b-t.jpg", width: 1, height: 1, bytes: 1 }).run();
+    db.insert(images).values({ scanId: done, role: "front", file: "f.jpg", thumbFile: "f-t.jpg", width: 1, height: 1, bytes: 1 }).run();
+    const list = recentScans(50, db);
+    expect(list.map((s) => [s.id, s.status])).toEqual([[queued, "queued"], [processing, "processing"], [failed, "failed"], [done, "done"]]);
+    expect(list.find((s) => s.id === failed)!.error).toBe("Could not read this photo.");
+    expect(list.find((s) => s.id === done)!.items.map((i) => [i.title, i.status])).toEqual([["Check me", "needs_review"]]);
+    const thumbs = scanPhotoThumbs(list.map((s) => s.id), db);
+    expect(thumbs.get(done)).toBe("f-t.jpg");
+    expect(thumbs.has(queued)).toBe(false);
+    expect(scanPhotoThumbs([], db).size).toBe(0);
   });
 });

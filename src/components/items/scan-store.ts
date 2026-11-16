@@ -33,7 +33,7 @@ export type ScanStoreDeps = {
 export type ScanStore = {
   getState: () => QueueState;
   subscribe: (listener: () => void) => () => void;
-  /** Puts one scan in the list, to be sent. Returns false when the list is full. */
+  /** Puts one scan in the list, to be sent. Returns false only when the list is full of entries that cannot be dropped yet. */
   enqueue: (job: Omit<ScanJob, "clientKey">, preview: Blob, name: string) => boolean;
   /** Retry button: send again if the server never got it, otherwise run the same scan again on the server. */
   retry: (key: number) => Promise<void>;
@@ -122,6 +122,8 @@ export function createScanStore(deps: ScanStoreDeps): ScanStore {
   }
 
   function enqueue(job: Omit<ScanJob, "clientKey">, preview: Blob, name: string): boolean {
+    // Full list: forget the oldest finished entry (its scan is safe on the server). Nothing unsaved is ever dropped.
+    if (atCap(state)) dispatch({ type: "makeRoom" });
     if (atCap(state)) return false;
     const key = nextKey++;
     const clientKey = deps.randomUUID();

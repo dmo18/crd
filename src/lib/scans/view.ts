@@ -107,3 +107,15 @@ export function scanStatusCounts(db: Db = getDb()): ScanStatusCounts {
   const toReview = db.select({ n: count() }).from(items).where(eq(items.status, "needs_review")).get()?.n ?? 0;
   return { reading, failed, toReview };
 }
+
+/** One small photo per scan (front first), for the Scan activity page. Null when the files are gone. */
+export function scanPhotoThumbs(scanIds: number[], db: Db = getDb()): Map<number, string> {
+  const out = new Map<number, string>();
+  if (scanIds.length === 0) return out;
+  const order = { front: 0, source: 1, back: 2, crop: 3 } as const;
+  const rows = db.select({ scanId: images.scanId, role: images.role, thumbFile: images.thumbFile })
+    .from(images).where(and(inArray(images.scanId, scanIds), inArray(images.role, ["front", "back", "source"]))).orderBy(asc(images.id)).all();
+  rows.sort((a, b) => order[a.role] - order[b.role]);
+  for (const r of rows) if (r.scanId != null && !out.has(r.scanId)) out.set(r.scanId, r.thumbFile);
+  return out;
+}

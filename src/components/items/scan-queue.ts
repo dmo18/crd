@@ -88,7 +88,9 @@ export type QueueAction =
   | { type: "retry"; key: number }
   | { type: "requeued"; key: number; scan: ScanView | null }
   | { type: "retryError"; key: number; message: string }
-  | { type: "timeout"; key: number };
+  | { type: "timeout"; key: number }
+  /** The list is full: drop the oldest finished entry to make room. Never drops one the server may not have. */
+  | { type: "makeRoom" };
 
 export const emptyQueue: QueueState = { entries: [] };
 
@@ -163,7 +165,24 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       return patch(state, action.key, (e) => (e.status === "failed" ? { ...e, error: action.message } : e));
     case "timeout":
       return patch(state, action.key, (e) => (e.status === "reading" ? { ...e, status: "failed", error: TIMEOUT_MESSAGE } : e));
+    case "makeRoom": {
+      if (state.entries.length < MAX_QUEUE) return state;
+      const at = state.entries.findIndex(isFinished);
+      if (at < 0) return state;
+      return { entries: state.entries.filter((_, i) => i !== at) };
+    }
   }
+}
+
+/**
+ * True when an entry is completely finished and safe to forget: read (done),
+ * or failed on the server after it was saved and read. Never true for an
+ * entry that is not yet saved, still being read, or that only timed out on
+ * the page (the server may still finish it).
+ */
+export function isFinished(e: Pick<QueueEntry, "status" | "scanId" | "scan">): boolean {
+  if (e.status === "done") return true;
+  return e.status === "failed" && e.scanId !== null && e.scan?.status === "failed";
 }
 
 export type RetryKind = "upload" | "server" | null;
@@ -247,6 +266,11 @@ export const KEEP_OPEN_MESSAGE = "Keep this page open until your photos are save
 
 export function atCap(state: QueueState): boolean {
   return state.entries.length >= MAX_QUEUE;
+}
+
+/** True when no more can be added: the list is at its limit and no entry is finished enough to drop. */
+export function listFull(state: QueueState): boolean {
+  return atCap(state) && !state.entries.some(isFinished);
 }
 
 /** True while any photo is not yet safely on the server: the leave warning is on. */

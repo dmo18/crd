@@ -1,4 +1,5 @@
 import { ScanQueueProvider } from "@/components/items/ScanQueueProvider";
+import { ScanStatus } from "@/components/nav/ScanStatus";
 import { TabBar } from "@/components/nav/TabBar";
 import { requireOwner } from "@/lib/auth/guard";
 import { startPhotoArchiver } from "@/lib/images/archive";
@@ -20,6 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         {children}
         <footer className="mt-8 text-center text-xs text-muted">{appVersion()}</footer>
       </main>
+      <ScanStatus />
       <TabBar reviewCount={reviewCount()} />
     </ScanQueueProvider>
   );
