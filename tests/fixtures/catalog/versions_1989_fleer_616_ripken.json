@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1989 Fleer 616 Ripken",
+  "limit": 20,
+  "sport": "Baseball",
+  "year": "1989"
+ },
+ "elapsed_ms": 555,
+ "status": 200,
+ "bytes": 4483,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1989 Fleer 616 Ripken\",\n  \"count\": 7,\n  \"results\": [\n    {\n      \"card_id\": \"543765\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1989\",\n      \"product\": \"Fleer\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"616\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Bill Ripken\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1989/fleer-2112/base-set-9162/616-bill-ripken-543765\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/543765.jpg\"\n    },\n    {\n      \"card_id\": \"544431\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1989\",\n      \"product\": \"Fleer Glossy\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"616\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"BILL RIPKEN BLACKBOX\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1989/fleer-glossy-2114/base-set-9164/616-bill-ripken-blackbox-544431\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/544431.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_94ae24710b8c\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1989\",\n      \"product\": \"Fleer\",\n      \"set\": \"Black & White Error\",\n      \"card_number\": \"616\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Billy Ripken\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, SP\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1989/fleer-ebay_7c92d1a8f9/black-&-white-error-ebay_cf04d5d28d/616-billy-ripken-ebay_94ae24710b8c\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_94ae24710b8c.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_7722d4f85dee\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1989\",\n      \"product\": \"Fleer\",\n      \"set\": \"Error\",\n      \"card_number\": \"616\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Bill Ripken\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, FF\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1989/fleer-ebay_7c92d1a8f9/error-ebay_04d298efa5/616-bill-ripken-ebay_7722d4f85dee\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_7722d4f85dee.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_5f7a9f45dcd8\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1989\",\n      \"product\": \"Fleer\",\n      \"set\": \"Error Card FF Bat Knob Rare W/ Black Box variant\",\n      \"card_number\": \"616\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Billy Ripken\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, SP\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1989/fleer-ebay_7c92d1a8f9/error-card-ff-bat-knob-rare-w/-black-box-variant-ebay_38bd68172f/616-billy-ripken-ebay_5f7a9f45dcd8\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_5f7a9f45dcd8.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_e99e443d9cde\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1989\",\n      \"product\": \"Fleer\",\n      \"set\": \"FF Error\",\n      \"card_number\": \"616\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Bill Ripken\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, Error\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1989/fleer-ebay_7c92d1a8f9/ff-error-ebay_add25ca1e7/616-bill-ripken-ebay_e99e443d9cde\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_e99e443d9cde.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_8efedd11026d\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1989\",\n      \"product\": \"Fleer\",\n      \"set\": \"Base\",\n      \"card_number\": \"616\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Billy Ripken\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, FF on Bat Knob\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1989/fleer-ebay_7c92d1a8f9/base-ebay_9a01e15bfb/616-billy-ripken-ebay_8efedd11026d\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_8efedd11026d.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

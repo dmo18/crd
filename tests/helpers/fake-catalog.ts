@@ -12,8 +12,8 @@ import type { Catalog, CatalogCard, CatalogFailure, CatalogResult } from "@/lib/
 function body(name: string): string {
   return JSON.stringify(JSON.parse(fs.readFileSync(path.join(process.cwd(), "tests/fixtures/catalog", name), "utf8")).response);
 }
-export function recordedSearch(name: string): CatalogCard[] {
-  const v = parseSearch(body(name), 10);
+export function recordedSearch(name: string, limit = 10): CatalogCard[] {
+  const v = parseSearch(body(name), limit);
   if (!v) throw new Error(name);
   return v;
 }

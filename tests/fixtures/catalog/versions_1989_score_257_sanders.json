@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1989 Score 257 Sanders",
+  "limit": 20,
+  "sport": "Football",
+  "year": "1989"
+ },
+ "elapsed_ms": 597,
+ "status": 200,
+ "bytes": 2007,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1989 Score 257 Sanders\",\n  \"count\": 3,\n  \"results\": [\n    {\n      \"card_id\": \"614697\",\n      \"sport\": \"Football\",\n      \"year\": \"1989\",\n      \"product\": \"Score\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"257\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Barry Sanders\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/football/1989/score-2338/base-set-9386/257-barry-sanders-614697\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/614697.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_e35758ff7f00\",\n      \"sport\": \"Football\",\n      \"year\": \"1989\",\n      \"product\": \"1989 Score\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"257\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Barry Sanders\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card\",\n      \"url\": \"https://mycardfolio.com/sports/football/1989/1989-score-ebay_085610d404/base-set-ebay_b8cecb8fce/257-barry-sanders-ebay_e35758ff7f00\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_e35758ff7f00.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_5149bf937189\",\n      \"sport\": \"Football\",\n      \"year\": \"1989\",\n      \"product\": \"Score\",\n      \"set\": \"Rookie Card\",\n      \"card_number\": \"257\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Barry Sanders\",\n          \"team_name\": \"Detroit Lions\"\n        }\n      ],\n      \"card_details\": \"Rookie Card\",\n      \"url\": \"https://mycardfolio.com/sports/football/1989/score-ebay_09c7864fc0/rookie-card-ebay_c4499cc04c/257-barry-sanders-ebay_5149bf937189\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_5149bf937189.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1987 Fleer 604 Bonds",
+  "limit": 20,
+  "sport": "Baseball",
+  "year": "1987"
+ },
+ "elapsed_ms": 510,
+ "status": 200,
+ "bytes": 1295,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1987 Fleer 604 Bonds\",\n  \"count\": 2,\n  \"results\": [\n    {\n      \"card_id\": \"535800\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1987\",\n      \"product\": \"Fleer\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"604\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Barry Bonds\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1987/fleer-2093/base-set-9143/604-barry-bonds-535800\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/535800.jpg\"\n    },\n    {\n      \"card_id\": \"536460\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1987\",\n      \"product\": \"Fleer Glossy\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"604\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Barry Bonds\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1987/fleer-glossy-2094/base-set-9144/604-barry-bonds-536460\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/536460.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1992 Topps 1 Ryan",
+  "limit": 20,
+  "sport": "Baseball",
+  "year": "1992"
+ },
+ "elapsed_ms": 824,
+ "status": 200,
+ "bytes": 3108,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1992 Topps 1 Ryan\",\n  \"count\": 5,\n  \"results\": [\n    {\n      \"card_id\": \"620119\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1992\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Nolan Ryan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1992/topps-2351/base-set-9399/1-nolan-ryan-620119\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/620119.jpg\"\n    },\n    {\n      \"card_id\": \"2788194\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1992\",\n      \"product\": \"Topps Gold\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Nolan Ryan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1992/topps-gold-6535/base-set-47071/1-nolan-ryan-2788194\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/2788194.jpg\"\n    },\n    {\n      \"card_id\": \"2788185\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1992\",\n      \"product\": \"Topps Gold Promo Sheet\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Nolan Ryan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1992/topps-gold-promo-sheet-6534/base-set-47070/1-nolan-ryan-2788185\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/2788185.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_dc1746cf82c8\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1992\",\n      \"product\": \"Topps\",\n      \"set\": \"Baseball\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Nolan Ryan\",\n          \"team_name\": \"Rangers\"\n        }\n      ],\n      \"card_details\": \"RC, SP\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1992/topps-ebay_67d285474e/baseball-ebay_054363fdea/1-nolan-ryan-ebay_dc1746cf82c8\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_dc1746cf82c8.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_ef7fdab75282\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1992\",\n      \"product\": \"The BallCap Exec\",\n      \"set\": \"1992 Topps\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Nolan Ryan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, SP\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1992/the-ballcap-exec-ebay_3bb9fd744d/1992-topps-ebay_d2e8cee209/1-nolan-ryan-ebay_ef7fdab75282\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_ef7fdab75282.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

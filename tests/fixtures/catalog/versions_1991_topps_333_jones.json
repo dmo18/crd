@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1991 Topps 333 Jones",
+  "limit": 20,
+  "sport": "Baseball",
+  "year": "1991"
+ },
+ "elapsed_ms": 602,
+ "status": 200,
+ "bytes": 3806,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1991 Topps 333 Jones\",\n  \"count\": 6,\n  \"results\": [\n    {\n      \"card_id\": \"554985\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1991\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"333\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Chipper Jones\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1991/topps-2140/base-set-9190/333-chipper-jones-554985\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/554985.jpg\"\n    },\n    {\n      \"card_id\": \"555775\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1991\",\n      \"product\": \"Topps Desert Shield\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"333\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Chipper Jones\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1991/topps-desert-shield-2141/base-set-9191/333-chipper-jones-555775\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/555775.jpg\"\n    },\n    {\n      \"card_id\": \"2785931\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1991\",\n      \"product\": \"Topps Tiffany\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"333\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Chipper Jones RC\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1991/topps-tiffany-6521/base-set-47053/333-chipper-jones-rc-2785931\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/2785931.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_de7abb4d1c72\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1991\",\n      \"product\": \"Topps\",\n      \"set\": \"Baseball\",\n      \"card_number\": \"333\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Chipper Jones\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1991/topps-ebay_7a54832bbd/baseball-ebay_5835b2c9dd/333-chipper-jones-ebay_de7abb4d1c72\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_de7abb4d1c72.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_50328605a699\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1991\",\n      \"product\": \"Topps\",\n      \"set\": \"RC HOF\",\n      \"card_number\": \"333\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Chipper Jones\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, MINTY\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1991/topps-ebay_7a54832bbd/rc-hof-ebay_807baaf512/333-chipper-jones-ebay_50328605a699\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_50328605a699.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_61e3faf0d5d7\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1991\",\n      \"product\": \"Topps 40 Years of Baseball\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"333\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Chipper Jones\",\n          \"team_name\": \"Braves\"\n        }\n      ],\n      \"card_details\": \"RC, Draft Pick\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1991/topps-40-years-of-baseball-ebay_f921703b80/base-set-ebay_f07d138a82/333-chipper-jones-ebay_61e3faf0d5d7\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_61e3faf0d5d7.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

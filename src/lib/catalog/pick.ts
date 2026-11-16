@@ -13,6 +13,7 @@ import { lookupCard } from "./lookup";
 import { getCatalog } from "./provider";
 import { saveCatalogCardIn } from "./store";
 import type { Catalog, CatalogCard } from "./types";
+import { hasSeveralVersions, isVersionRow } from "./versions";
 
 /**
  * The catalog in Review: candidates wait for the owner's one tap ("This one").
@@ -80,8 +81,11 @@ export function pickCandidate(itemId: number, position: number, sourceId: string
     const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get()!;
     const { patch, differences } = applyCatalogCard(item, row);
     const confirmed = differences.length === 0;
+    // The owner tapped that very row: a row that shows a version ("Topps Tiffany") is the owner's choice of
+    // that version. A base row leaves the version question as it was (PLAN Milestone 11, "A pick in Review").
+    const version = isVersionRow(chosen) ? { versionState: "confirmed" as const, versionSource: "catalog" as const, versionOptions: null } : {};
     tx.update(items).set({
-      ...patch, catalogCandidates: null, ...(confirmed ? { status: "confirmed" as const } : {}), updatedAt: now,
+      ...patch, ...version, catalogCandidates: null, ...(confirmed ? { status: "confirmed" as const } : {}), updatedAt: now,
     }).where(and(eq(items.id, itemId), liveItem)).run();
     return { ok: true, line: cardLine(row), differences, confirmed };
   }, { behavior: "immediate" });
@@ -199,6 +203,8 @@ export type ReviewCatalogView = {
   candidates: { position: number; sourceId: string; line: string; verified: boolean; url: string | null }[];
   /** "Look up again" is offered: a card with a player or a number and no link. */
   canLookUp: boolean;
+  /** The candidates hold more than one version of the same card: "Choose the version" is offered. */
+  severalVersions: boolean;
 };
 
 export const FIELD_WORDS: Record<CatalogField, string> = {
@@ -226,5 +232,6 @@ export function reviewCatalogView(item: Item, db: Db = getDb(), now: Date = new 
     reason: stored?.reason ?? null,
     candidates: (stored?.items ?? []).map((c, position) => ({ position, sourceId: c.sourceId, line: cardLine(c), verified: c.verified, url: sourceUrl(c.url) })),
     canLookUp: item.catalogCardId == null && Boolean(item.player?.trim() || item.cardNumber?.trim()),
+    severalVersions: hasSeveralVersions(stored?.items ?? []),
   };
 }

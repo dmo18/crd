@@ -171,3 +171,18 @@ Two real calls by hand (limit was 4), 2.5 seconds apart, User-Agent `CardVault/0
 - Decide the fuzzy step (see condition 1) in task 4 and test it against these 31 queries.
 - Check `get_set_checklist` and `browse` size and speed before relying on them.
 - Check why the O-Pee-Chee, Stadium Club and Upper Deck hockey sets gave nothing (brand spelling or missing data).
+
+## Version recordings (task 11.2, 2026-11-16)
+
+Ten real calls by hand (limit was 20), 2.6 seconds apart, User-Agent `CardVault/0.1.0`, script `scripts/catalog-probe.mjs`, asked exactly as "Show versions" asks (`search_cards`, limit 20, sport and year set). All answered in 0.4 to 1.2 s, 1 to 6 KB. Recordings: `tests/fixtures/catalog/versions_*.json`.
+
+- 1990 Topps #414 Frank Thomas: base `551111` and Tiffany `551963` (product "Topps Tiffany"), plus two eBay listings. The base entry carries the extra name "FRANK THOMAS NO NAME ON FRONT", so the catalog has no separate entry for that error card. The name search "1990 Topps Frank Thomas" gave the same four rows.
+- 1989 Fleer #616 Bill Ripken: base `543765` and Glossy `544431` (named "BILL RIPKEN BLACKBOX"); the many error variants are only eBay or other listings (ids `ebay_`, `ing_`, numbers such as "616a", "616d"). The name search added more listings, no clean entry.
+- 1987 Fleer #604 Barry Bonds: base `535800` and Glossy `536460`, nothing else.
+- 1991 Topps #333 Chipper Jones: base `554985`, Desert Shield `555775`, Tiffany `2785931` ("Chipper Jones RC"), and listings (one with product "Topps 40 Years of Baseball").
+- 1992 Topps #1 Nolan Ryan: base `620119`, Gold `2788194`, "Gold Promo Sheet" `2788185`, and listings.
+- 1994 Upper Deck #24 Alex Rodriguez: base `2799917` and `2799918` with the product "Upper Deck" and the set "Base Set Electric Diamond". Upper Deck writes its parallel into the set name, not the product, so the app reads "Base Set X" as the version X.
+- 1989 Score #257 Barry Sanders (football): base `614697` only, plus listings.
+- 1986 Fleer #57 Michael Jordan (basketball): four eBay listings, no clean entry. So for basketball the known list and "Another version" carry the choice.
+
+What follows for the app: the search "year brand number surname" lists the base card and its product lines (Tiffany, Glossy, Desert Shield, Gold, Electric Diamond) as clean entries. Error variants and grading listings are never clean, so they never become options. No O-Pee-Chee, Gold Rush or Silver Signature entry came up in these ten cards; those stay on the known list only.

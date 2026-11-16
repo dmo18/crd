@@ -27,3 +27,10 @@ end to end test (`griffey.test.ts`) answers the search "1990 Ken Griffey Jr."
 (no brand is read from the photos) with the recorded answer to "1990 Topps
 Ken Griffey Jr.". The Wikidata facts for Ken Griffey Jr. in that test are
 written by hand, not recorded; tests never call Wikidata.
+
+`versions_*.json` (task 11.2) are the "Show versions" searches for ten cards
+with known versions, asked exactly as the app asks (`search_cards`, limit 20,
+sport and year set): "year brand number surname", and for two cards also
+"year brand full name". Read by `src/lib/catalog/versions.test.ts` and
+`version-actions.test.ts` through `recordedSearch(name, 20)`. What they showed
+is in `docs/CATALOG-TRIAL.md`, "Version recordings".
