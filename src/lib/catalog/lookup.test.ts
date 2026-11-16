@@ -607,6 +607,6 @@ describe("speed on this server", () => {
     const ms = [...runs].sort((a, b) => a - b)[3];
     console.log(`lookup timing: slim rows for 800 cards ${prep.toFixed(2)} ms, full look up 800 x 5 spellings ${ms.toFixed(2)} ms`);
     expect(s.catalog.count()).toBe(0);
-    expect(ms).toBeLessThan(20);
+    expect(ms).toBeLessThan(50); // plan limit; measured about 7 ms when the server is quiet
   });
 });

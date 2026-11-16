@@ -114,7 +114,9 @@ describe("card", () => {
     inner.card.set = "z".repeat(1000);
     const started = Date.now();
     const card = parseCard(wrap(inner))?.card;
-    expect(Date.now() - started).toBeLessThan(2000);
+    // The old square-size loop took 36 s here; the bound only has to catch that.
+    // It stays loose so a busy server (other test runs, builds) does not fail it.
+    expect(Date.now() - started).toBeLessThan(10_000);
     expect(card).toBeTruthy();
     expect(1 + (card?.otherPlayers.length ?? 0)).toBe(10);
     for (const t of [card?.player, ...(card?.otherPlayers ?? []), card?.brand, card?.variation, card?.setName]) {
