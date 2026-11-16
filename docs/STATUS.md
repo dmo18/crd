@@ -23,8 +23,22 @@
   1.06 GB before, 1.64 GB after (content 237 MB to 403 MB).
 - Unit tests use a fake worker (Node). The real reader tests run only with
   OCR_TEST_PYTHON set (src/lib/free/ocr.integration.test.ts, Griffey).
-- Known: the Griffey recording is still tesseract text (12R.4 retunes the
-  rules). npm audit shows 11 moderate advisories in dev tools only
+- 12R.3 done (not deployed): the card is found on the table (bright
+  rectangle, grown to keep all read text), cut out and turned upright for the
+  second read; the back's four corners are read again larger (card number);
+  bands of spaced letters are read again squeezed (kept only when two
+  squeezes agree). At most 2 full reads a photo plus small crops: 10 to 21 s
+  a card on this server (src/lib/free/card-picture.ts).
+- 12R.4 done (not deployed): player from the front's largest name, agreeing
+  with the back heading (front form wins, suffix from either side); year
+  card first (front set year, else copyright with the stat table); a logo
+  beats the copyright owner; Impel and other makers added; set only when
+  read; number alone in a back corner; a nickname needs its city or a sign
+  of its sport; Olympic cards sport other; dates never serials; "signed by"
+  never an autograph; catalog candidates that disagree with the card go
+  last. Bench on the 4 owner cards: 0 wrong of 22 filled, bar PASS. The
+  real test is the owner's unseen cards (12R.5).
+- Known: npm audit shows 11 moderate advisories in dev tools only
   (drizzle-kit's esbuild, eslint's minimatch), same as before this task;
   npm audit --omit=dev is 0.
 
