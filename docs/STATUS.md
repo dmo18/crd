@@ -1,5 +1,25 @@
 # Status
 
+## Milestone 10: the card catalog (live 2026-11-16, commit 0b19b1d)
+- Search cards (free MyCardfolio catalog, no key), Add by hand, link and
+  unlink later; every scan asks the catalog in the background and Review
+  shows ranked suggestions with one tap "This is my card"; owner fields are
+  never overwritten; "Use the catalog's values" for read fields.
+- Automatic filling is OFF (AUTO_FILL_SURE false): the sure rule failed
+  review five times; every catalog card needs the owner's tap.
+- Connections screen (More): switch, Test, usage, stored answers; locked
+  key store (AES-256-GCM) ready for free signup keys in Milestone 14.
+- Outside-call gate: one call at a time, pacing, caps, retry, pause on
+  429, stored answers with age limits, no secrets logged.
+- Better free reading (Part C merged): extra band and edge passes, no names
+  from sentences, team only when certain or confirmed by Wikidata, else a
+  hint in notes. Griffey test: Ken Griffey Jr., 1990, Mariners, #336 Topps
+  first in the suggestions.
+- Verified: 1122 tests, build, npm audit 0, phone screenshots with a real
+  catalog search, live deploy healthy, migration 0008 applied, data intact.
+- Known: Did-you-mean team chip not built (needs a migration); brand often
+  unread from photos; a big many-card sheet uses quick reads (6 passes).
+
 ## Milestone 10: the card catalog (in progress, branch work/m10)
 - 10.10 done: branch work/m9c merged (reading passes, sentence rule, name
   particles, header years, Griffey fixture kept). Team from text is now a
