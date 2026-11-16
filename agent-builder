@@ -1,0 +1,100 @@
+#!/bin/bash
+# Makes the server Claude (account ops-agent) the builder and operator: full
+# sudo, a working copy of the code in /agent/crd, a GitHub key of its own, and
+# the project's skills. The owner decided this; see docs/HANDOVER.md.
+#
+#   curl -sL github.com/dmo18/crd/raw/main/agent-builder | sudo bash          set up
+#   curl -sL github.com/dmo18/crd/raw/main/agent-builder | sudo bash -s off   back to look-only
+set -euo pipefail
+
+AGENT=ops-agent
+DIR=/agent
+REPO_HTTPS=https://github.com/dmo18/crd.git
+REPO_SSH=git@github.com:dmo18/crd.git
+SUDOERS=/etc/sudoers.d/zz-ops-agent-owner
+RULES="$DIR/CLAUDE.md"
+# GitHub's published SSH host key (docs.github.com, "GitHub's SSH key fingerprints").
+GITHUB_HOSTKEY='github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
+die() { printf 'STOPPED: %s\n' "$*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "Run it with sudo: curl -sL github.com/dmo18/crd/raw/main/agent-builder | sudo bash"
+id "$AGENT" >/dev/null 2>&1 || die "The account $AGENT does not exist. Run the server setup first."
+[ -d "$DIR" ] || die "The folder $DIR does not exist. First run: curl -sL github.com/dmo18/crd/raw/main/agent-session | sudo bash"
+home="$(getent passwd "$AGENT" | cut -d: -f6)"
+as_agent() { sudo -u "$AGENT" -H "$@"; }
+
+if [ "${1:-on}" = off ]; then
+    rm -f -- "$SUDOERS" "$RULES"
+    if [ -f "$home/CLAUDE.md" ]; then ln -sfn "$home/CLAUDE.md" "$RULES"; fi
+    echo "OK: $AGENT is back to look-only (asks before changes). Its code folder and GitHub key are kept."
+    echo "To stop it publishing code too, delete its deploy key in GitHub (repository, Settings, Deploy keys)."
+    exit 0
+fi
+
+# 1. Full authority, as the owner decided. The file name sorts last, so it
+#    wins over the look-only list. Session recording from that list stays on.
+tmp="$(mktemp)"
+printf '# Written by agent-builder. The owner gave the AI agent full authority.\n# Undo: curl -sL github.com/dmo18/crd/raw/main/agent-builder | sudo bash -s off\n%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$AGENT" >"$tmp"
+visudo -cf "$tmp" >/dev/null || { rm -f -- "$tmp"; die "The sudo rule did not pass the check. Nothing changed."; }
+install -m 0440 -o root -g root "$tmp" "$SUDOERS"
+rm -f -- "$tmp"
+
+# 2. Tools.
+command -v git >/dev/null 2>&1 || apt-get install -y -qq git >/dev/null 2>&1 || die "Could not install git."
+
+# 3. A GitHub key of its own (the owner adds the public half as a deploy key).
+as_agent install -d -m 0700 "$home/.ssh"
+if [ ! -s "$home/.ssh/id_ed25519" ]; then
+    as_agent ssh-keygen -q -t ed25519 -N "" -C "appy-server-claude" -f "$home/.ssh/id_ed25519"
+fi
+if ! grep -qxF "$GITHUB_HOSTKEY" "$home/.ssh/known_hosts" 2>/dev/null; then
+    printf '%s\n' "$GITHUB_HOSTKEY" | as_agent tee -a "$home/.ssh/known_hosts" >/dev/null
+fi
+
+# 4. Working copy of the code.
+if [ ! -d "$DIR/crd/.git" ]; then
+    as_agent git clone -q "$REPO_HTTPS" "$DIR/crd" ||
+        die "Could not download the code. If the repository is private already, add the key below in GitHub first, then run: sudo -u $AGENT -H git clone $REPO_SSH $DIR/crd  and run this again."
+fi
+as_agent git -C "$DIR/crd" remote set-url origin "$REPO_SSH"
+as_agent git -C "$DIR/crd" config user.name "Appy server Claude"
+as_agent git -C "$DIR/crd" config user.email "ops-agent@appy"
+
+# 5. The project's skills, available in every folder.
+as_agent install -d -m 0755 "$home/.claude" "$home/.claude/skills"
+for s in "$DIR"/crd/.claude/skills/*/; do
+    [ -f "$s/SKILL.md" ] || continue
+    as_agent ln -sfn "${s%/}" "$home/.claude/skills/$(basename "$s")"
+done
+
+# 6. The rules it reads at every start.
+rm -f -- "$RULES"
+cat >"$RULES" <<EOF
+# You are the builder and operator of this server
+
+Written by agent-builder on $(date +%F) at the owner's decision. This file
+replaces the "look only, ask before changes" rule in $home/CLAUDE.md. That
+older file is still a good description of the server's tools.
+
+- You have full sudo. You design, build, test, deploy and operate.
+- Read $DIR/crd/docs/HANDOVER.md now, completely. It holds the owner's
+  rules, how code goes live, the state of the server and the lessons learned.
+- Work on code in $DIR/crd. Use the skills owner-workflow (every job) and
+  new-app (another app).
+- The owner is not a developer: plain words, short steps, tested commands.
+  Never em dashes or en dashes. Never paid API keys.
+EOF
+chown root:root "$RULES"
+chmod 0644 "$RULES"
+
+systemctl try-restart claude-agent.service 2>/dev/null || true
+
+echo
+echo "OK: the server Claude now has full authority and its code folder $DIR/crd."
+echo
+echo "ONE STEP FOR YOU, in GitHub, so it can publish code:"
+echo "  github.com/dmo18/crd, Settings, Deploy keys, Add deploy key"
+echo "  Title: appy-server-claude     TICK \"Allow write access\"     Key (copy this whole line):"
+echo
+cat "$home/.ssh/id_ed25519.pub"
+echo
+echo "Then open it with:  agent"
