@@ -61,7 +61,12 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
             action={<LinkButton href="/items" variant="secondary">Clear filters</LinkButton>} />
         ) : (
           <EmptyState title="Nothing here yet" body="Scan a card, pack or box and it will show up here."
-            action={<LinkButton href="/scan">Scan your first card</LinkButton>} />
+            action={
+            <div className="flex w-full flex-col gap-2">
+              <LinkButton href="/scan">Scan your first card</LinkButton>
+              <LinkButton href="/search" variant="secondary">Search cards by words</LinkButton>
+            </div>
+          } />
         )
       ) : (
         <>
