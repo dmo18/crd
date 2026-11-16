@@ -1532,6 +1532,31 @@ no sport; De La Cruz, St. Claire, La Russa, O Neill in a complete set;
 Griffey #581, Williamson #41, Costello #427 with a misread number; a second
 clean set of the same year and brand) are all not sure.
 
+**10.6 fourth review decision (settled 2026-11-16, main session; done in 10.6f; FINAL)**
+"Sure" (filled without a tap) exists in exactly one case, all required:
+- a card number was read and matches the card exactly (after the existing
+  number cleaning);
+- a first name AND surname were read and both match the card's parsed names
+  exactly after OCR folding (initial only is not enough); the card row has
+  a first name;
+- sport, year and brand were read; the year did not come from stat rows;
+  exactly one brand and one year are tried;
+- the base set id was confirmed by fetching that set's checklist (set name
+  Base Set) in this scan or from stored answers, not only learned from a
+  search; and the card's source set id equals it;
+- no other player in the pool (checklist rows plus answers seen in this
+  card's lookup) has the same surname or a surname whose last word equals
+  it (Von Hayes and Charlie Hayes), unless the read first name tells them
+  apart exactly;
+- the card is not a subset, variation, insert or multi-player card.
+Removed: sure by name in a complete set. A two-word name starting with a
+particle keeps the particle as the first name ("Von Hayes": first Von,
+surname Hayes); particles join the surname only with three or more words
+or before a capitalized surname after a real first name. A second clean
+set id for the same key in any later answer marks the conflict for the
+rest of the scan. If any later review still finds a wrong-sure path, the
+fallback is: no catalog card is ever filled without the owner's tap.
+
 **10.7 Search cards screen and "Add to my collection"** (Sonnet)
 - Files: `src/app/(app)/search/page.tsx`, `src/components/catalog/*`,
   `src/lib/catalog/actions.ts` (+ test), `src/app/(app)/more/page.tsx`,
