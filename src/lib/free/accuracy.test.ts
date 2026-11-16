@@ -190,7 +190,7 @@ const CASES: Case[] = [
     check: (i) => expect(i).toMatchObject({ year: 1988, brand: "Score" }),
   },
   {
-    name: "NBA Properties with a year means NBA Hoops and finds David Robinson",
+    name: "NBA Properties is licence text, not a brand; the year and David Robinson are still read",
     back: [
       ["138", 0.03, 0.88, 0.07, 0.04, 0.8],
       ["DAVID ROBINSON", 0.07, 0.3, 0.5, 0.04, 0.8],
@@ -198,8 +198,7 @@ const CASES: Case[] = [
       ["© 1989 NBA PROPERTIES, INC.", 0.95, 0.1, 0.8, 0.02, 0.7],
     ],
     check: (i) => {
-      expect(i).toMatchObject({ year: 1989, brand: "NBA Hoops", player: "David Robinson", isRookie: true });
-      expect(i.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
+      expect(i).toMatchObject({ year: 1989, brand: null, player: "David Robinson" });
     },
   },
   {

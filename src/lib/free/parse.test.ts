@@ -333,8 +333,8 @@ describe("parseCardText regressions from real scans", () => {
     expect(p).toMatchObject({ brand: "Score", year: 1988, sport: null });
   });
 
-  it("reads NBA Properties as NBA Hoops only when no other brand is read", () => {
-    expect(parseCardText(null, ocr([["\u00a9 1990 NBA PROPERTIES, INC.", 0.95]]))).toMatchObject({ brand: "NBA Hoops", year: 1990, sport: "basketball" });
+  it("never reads NBA Properties (licence text) as a brand (12R.5)", () => {
+    expect(parseCardText(null, ocr([["\u00a9 1990 NBA PROPERTIES, INC.", 0.95]]))).toMatchObject({ brand: null, year: 1990 });
     const fleer = parseCardText(null, ocr([["\u00a9 1990 FLEER CORP.", 0.93], ["\u00a9 1990 NBA PROPERTIES, INC.", 0.95]]));
     expect(fleer.brand).toBe("Fleer");
   });

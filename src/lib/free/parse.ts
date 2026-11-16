@@ -1,4 +1,5 @@
 import type { ProductType, Sport } from "@/db/schema";
+import { GIVEN_NAMES } from "./given-names";
 import { KEY_CARDS, normalizeName } from "./key-cards";
 import type { OcrLine, OcrResult } from "./ocr";
 
@@ -205,8 +206,10 @@ function fixedYear(t: string): number | null {
   const s = stripEnds(t);
   if (s.length !== 4 || (s.match(/\d/g) ?? []).length < 2) return null;
   let out = "";
-  for (const c of s) {
+  for (const [i, c] of [...s].entries()) {
     if (c >= "0" && c <= "9") out += c;
+    // Years here start 19 or 20: an S second after a 1 is a blurred 9 ("1S8S" is 1985).
+    else if (i === 1 && /[Ss]/.test(c) && out === "1") out += "9";
     else if (YEAR_FIX[c]) out += YEAR_FIX[c];
     else return null;
   }
@@ -219,7 +222,11 @@ function shortYear(t: string): number | null {
   return m ? 1900 + Number(m[1]) : null;
 }
 
-type YearFind = { year: number; how: "copyright" | "brand" | "stats"; score: number; line?: Line; lastSeason?: number };
+type YearFind = {
+  year: number; how: "copyright" | "brand" | "stats"; score: number; line?: Line; lastSeason?: number;
+  /** The table counts seasons over two years ("97-98"): basketball and hockey. lastSeason is the first of the two. */
+  twoYear?: boolean;
+};
 
 /** The season a stat table row starts with ("87", "1987", "'87", "84-85"), or null. */
 function rowSeason(first: string): number | null {
@@ -228,7 +235,20 @@ function rowSeason(first: string): number | null {
   if (m) return 1900 + Number(m[1]);
   m = /^(?:19)?([5-9]\d)-(?:19)?(\d{2})$/.exec(t);
   if (m && (Number(m[1]) + 1) % 100 === Number(m[2])) return 1900 + Number(m[1]);
+  // "2017-18", "99-00", "00-01", "2000-01": a season over two years, 2000s too.
+  m = /^(?:19|20)?(\d{2})-(?:19|20)?(\d{2})$/.exec(t);
+  if (m && (Number(m[1]) + 1) % 100 === Number(m[2])) return twoDigit(Number(m[1]));
   return null;
+}
+
+/** "97-98", "1997-98", "2017-18": the season token runs over two years. */
+function twoYearSeason(first: string): boolean {
+  return /^'?(?:19|20)?\d{2}-(?:19|20)?\d{2}$/.test(first);
+}
+
+/** A totals row of a stat table: "TOTALS", "11-YEAR TOTALS", "CAREER", "2 NBA TOTALS", "11 NHL SEASONS". */
+function totalsRow(l: Line): boolean {
+  return /\bTOTALS?\b|\bCAREER\b|\b(?:NBA|NHL|NFL|MLB|ML|MAJ|MAJOR\s*LEAGUE)\s*(?:TOTALS?|SEASONS?)\b/.test(l.lz.replace(/\d+-YEAR/g, ""));
 }
 
 /**
@@ -310,19 +330,30 @@ function clubOnly(words: string[]): boolean {
 }
 
 function yearFromTable(lines: Line[]): YearFind | null {
-  const rows: { season: number; y: number; i: number }[] = [];
+  const rows: { season: number; y: number; h: number; i: number; twoYear: boolean }[] = [];
   lines.forEach((l, i) => {
     if (l.tokens.length < 2) return;
     const season = rowSeason(l.tokens[0]);
-    if (season != null && isStatRow(l)) rows.push({ season, y: l.box.y, i });
+    if (season != null && isStatRow(l)) rows.push({ season, y: l.box.y, h: l.box.h, i, twoYear: twoYearSeason(l.tokens[0]) });
   });
   rows.sort((a, b) => a.y - b.y || a.i - b.i);
-  if (rows.length < 2 || new Set(rows.map((r) => r.season)).size < 2) return null;
-  const last = rows[rows.length - 1].season;
+  if (rows.length === 0) return null;
+  const lastRow = rows[rows.length - 1];
+  const last = lastRow.season;
+  const twoYear = lastRow.twoYear;
+  // Single year seasons are trusted up to 1995 (later sets print many
+  // tables of other kinds); seasons over two years are plain to see.
+  if (last < 1950 || last > (twoYear ? 2030 : 1995)) return null;
+  if (rows.length < 2 || new Set(rows.map((r) => r.season)).size < 2) {
+    // One season row with the totals row right under it: a career table of
+    // one season so far, or a "best year" table. The row is the last season.
+    const below = lines.some((l) => totalsRow(l) && l.box.y > lastRow.y && l.box.y - lastRow.y < 2.5 * Math.max(lastRow.h, l.box.h));
+    if (rows.length !== 1 || !below) return null;
+    return { year: last + 1, how: "stats", score: 2, lastSeason: last, twoYear };
+  }
   const step = last - rows[rows.length - 2].season;
   if (step !== 0 && step !== 1) return null;
-  if (last < 1950 || last > 1995) return null;
-  return { year: last + 1, how: "stats", score: 2, lastSeason: last };
+  return { year: last + 1, how: "stats", score: 2, lastSeason: last, twoYear };
 }
 
 function findYear(lines: Line[], brandLines: Set<Line>): YearFind | null {
@@ -411,12 +442,47 @@ function copyrightNotice(l: Line, branded: boolean): boolean {
   return branded && /\bINC\b|\bCORP\b|\bLTD\b|\bCOMPANY\b|\bCO\b|\bMARKETING\b/.test(l.lz);
 }
 
+/** Gap between two boxes on each axis (0 when they overlap on it). */
+function boxGap(a: LineBox, b: LineBox): { dx: number; dy: number } {
+  return {
+    dx: Math.max(0, a.x - (b.x + b.w), b.x - (a.x + a.w)),
+    dy: Math.max(0, a.y - (b.y + b.h), b.y - (a.y + a.h)),
+  };
+}
+
+/**
+ * A short year printed large in a logo on the back ("TOP PROSPECT '91"): a
+ * line of only two digits (an apostrophe may be lost), at least 1.5 times
+ * the usual text height, touching a logo word of 3 or more letters. Jersey
+ * numbers in a back photo stand alone, card numbers sit in corners.
+ */
+function logoShortYear(back: Line[]): number | null {
+  const usual = middle(back.filter((l) => l.raw.replace(/[^A-Za-z0-9]/g, "").length >= 3).map((l) => l.box.h));
+  if (!(usual > 0)) return null;
+  for (const l of back) {
+    if (l.tokens.length !== 1) continue;
+    const m = /^'?(\d{2})$/.exec(stripEnds(l.tokens[0].replace(/^'/, "x")).replace(/^x/, "'"));
+    if (!m || l.box.h < 1.5 * usual) continue;
+    const b = l.box;
+    if ((b.x < CORNER_X || b.x + b.w > 1 - CORNER_X) && (b.y < CORNER_Y || b.y + b.h > 1 - CORNER_Y)) continue;
+    const touching = back.some((o) => {
+      if (o === l || isSentence(o) || isCopyrightLine(o) || (o.lz.match(/[A-Z]/g) ?? []).length < 3) return false;
+      const g = boxGap(b, o.box);
+      return g.dx <= 0.6 * b.h && g.dy <= 0.6 * b.h;
+    });
+    if (touching) return twoDigit(Number(m[1]));
+  }
+  return null;
+}
+
 type CardYear = {
   year: number;
   how: "front" | "copyright" | "stats" | "brand";
   /** The copyright year read, when one was. */
   copyright?: number;
   lastSeason?: number;
+  /** The year came from a short year in a logo on the back ("'91"). */
+  logoYear?: boolean;
   /** Independent signs that agree with the year (1 to 3). */
   signs: number;
 };
@@ -473,6 +539,17 @@ function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<
     if (last != null && last === frontYear - 1) signs++;
     return { year: frontYear, how: "front", copyright: copyright ?? undefined, lastSeason: last ?? undefined, signs };
   }
+  // A large short year in a logo on the back ("TOP PROSPECT '91") one year
+  // after the copyright: sets are made the year before they are named for.
+  if (copyright != null && logoShortYear(back) === copyright + 1) {
+    return { year: copyright + 1, how: "copyright", copyright, lastSeason: last ?? undefined, signs: 2, logoYear: true };
+  }
+  if (copyright != null && stats?.twoYear && last != null && (copyright === last + 1 || copyright === last + 2)) {
+    // Basketball and hockey: the set is named by the season's first year
+    // ("1998-99"), while the copyright often shows the second (\u00a91999).
+    // After a last row of 97-98 the card is of 1998-99: 1998.
+    return { year: last + 1, how: "copyright", copyright, lastSeason: last, signs: 2 };
+  }
   if (copyright != null) {
     if (last == null) return { year: copyright, how: "copyright", copyright, signs: 1 };
     if (last > copyright) return null;
@@ -523,6 +600,10 @@ const BRANDS: BrandDef[] = [
   { key: "scoreboard", brand: "Score Board", re: /\bSCORE\s*BOARD\b(?=\s*,?\s*INC)/g, copyrightOnly: true },
   { key: "topps", brand: "Topps", re: /\bTOPPS\b/g },
   { key: "upperdeck", brand: "Upper Deck", re: /\bUPPER\s*DECK\b/g },
+  // "\u00a92022 UDC." and "The Cippe Deck Co" (UPPER misread): only The Upper Deck Company
+  // signs its copyright line as UDC or as a "Deck Co".
+  { key: "udc", brand: "Upper Deck", re: /\bUDC\b|(?<!UPPER\s*)\bDECK\s*(?:CO|COMPANY)\b/g, copyrightOnly: true },
+  { key: "artifacts", brand: "Upper Deck", set: "Artifacts", re: /\bARTIFACTS\b/g, logoOnly: true },
   // "F1EER" is a common misread; the 1 becomes I in the letter version of the line.
   { key: "fleer", brand: "Fleer", re: /\bF[LI]EER\b/g },
   { key: "donruss", brand: "Donruss", re: /\bDONRUS{1,2}\b/g, sport: "baseball", sportWeight: 1 },
@@ -536,9 +617,8 @@ const BRANDS: BrandDef[] = [
   { key: "leaf", brand: "Leaf", re: /\bLEAF\b(?!\s*,?\s*INC)/g },
   { key: "proset", brand: "Pro Set", re: /\bPRO\s*SET\b/g, sport: "football", sportWeight: 1 },
   { key: "hoops", brand: "NBA Hoops", re: /\bHOOPS\b/g, sport: "basketball", sportWeight: 2 },
-  // NBA Hoops backs carry only "NBA Properties" in the copyright line. Other
-  // brands may print it too, so it counts only when no other brand was read.
-  { key: "nbaprops", brand: "NBA Hoops", re: /\bNBA\s*PROPERTIES\b/g, copyrightOnly: true, weak: true, sport: "basketball", sportWeight: 2 },
+  // League and players' union names ("NBA Properties", "MLBPA", "NHLPA") are
+  // licence text that every maker prints: never a brand (12R.5).
   { key: "skybox", brand: "SkyBox", re: /\bSKY\s*BOX\b/g, sport: "basketball", sportWeight: 1 },
   { key: "pinnacle", brand: "Pinnacle", re: /\bPINNACLE\b/g },
   { key: "classic", brand: "Classic", re: /\bCLASSIC\b/g, copyrightOnly: true },
@@ -572,9 +652,38 @@ const SET_LOGOS: [RegExp, string][] = [[/^SELECT$/, "Select"]];
 /** `logo`: read on a short line of its own, not a copyright line: the maker's logo text. */
 type BrandHit = { def: BrandDef; line: Line; score: number; logo: boolean };
 
+/**
+ * Logo words printed one above the other ("UPPER" over "DECK"), read as two
+ * boxes: one word each, letters only, about the same size, the second right
+ * under the first and starting at the same place. Joined into one line so a
+ * maker's two word name is found (12R.5).
+ */
+export function stackedLogoLines(lines: Line[]): Line[] {
+  const words = lines.filter((l) => l.tokens.length === 1 && /^[A-Z][A-Z\u2022.]{1,}$/.test(l.lz.replace(/[^A-Z\u2022.]/g, "")) && l.box.h > 0);
+  const out: Line[] = [];
+  for (const a of words) {
+    for (const b of words) {
+      if (a === b || a.side !== b.side) continue;
+      const gap = b.box.y - (a.box.y + a.box.h);
+      const h = Math.max(a.box.h, b.box.h);
+      const sameSize = h < 1.6 * Math.min(a.box.h, b.box.h);
+      const overlapX = Math.min(a.box.x + a.box.w, b.box.x + b.box.w) - Math.max(a.box.x, b.box.x);
+      const below = b.box.y > a.box.y && gap < 0.6 * h;
+      if (!sameSize || !below || overlapX < 0.6 * Math.min(a.box.w, b.box.w) || Math.abs(a.box.x - b.box.x) > 2 * h) continue;
+      const text = `${a.raw} ${b.raw}`.replace(/(?<=\p{L})[\u2022.](?=\p{L})/gu, "");
+      const box = { x: Math.min(a.box.x, b.box.x), y: a.box.y, w: Math.max(a.box.w, b.box.w), h: b.box.y + b.box.h - a.box.y };
+      const line = makeLine(text, Math.min(a.conf, b.conf), box, a.side, a.source);
+      if (line) out.push(line);
+    }
+  }
+  return out;
+}
+
 function brandHits(lines: Line[]): BrandHit[] {
   const hits: BrandHit[] = [];
-  for (const l of lines) {
+  const stacked = stackedLogoLines(lines);
+  for (const l of [...lines, ...stacked]) {
+    const isStack = stacked.includes(l);
     const copyright = isCopyrightLine(l);
     const short = l.tokens.length <= 3;
     const logo = short && !copyright && !isSentence(l);
@@ -582,6 +691,8 @@ function brandHits(lines: Line[]): BrandHit[] {
     for (const def of BRANDS) {
       if (def.copyrightOnly && !copyright) continue;
       if (def.logoOnly && !logo) continue;
+      // Two stacked words count only for a name they make together.
+      if (isStack && l.tokens.some((t) => letterize(upper(t)).match(def.re))) continue;
       def.re.lastIndex = 0;
       const count = l.lz.match(def.re)?.length ?? 0;
       for (let i = 0; i < count; i++) {
@@ -589,6 +700,7 @@ function brandHits(lines: Line[]): BrandHit[] {
         hits.push({ def, line: l, score, logo: logo && !def.copyrightOnly });
       }
     }
+    if (isStack) continue;
     // A copyright line read with its spaces lost ("\u00a91990 THETOPPS"): the maker's name inside the letters.
     if (copyright && !hits.some((h) => h.line === l)) {
       const compact = l.lz.replace(/[^A-Z]/g, "");
@@ -814,6 +926,27 @@ function numberFromCorner(l: Line, side: Line[]): CornerNumber | null {
   return beside ? null : { number: n, top };
 }
 
+/** True when a line names a playing position ("GUARD", "SS", "LINEBACKER"). */
+function positionLine(l: Line): boolean {
+  return l.tokens.some((t) => posFromToken(upper(t), false) !== null) || POS_WORDS.some(([re]) => re.test(l.lz));
+}
+
+/**
+ * "#67" printed with the position ("GUARD #67", or "GUARD" right above it)
+ * is the player's jersey number, not the card number (12R.5). Only the "#"
+ * form: "No." is how makers mark the card number.
+ */
+function jerseyNumber(l: Line, side: Line[]): boolean {
+  if (!l.tokens.some((t) => t.startsWith("#"))) return false;
+  if (positionLine(l)) return true;
+  const h = Math.min(l.box.w, l.box.h);
+  return side.some((o) => {
+    if (o === l || o.tokens.length > 2 || !positionLine(o)) return false;
+    const g = boxGap(l.box, o.box);
+    return g.dx <= 1.5 * h && g.dy <= 1.5 * h;
+  });
+}
+
 /** The one value of a list, or null when it is empty or holds two different values. */
 function onlyValue(values: string[]): string | null {
   const set = new Set(values);
@@ -832,11 +965,11 @@ function findCardNumber(back: Line[], front: Line[]): string | null {
   if (top.length > 0) return onlyValue(top);
   for (const l of back) {
     const n = numberFromMarkers(l);
-    if (n) return n;
+    if (n && !jerseyNumber(l, back)) return n;
   }
   for (const l of front) {
     const n = numberFromMarkers(l);
-    if (n) return n;
+    if (n && !jerseyNumber(l, front)) return n;
   }
   return onlyValue(corners.filter((c) => !c.top).map((c) => c.number));
 }
@@ -1648,6 +1781,15 @@ function backHeadings(back: Line[]): { names: NameRead[]; header: PosFind | null
     }
     if (large(l)) names.push(...nameRuns(l));
   }
+  // A heading set all in lower case ("ray allen"), a style some sets use:
+  // a name only when its first word is a common given name (12R.5).
+  for (const l of back) {
+    const words = l.tokens;
+    if (l.box.y + l.box.h / 2 >= HEADING_TOP || !(usual > 0 && l.box.h >= HEADING_LARGE * usual)) continue;
+    if (words.length < 2 || words.length > 3 || !words.every((w) => /^[a-z][a-z'-]*[a-z]$/.test(w)) || !GIVEN_NAMES.has(words[0])) continue;
+    const core = words.map((w) => nameWord(w)).filter((w): w is NameWord => w !== null);
+    if (core.length === words.length && looksLikeName(core)) names.push({ words: words.map(titleWord), suffix: null, line: l, header: false });
+  }
   // One name word a line, stacked: joined top to bottom when the lines touch and share a column.
   const singles = top
     .filter((l) => large(l) && l.tokens.length === 1)
@@ -1690,6 +1832,37 @@ function editDistance(a: string, b: string): number {
     prev = cur;
   }
   return prev[b.length];
+}
+
+/** Common given names one letter apart from `name` (same length, one letter changed). */
+function nearGivenNames(name: string): string[] {
+  const out: string[] = [];
+  for (const g of GIVEN_NAMES) {
+    if (g.length !== name.length) continue;
+    let diff = 0;
+    for (let i = 0; i < g.length && diff < 2; i++) if (g[i] !== name[i]) diff++;
+    if (diff === 1) out.push(g);
+  }
+  return out;
+}
+
+/**
+ * The first name, checked against common given names (12R.5). A first name
+ * that is not a common one but one letter away from one ("Fose", "Jose") is
+ * a misread letter, often the same on both sides (same type). It is put
+ * right only when the card's other text names the player with exactly one
+ * of the near names ("Jose tied a club record"); otherwise the name is
+ * unsure and left out (null). Names not near a common one stay as read.
+ */
+function checkFirstName(words: string[], lines: Line[]): string | null {
+  if (words.length < 2) return words[0] ?? null;
+  const key = words[0].toLowerCase().replace(/[^a-z]/g, "");
+  if (key.length < 3 || key !== words[0].toLowerCase() || GIVEN_NAMES.has(key)) return words[0];
+  const near = nearGivenNames(key);
+  if (near.length === 0) return words[0];
+  const read = new Set(lines.flatMap((l) => l.raw.toLowerCase().split(/[^a-z]+/)));
+  const found = near.filter((n) => read.has(n));
+  return found.length === 1 ? titleWord(found[0]) : null;
 }
 
 function display(n: NameRead, suffix: string | null = n.suffix): string {
@@ -1803,6 +1976,9 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
   // "KEN GRIFFEY, J" and no side shows the whole suffix: Jr. or Sr. is unknown, so no name.
   if (chosen.cut && !suffix) return { player: null, names: [display(chosen)], agree: false, keyMatch: null, hint, header, nameLines };
 
+  const first = checkFirstName(chosen.words, [...front, ...back]);
+  if (first === null) return { player: null, names: [display(chosen, suffix)], agree: false, keyMatch: null, hint, header, nameLines };
+  if (first !== chosen.words[0]) chosen = { ...chosen, words: [first, ...chosen.words.slice(1)] };
   let player = display(chosen, suffix);
   let keyMatch: string | null = null;
   const canonical = KEY_PLAYERS.get(normalizeName(player));
@@ -2019,6 +2195,8 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
 
   if (yearFind?.how === "front") {
     ev.push(`Read year ${yearFind.year} next to the brand name on the front`);
+  } else if (yearFind?.logoYear) {
+    ev.push(`Read copyright line ${yearFind.copyright} and the year '${String(yearFind.year).slice(2)} in a logo on the back, so the card is from ${yearFind.year}`);
   } else if (yearFind?.how === "copyright" && yearFind.year !== yearFind.copyright) {
     ev.push(`Read copyright line: ${yearFind.copyright}${out.brand ? ` ${out.brand}` : ""}, and a stat table ending with ${yearFind.lastSeason}, so the card is from ${yearFind.year}`);
   } else if (yearFind?.how === "copyright") {
