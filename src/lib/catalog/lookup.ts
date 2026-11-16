@@ -4,7 +4,7 @@ import type { CallLimits, Catalog, CatalogCard, CatalogFailure, CatalogResult, L
 import { createMyCardfolio } from "./mycardfolio";
 import { cleanCardNumber, setIdFromUrl, splitProduct } from "./clean";
 import { normalizeBrand } from "./normalize";
-import { MAX_CANDIDATES, judge, judgeConfirm, matchRead, slimRows, type Candidate, type Judgement, type MatchRead, type SlimRow } from "./match";
+import { MAX_CANDIDATES, judge, matchRead, slimRows, type Candidate, type Judgement, type MatchRead, type SlimRow } from "./match";
 
 /**
  * The look up of one read card in the catalog: spends calls, then lets
@@ -56,9 +56,12 @@ const MAX_TRIES = 2;
 const DISCOVERY_NUMBERS = ["1", "2"] as const;
 const DISCOVERY_LIMIT = 5;
 
-/** The last 4 checklists of one scan, so the second card of a set costs no call. */
+/**
+ * The last 4 checklists of one scan, so the second card of a set costs no
+ * call. Kept as slim rows: each checklist is parsed once per scan.
+ */
 export class ChecklistMemory {
-  private sets = new Map<string, { key: string; cards: CatalogCard[]; complete: boolean }>();
+  private sets = new Map<string, { key: string; rows: SlimRow[]; complete: boolean }>();
   constructor(private readonly size = 4) {}
   get(setId: string) {
     const v = this.sets.get(setId);
@@ -69,9 +72,9 @@ export class ChecklistMemory {
     return v ?? null;
   }
   /** `key`: sport, year and brand (see `setKey`). */
-  put(setId: string, key: string, cards: CatalogCard[], complete: boolean) {
+  put(setId: string, key: string, cards: readonly CatalogCard[], complete: boolean) {
     this.sets.delete(setId);
-    this.sets.set(setId, { key, cards, complete });
+    this.sets.set(setId, { key, rows: slimRows(cards), complete });
     while (this.sets.size > this.size) this.sets.delete(this.sets.keys().next().value as string);
   }
   setIdFor(key: string): string | null {
@@ -108,7 +111,7 @@ export function createScanBudget(max = SCAN_CALLS): ScanBudget {
 
 export type LookupOptions = { catalog?: Catalog; scan?: ScanBudget };
 
-/** Confidence for the item: sure by number and name is filed as sure; applied without a number waits in Review. */
+/** Confidence for the item: sure by number and name is filed as sure; sure by name in a complete set waits in Review. */
 export function lookupConfidence(result: Pick<LookupResult, "sure" | "sureBy">, readingConfidence: number): number {
   if (result.sure && result.sureBy === "number") return Math.max(readingConfidence, REVIEW_THRESHOLD);
   if (result.sure) return CHECK_CONFIDENCE;
@@ -155,7 +158,7 @@ function mergeCandidates(...lists: Candidate[][]): Candidate[] {
 }
 
 type Target = { year: number; brand: string };
-type FetchedSet = { target: Target; cards: CatalogCard[]; complete: boolean };
+type FetchedSet = { target: Target; rows: SlimRow[]; complete: boolean };
 
 export async function lookupCard(read: LookupRead, line: Line, options: LookupOptions = {}): Promise<LookupResult> {
   const catalog = options.catalog ?? createMyCardfolio();
@@ -256,7 +259,7 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     const cards = await search(text, r.year, true);
     const rows = rowsOf(cards, r.year, r.brands[0] ? normalizeBrand(r.brands[0]) : null);
     // Applied only when exactly one clean entry agrees with a read number and the name.
-    const j = judge(rows, m, "search");
+    const j = judge(rows, m, false);
     return done(j, mergeCandidates(j.candidates, noiseCandidates()));
   }
 
@@ -268,34 +271,26 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
 
   /**
    * The end of step 2: judges the fetched checklists. `allTargets`: every set
-   * to try is in `sets`. `oneSearch`: the checklists came from memory, so at
-   * most one more search is spent on this card (the number search for a card
-   * past a cut short checklist, or the confirm search for a name).
+   * to try is in `sets`. A checklist cut short gets one search by year, brand
+   * and number for a read number past its end; no other search is spent here.
+   * `oneSearch`: the checklists came from memory, so at most one such search.
    */
   async function decide(sets: FetchedSet[], allTargets: boolean, oneSearch: boolean, others: Candidate[]): Promise<LookupResult> {
     const pool: SlimRow[] = [];
     let searches = 0;
     for (const set of sets) {
-      pool.push(...slimRows(set.cards.filter(sportFits)));
+      pool.push(...set.rows.filter((row) => sportFits(row.card)));
       // The checklist stops at 500 cards: one search by year, brand and number.
-      if (!set.complete && r.number && !set.cards.some((c) => c.cardNumber === r.number) && !(oneSearch && searches > 0)) {
+      if (!set.complete && r.number && !set.rows.some((row) => row.number === r.number) && !(oneSearch && searches > 0)) {
         searches++;
         const extra = await search(`${set.target.year} ${set.target.brand} ${r.number}`, set.target.year, true);
         pool.push(...rowsOf(extra, set.target.year, normalizeBrand(set.target.brand)));
       }
     }
-    // "No other card fits" counts only over complete sets, and only when the sport is known.
-    const whole = allTargets && sets.every((s) => s.complete);
-    const j = judge(pool, m, !sport ? "search" : whole ? "complete" : "partial");
-    const rest = () => mergeCandidates(j.candidates, others, noiseCandidates());
-    if (j.sure || !j.confirm || !j.confirm.year || !j.confirm.brand || !j.confirm.player) return done(j, rest());
-    // A name found in a checklist that was cut short: one exact search confirms it.
-    const target = j.confirm;
-    const brand = target.brand as string;
-    const answer = await search(`${target.year} ${brand} ${target.player}`, target.year, true);
-    const confirmed = judgeConfirm(rowsOf(answer, target.year, normalizeBrand(brand)), target, m);
-    const sure = confirmed.sure ? { sure: confirmed.sure, sureBy: "name" as const } : nothing;
-    return done(sure, mergeCandidates(confirmed.candidates, j.candidates, others, noiseCandidates()));
+    // "No other player fits" counts only over complete sets, and only when the sport is known.
+    const whole = Boolean(sport) && allTargets && sets.every((s) => s.complete);
+    const j = judge(pool, m, whole);
+    return done(j, mergeCandidates(j.candidates, others, noiseCandidates()));
   }
 
   // ---- Before any call: checklists already in this scan's memory.
@@ -303,13 +298,13 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   for (const t of targets) {
     const id = knownSetId(t);
     const set = id ? memory.get(id) : null;
-    if (set) remembered.push({ target: t, cards: set.cards, complete: set.complete });
+    if (set) remembered.push({ target: t, rows: set.rows, complete: set.complete });
   }
   // Every set to try is in memory: no step 1 searches are spent on this card.
   if (remembered.length === targets.length) return decide(remembered, true, true, []);
   if (remembered.length > 0 && m.number) {
     // Number and name agree in a set we already have: nothing to ask.
-    const j = judge(remembered.flatMap((s) => slimRows(s.cards.filter(sportFits))), m, "search");
+    const j = judge(remembered.flatMap((s) => s.rows.filter((row) => sportFits(row.card))), m, false);
     if (j.sure) return done(j, j.candidates);
   }
 
@@ -326,11 +321,11 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   if (r.number) queries.push(`${year} ${brand} ${r.number}`);
   for (const text of queries) {
     step1.push(...rowsOf(await search(text, year, true), year, normalizeBrand(brand)));
-    const j = judge(step1, m, "search");
+    const j = judge(step1, m, false);
     if (j.sure) return done(j, j.candidates);
     if (halted()) break;
   }
-  const step1Judged = judge(step1, m, "search");
+  const step1Judged = judge(step1, m, false);
 
   // ---- Step 2: checklist and close spelling, at most 2 sets.
   const fetched: FetchedSet[] = [];
@@ -352,7 +347,7 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
         set = memory.get(setId);
       }
     }
-    if (set) fetched.push({ target: t, cards: set.cards, complete: set.complete });
+    if (set) fetched.push({ target: t, rows: set.rows, complete: set.complete });
   }
   if (fetched.length > 0) return decide(fetched, fetched.length === targets.length, false, step1Judged.candidates);
   return done(nothing, mergeCandidates(step1Judged.candidates, noiseCandidates()));

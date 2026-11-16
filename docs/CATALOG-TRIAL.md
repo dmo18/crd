@@ -157,12 +157,12 @@ Nine real calls by hand (limit was 40), one per 2.5 seconds, User-Agent `CardVau
 - Search `limit` 50 took up to 7 seconds once (6,961 ms) and answered 32 KB. Plan for the 5 s timeout failing sometimes on big limits; use small limits.
 - New recordings in `tests/fixtures/catalog/`: `checklist_9179_first500.json`, `search_1990_topps_sets.json`, `search_1990_topps_650.json`, `search_1990_topps_792.json`.
 
-## Confirm search recordings (task 10.6c, 2026-11-16)
+## Confirm search recordings (task 10.6c, 2026-11-16; the confirm search was removed in 10.6d)
 
 Two real calls by hand (limit was 4), 2.5 seconds apart, User-Agent `CardVault/0.1.0`, script `scripts/catalog-probe.mjs`, asked exactly as the app asks (limit 10, sport Baseball, year 1990).
 
-- "1990 Topps Ozzie Smith": 10 rows. In set 9179 his plain card #590 (`551287`) and the All-Star card #400 ("OZZIE SMITH AS"); the rest are Tiffany #590, other Topps products and one eBay listing. So the confirm search gives #590, never #400. Recording: `search_1990_topps_ozzie_smith.json`.
-- "1990 Topps Ken Griffey Jr.": 10 rows. In set 9179 only #336 (`551033`); the rest are Tiffany #336, other Topps products and two eBay listings. Recording: `search_1990_topps_griffey_jr_confirm.json`.
+- "1990 Topps Ozzie Smith": 10 rows. In set 9179 his plain card #590 (`551287`) and the All-Star card #400 ("OZZIE SMITH AS"); the rest are Tiffany #590, other Topps products and one eBay listing. So the confirm search gave #590, never #400. Recording: `search_1990_topps_ozzie_smith.json` (kept in 10.6d as a step 1 answer).
+- "1990 Topps Ken Griffey Jr.": 10 rows. In set 9179 only #336 (`551033`); the rest are Tiffany #336, other Topps products and two eBay listings. The recording was removed in 10.6d (the confirm search is gone; nothing used it).
 - Both answers were full (10 of limit 10), so a player with many rows in one year could have a card that is not shown.
 
 ## Open points for the next tasks

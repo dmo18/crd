@@ -22,9 +22,21 @@ export type NameParts = {
 const SUFFIXES: readonly Suffix[] = ["jr", "sr", "ii", "iii", "iv"];
 const MAX_NAME = 80;
 
-/** Lowercase, no accents, no punctuation, "jr" and "sr" set apart. Null when there is no usable surname. */
+/**
+ * Bracketed qualifiers ("Dave Johnson (P)", "Jeff Robinson (Texas)") say which
+ * of two players is meant; they are not part of the name. A bracket left open
+ * at the edge of the card is dropped to the end.
+ */
+export function dropQualifiers(raw: string): string {
+  return raw.replace(/[([{][^)\]}]*(?:[)\]}]|$)/g, " ");
+}
+
+/**
+ * Lowercase, no accents, no punctuation, bracketed qualifiers dropped, "jr"
+ * and "sr" set apart. Null when there is no usable surname.
+ */
 export function parseName(raw: string | null | undefined): NameParts | null {
-  const tokens = normalizeName(String(raw ?? "").slice(0, MAX_NAME)).split(" ").filter(Boolean);
+  const tokens = normalizeName(dropQualifiers(String(raw ?? "").slice(0, MAX_NAME))).split(" ").filter(Boolean);
   let suffix: Suffix | null = null;
   let suffixCut: NameParts["suffixCut"] = null;
   const last = tokens[tokens.length - 1];
@@ -58,6 +70,8 @@ function subCost(a: string, b: string): number {
   return ga !== undefined && ga === MIXUP_OF.get(b) ? 0.5 : 1;
 }
 
+let ROWS: Float64Array[] = [0, 1, 2].map(() => new Float64Array(MAX_NAME + 1));
+
 /**
  * Edit distance where a swap of two neighbours counts 1, the reading mix-ups
  * (l, I and 1; O and 0; S and 5; B and 8; rn and m) count one half and
@@ -70,9 +84,10 @@ export function editDistance(a: string, b: string, max: number): number {
   const lb = b.length;
   // Each letter of length difference costs at least one half (rn and m).
   if (Math.abs(la - lb) * 0.5 > max) return Infinity;
-  let prev2 = new Float64Array(lb + 1);
-  let prev = new Float64Array(lb + 1);
-  let cur = new Float64Array(lb + 1);
+  // Three rows reused between calls (names are at most MAX_NAME letters): no allocation per pair.
+  if (lb + 1 > ROWS[0].length) ROWS = [0, 1, 2].map(() => new Float64Array(lb + 1));
+  let [prev2, prev, cur] = ROWS;
+  prev2.fill(0, 0, lb + 1);
   for (let j = 0; j <= lb; j++) prev[j] = j;
   for (let i = 1; i <= la; i++) {
     cur[0] = i;
@@ -178,14 +193,16 @@ export type SlimRow = {
   card: CatalogCard;
   number: string | null;
   names: NameParts[];
-  /** The player's name as a key, to tell two cards of one player from two players. */
+  /**
+   * The player as parsed first name, surname and suffix ("dave|johnson|"), to
+   * tell two cards of one player from two players. Empty when the name has no
+   * usable surname.
+   */
   playerKey: string;
   /** A variation (Tiffany or any other), an insert set or an unverified listing: never applied by the app. */
   special: boolean;
-  /** All-Star, Record Breaker, Checklist and the like: applied only when the read number agrees. */
+  /** All-Star, Record Breaker, Checklist and the like: never applied, a candidate only. */
   subset: boolean;
-  /** The subset words are part of the name itself ("Nolan Ryan Salute-New York Mets"): not a player's name to search for. */
-  subsetInName: boolean;
 };
 
 const MAX_ROW_NAMES = 4;
@@ -205,9 +222,14 @@ export function isSpecial(card: CatalogCard): boolean {
   return card.tags.some((t) => VARIATION_TAGS.includes(t));
 }
 
-/** A subset card of the base set (or a card of several players): a candidate only, unless the read number agrees. */
+/** A subset card of the base set (or a card of several players): a candidate only, never applied. */
 export function isSubset(card: CatalogCard): boolean {
   return card.otherPlayers.length > 0 || card.tags.some((t) => SUBSET_TAGS.includes(t)) || SUBSET_WORDS.test(card.player ?? "");
+}
+
+/** The player as parsed first name, surname and suffix. */
+export function playerKeyOf(name: NameParts | null): string {
+  return name ? `${name.first ?? ""}|${name.surname}|${name.suffix ?? ""}` : "";
 }
 
 export function slimRow(card: CatalogCard): SlimRow {
@@ -217,8 +239,8 @@ export function slimRow(card: CatalogCard): SlimRow {
     if (p) names.push(p);
   }
   return {
-    card, number: card.cardNumber, names, playerKey: normalizeName(card.player ?? ""),
-    special: isSpecial(card), subset: isSubset(card), subsetInName: SUBSET_WORDS.test(card.player ?? ""),
+    card, number: card.cardNumber, names, playerKey: playerKeyOf(parseName(card.player)),
+    special: isSpecial(card), subset: isSubset(card),
   };
 }
 
@@ -313,29 +335,28 @@ function toCandidate(s: Scored): Candidate {
 
 export type Judgement = {
   sure: Candidate | null;
-  /** "number": number and name agree. "name": applied without a read number. */
+  /** "number": number and name agree. "name": the one player of a complete set, applied without a read number. */
   sureBy: "number" | "name" | null;
   candidates: Candidate[];
-  /**
-   * Only for a set that was cut short: the card whose player's name was found
-   * and must be confirmed by one exact search before anything is applied.
-   */
-  confirm: CatalogCard | null;
 };
 
 export const MAX_CANDIDATES = 5;
 
 /**
- * What the pool of rows is:
- * - "search": a search answer, never a whole set. Only number and name together make a sure card.
- * - "complete": whole sets, so "no other card fits" can be checked.
- * - "partial": a checklist cut short (the source sends at most 500 cards).
- *   Nothing is sure by name here; a name that stands alone in the part we
- *   have is handed back as `confirm`.
+ * Judges a pool of rows. `wholeSet`: the pool holds whole sets (every
+ * checklist complete), so "no other player fits" can be checked. A search
+ * answer or a checklist cut short (the source sends at most 500 cards) is
+ * never a whole set.
+ *
+ * A card is sure ONLY when
+ * (a) the read number and the name agree with exactly one clean card that is
+ *     not a subset card and not a variation, or
+ * (b) no number was read, the pool is a whole set, exactly one player in it
+ *     fits the read name (first name, surname and suffix compared on parsed
+ *     names), and that player has exactly one plain card there.
+ * Everything else is a ranked candidate for Review.
  */
-export type PoolKind = "search" | "complete" | "partial";
-
-export function judge(rows: readonly SlimRow[], read: MatchRead, kind: PoolKind): Judgement {
+export function judge(rows: readonly SlimRow[], read: MatchRead, wholeSet: boolean): Judgement {
   const scored: Scored[] = [];
   const seen = new Set<string>();
   rows.forEach((row, i) => {
@@ -353,72 +374,32 @@ export function judge(rows: readonly SlimRow[], read: MatchRead, kind: PoolKind)
     return x.order - y.order;
   });
   const candidates = keep.slice(0, MAX_CANDIDATES).map(toCandidate);
-  // A variation, an insert or a listing is never applied.
-  const plain = scored.filter((s) => s.row.card.verified && !s.row.special);
+  const verified = scored.filter((s) => s.row.card.verified);
+  // Only a clean base card is ever applied: no variation, insert, listing or subset card.
+  const plain = verified.filter((s) => !s.row.special && !s.row.subset);
   let sure: Scored | null = null;
   let sureBy: Judgement["sureBy"] = null;
-  let confirm: CatalogCard | null = null;
 
   if (read.number) {
     // A read number that disagrees with the best name match is never overwritten.
-    // With the number, a subset card (All-Star and the like) can be the sure card.
     const both = plain.filter((s) => s.fits && s.numberAgrees);
     if (both.length === 1) {
       sure = both[0];
       sureBy = "number";
     }
-  } else if (kind !== "search") {
-    const fitting = plain
-      .filter((s) => s.fits)
-      .sort((x, y) => x.distance - y.distance || Number(x.row.subset) - Number(y.row.subset) || x.order - y.order);
+  } else if (wholeSet) {
+    const fitting = verified.filter((s) => s.fits).sort((x, y) => x.distance - y.distance || x.order - y.order);
     const best = fitting[0];
-    if (best) {
+    if (best && best.row.playerKey) {
       const player = best.row.playerKey;
       // Another player who fits too (exact name), or comes within one more edit (close name).
-      const rival = plain.some((s) => s.row.playerKey !== player && (best.distance === 0 ? s.fits : s.distance <= best.distance + 1));
-      // The player's own plain cards: a subset card is never the one applied without its number.
-      const base = fitting.filter((s) => s.row.playerKey === player && !s.row.subset);
-      if (!rival && kind === "complete") {
-        if (base.length === 1) {
-          sure = base[0];
-          sureBy = "name";
-        }
-      } else if (!rival && base.length <= 1) {
-        // Cut short: the cards we cannot see may hold the same surname. An
-        // initial (or no first name) does not pick one player when the part
-        // we do see already has others of that surname.
-        const sharedSurname = best.firstRead !== "full" && plain.some((s) => s.row.playerKey !== player && s.surnameFits);
-        const named = base[0] ?? fitting.find((s) => s.row.playerKey === player && !s.row.subsetInName);
-        if (!sharedSurname && named) confirm = named.row.card;
+      const rival = verified.some((s) => s.row.playerKey !== player && (best.distance === 0 ? s.fits : s.distance <= best.distance + 1));
+      const base = plain.filter((s) => s.fits && s.row.playerKey === player);
+      if (!rival && base.length === 1) {
+        sure = base[0];
+        sureBy = "name";
       }
     }
   }
-  return { sure: sure ? toCandidate(sure) : null, sureBy, candidates, confirm };
-}
-
-/**
- * The answer of the one confirm search ("year brand full corrected name")
- * for a name found in a checklist that was cut short. Sure only when it shows
- * exactly one clean card of that player in that set that is not a subset, a
- * variation or an insert, and its number does not disagree with a read one.
- * `rows`: the clean rows of the answer, already of the right year, brand and sport.
- */
-export function judgeConfirm(rows: readonly SlimRow[], target: CatalogCard, read: MatchRead): { sure: Candidate | null; candidates: Candidate[] } {
-  const player = normalizeName(target.player ?? "");
-  const seen = new Set<string>();
-  const scored: Scored[] = [];
-  rows.forEach((row, i) => {
-    if (!row.card.verified || row.playerKey !== player || !player || seen.has(row.card.sourceId)) return;
-    seen.add(row.card.sourceId);
-    scored.push(scoreRow(row, read, i));
-  });
-  const inSet = scored.filter((s) => target.sourceSetId !== null && s.row.card.sourceSetId === target.sourceSetId);
-  const base = inSet.filter((s) => !s.row.special && !s.row.subset && s.fits);
-  const one = base.length === 1 && !(read.number && base[0].row.number !== read.number) ? base[0] : null;
-  const candidates = [...inSet, ...scored.filter((s) => !inSet.includes(s))]
-    .filter((s) => s.tier > 0)
-    .sort((x, y) => Number(inSet.includes(y)) - Number(inSet.includes(x)) || Number(x.row.special) - Number(y.row.special) || Number(x.row.subset) - Number(y.row.subset) || x.order - y.order)
-    .slice(0, MAX_CANDIDATES)
-    .map(toCandidate);
-  return { sure: one ? toCandidate(one) : null, candidates };
+  return { sure: sure ? toCandidate(sure) : null, sureBy, candidates };
 }

@@ -30,8 +30,6 @@ const RECORDED: Record<string, CatalogCard[]> = {
   "1986 fleer michael jordan": searchRec("search_1986_fleer_jordan_noisy.json"),
   "1990 topps ozzie smith": searchRec("search_1990_topps_ozzie_smith.json"),
 };
-/** The same words as asked by the app (limit 10, sport, year): Tiffany and other products come back too. */
-const GRIFFEY_CONFIRM = searchRec("search_1990_topps_griffey_jr_confirm.json");
 const CHECKLIST_CARDS = (CHECKLIST as { cards: CatalogCard[] }).cards;
 const BASEBALL_1990_TOPPS = "baseball|1990|topps";
 
@@ -113,17 +111,16 @@ describe("lookupCard on recorded answers", () => {
     expect(r.candidates.map((c) => c.sourceId)).not.toContain("551885");
   });
 
-  it("name only, number cut off: the checklist of the base set from step 1 finds the name, the exact search confirms it", async () => {
+  it("name only, number cut off: step 1 and the checklist find #336, but a cut-short checklist never makes it sure", async () => {
     const { catalog, o } = setup();
     const r = await lookupCard(read({ names: ["Ken Griffey Jr."] }), "background", o);
-    expect(r.sure?.sourceId).toBe("551033");
-    expect(r.sureBy).toBe("name");
-    // The confirm search has the same words as step 1's first search: asked once.
+    expect(r).toMatchObject({ sure: null, sureBy: null });
+    expect(r.candidates[0].sourceId).toBe("551033");
     expect(catalog.log()).toEqual(["search:1990 Topps Ken Griffey Jr.", "search:1990 Topps Griffey", "checklist:9179"]);
-    expect(lookupConfidence(r, 0.4)).toBe(CHECK_CONFIDENCE);
+    expect(lookupConfidence(r, 0.4)).toBe(0.4);
   });
 
-  it('"1990 Topps Eriffey" finds #336 through the checklist plus the confirm search; the next card of the set costs no call', async () => {
+  it('"1990 Topps Eriffey" finds #336 in the checklist as the top candidate; the next card of the set costs no call', async () => {
     const { catalog, scan, o } = setup();
     // An earlier card of the scan: found by its number, which teaches the base set id.
     const witt = await lookupCard(read({ names: ["Mike Witt"], cardNumber: "650" }), "background", o);
@@ -132,27 +129,27 @@ describe("lookupCard on recorded answers", () => {
 
     const before = catalog.count();
     const eriffey = await lookupCard(read({ names: ["Eriffey"] }), "background", o);
-    expect(eriffey.sure?.sourceId).toBe("551033");
-    expect(eriffey.sure?.cardNumber).toBe("336");
-    expect(catalog.calls.slice(before).map((c) => `${c.tool}:${c.arg}`)).toEqual(["search:1990 Topps Eriffey", "checklist:9179", "search:1990 Topps Ken Griffey Jr."]);
-    expect(eriffey.callsUsed).toBe(3);
-    expect(eriffey.sureBy).toBe("name");
+    expect(eriffey.sure).toBeNull();
+    expect(eriffey.candidates[0]).toMatchObject({ sourceId: "551033", cardNumber: "336" });
+    expect(catalog.calls.slice(before).map((c) => `${c.tool}:${c.arg}`)).toEqual(["search:1990 Topps Eriffey", "checklist:9179"]);
+    expect(eriffey.callsUsed).toBe(2);
 
     const used = scan.used;
     const third = await lookupCard(read({ names: ["Ken Griffey, J"] }), "background", o);
-    expect(third.sure?.sourceId).toBe("551033");
+    expect(third.sure).toBeNull();
+    expect(third.candidates[0].sourceId).toBe("551033");
     expect(third.callsUsed).toBe(0);
     expect(scan.used).toBe(used);
   });
 
-  it('"1990 Topps Eriffey" alone, on a cold start: "1990 Topps 1" (limit 5) teaches the set id, the checklist finds the name, one search confirms #336', async () => {
+  it('"1990 Topps Eriffey" alone, on a cold start: "1990 Topps 1" (limit 5) teaches the set id, the checklist gives #336 as the top candidate', async () => {
     const { catalog, scan, o } = setup();
     const r = await lookupCard(read({ names: ["Eriffey"] }), "background", o);
-    expect(r.sure?.sourceId).toBe("551033");
-    expect(r.sure?.cardNumber).toBe("336");
-    expect(catalog.calls.map((c) => `${c.tool}:${c.arg}`)).toEqual(["search:1990 Topps Eriffey", "search:1990 Topps 1", "checklist:9179", "search:1990 Topps Ken Griffey Jr."]);
-    expect(catalog.limits).toEqual([10, 5, 10]);
-    expect(r.callsUsed).toBe(4);
+    expect(r.sure).toBeNull();
+    expect(r.candidates[0]).toMatchObject({ sourceId: "551033", cardNumber: "336" });
+    expect(catalog.calls.map((c) => `${c.tool}:${c.arg}`)).toEqual(["search:1990 Topps Eriffey", "search:1990 Topps 1", "checklist:9179"]);
+    expect(catalog.limits).toEqual([10, 5]);
+    expect(r.callsUsed).toBe(3);
     // Learned for the rest of the scan; the Tiffany card #128 in that answer (set 9181) taught nothing.
     expect([...scan.setIds]).toEqual([[BASEBALL_1990_TOPPS, "9179"]]);
   });
@@ -169,10 +166,11 @@ describe("lookupCard on recorded answers", () => {
     expect(catalog.limits).toEqual([10, 5, 5]);
     expect(scan.setIds.size).toBe(0);
     // "year brand 2" with a clean Base Set card is enough.
-    const second = setup({ searches: { "1990 topps 2": recorded, "1990 topps ken griffey jr.": GRIFFEY_CONFIRM } });
+    const second = setup({ searches: { "1990 topps 2": recorded } });
     const found = await lookupCard(read({ names: ["Eriffey"] }), "background", second.o);
-    expect(found.sure?.sourceId).toBe("551033");
-    expect(second.catalog.calls.map((c) => c.arg)).toEqual(["1990 Topps Eriffey", "1990 Topps 1", "1990 Topps 2", "9179", "1990 Topps Ken Griffey Jr."]);
+    expect(found.sure).toBeNull();
+    expect(found.candidates[0].sourceId).toBe("551033");
+    expect(second.catalog.calls.map((c) => c.arg)).toEqual(["1990 Topps Eriffey", "1990 Topps 1", "1990 Topps 2", "9179"]);
   });
 
   it("a set id is taken only from the url of a clean Base Set card", async () => {
@@ -219,32 +217,30 @@ describe("lookupCard on recorded answers", () => {
 describe("review probes: checklist 9179 (first 500 of 792) in memory, no number read", () => {
   const ozzie = RECORDED["1990 topps ozzie smith"];
 
-  it("the recorded confirm answer for Ozzie Smith holds his plain card #590 and the All-Star #400", () => {
+  it("the recorded answer for Ozzie Smith holds his plain card #590 and the All-Star #400", () => {
     const mine = ozzie.filter((c) => c.sourceSetId === "9179").map((c) => `${c.cardNumber}:${c.tags.join()}`);
     expect(mine.sort()).toEqual(["400:AS", "590:"]);
     expect(CHECKLIST_CARDS.some((c) => c.cardNumber === "590")).toBe(false);
   });
 
   for (const name of ["Ozzie Smith", "Ozzie Srnith", "0zzie Smith"]) {
-    it(`"${name}" is never the All-Star #400: the one confirm search gives his plain card #590`, async () => {
+    it(`"${name}" is not sure, never the All-Star #400 as sure, and costs no call`, async () => {
       const { catalog, o } = withChecklist();
       const r = await lookupCard(read({ names: [name] }), "background", o);
-      expect(r.sure?.cardNumber).not.toBe("400");
-      expect(r.sure).toMatchObject({ sourceId: "551287", cardNumber: "590", variation: null });
-      expect(r.sureBy).toBe("name");
-      expect(lookupConfidence(r, 0.4)).toBe(CHECK_CONFIDENCE);
-      expect(catalog.log()).toEqual(["search:1990 Topps Ozzie Smith"]);
-      expect(r.callsUsed).toBe(1);
-      expect(r.candidates.map((c) => c.cardNumber)).toEqual(expect.arrayContaining(["590", "400"]));
-    });
-    it(`"${name}" with a confirm search that finds nothing: no sure card, #400 is only a candidate`, async () => {
-      const { catalog, o } = withChecklist({ searches: {} });
-      const r = await lookupCard(read({ names: [name] }), "background", o);
-      expect(r.sure).toBeNull();
-      expect(r.candidates.map((c) => c.cardNumber)).toContain("400");
-      expect(catalog.count()).toBe(1);
+      expect(r).toMatchObject({ sure: null, sureBy: null, callsUsed: 0 });
+      expect(catalog.count()).toBe(0);
+      expect(r.candidates[0]).toMatchObject({ cardNumber: "400" });
+      expect(lookupConfidence(r, 0.4)).toBe(0.4);
     });
   }
+  it('cold start "Ozzie Smith": the step 1 answer shows #590 and the All-Star #400, but without the number neither is sure', async () => {
+    const { o } = setup();
+    const r = await lookupCard(read({ names: ["Ozzie Smith"] }), "background", o);
+    expect(r.sure).toBeNull();
+    expect(r.candidates.map((c) => c.cardNumber)).toEqual(expect.arrayContaining(["590", "400"]));
+    const numbered = await lookupCard(read({ names: ["Ozzie Smith"], cardNumber: "590" }), "background", setup().o);
+    expect(numbered).toMatchObject({ sure: { sourceId: "551287", cardNumber: "590", variation: null }, sureBy: "number" });
+  });
 
   for (const [name, wrong] of [["O Smith", "400"], ["D Smith", "311"], ["D Martinez", "228"], ["D Mart", "228"], ["Mets", "2"], ["Ken Anderson", "16"]] as const) {
     it(`"${name}" is not sure (not #${wrong}) and costs no call at all`, async () => {
@@ -265,56 +261,34 @@ describe("review probes: checklist 9179 (first 500 of 792) in memory, no number 
     expect((await lookupCard(read({ names: ["D Martinez"] }), "background", o)).candidates.map((c) => c.cardNumber)).toContain("228");
   });
 
-  for (const name of ["Ken Griffey", "Griffey", "Griff", "Ken Griff"]) {
-    it(`"${name}" (no Jr.): #336 only when the confirm search shows exactly one clean base card`, async () => {
-      // Nothing comes back from the confirm search: not sure.
-      const none = withChecklist({ searches: {} });
-      const a = await lookupCard(read({ names: [name] }), "background", none.o);
-      expect(a.sure).toBeNull();
-      expect(a.candidates[0].sourceId).toBe("551033");
-      expect(none.catalog.log()).toEqual(["search:1990 Topps Ken Griffey Jr."]);
-
-      // Two clean base cards of that name in the set: not sure, a top candidate in Review.
-      const twin: CatalogCard = { ...(CHECKLIST_CARDS.find((c) => c.sourceId === "551033") as CatalogCard), sourceId: "551990", cardNumber: "700" };
-      const two = withChecklist({ searches: { "1990 topps ken griffey jr.": [...GRIFFEY_CONFIRM, twin] } });
-      const b = await lookupCard(read({ names: [name] }), "background", two.o);
-      expect(b.sure).toBeNull();
-      expect(b.candidates.map((c) => c.sourceId).slice(0, 2)).toEqual(["551033", "551990"]);
-
-      // Only the Tiffany card comes back: a variation is never sure.
-      const tiffany = withChecklist({ searches: { "1990 topps ken griffey jr.": GRIFFEY_CONFIRM.filter((c) => c.variation === "Tiffany") } });
-      expect((await lookupCard(read({ names: [name] }), "background", tiffany.o)).sure).toBeNull();
-
-      // The recorded answer: exactly one clean base card, #336.
-      const one = withChecklist({ searches: { "1990 topps ken griffey jr.": GRIFFEY_CONFIRM } });
-      const c = await lookupCard(read({ names: [name] }), "background", one.o);
-      expect(c.sure).toMatchObject({ sourceId: "551033", cardNumber: "336" });
-      expect(c.sureBy).toBe("name");
-      expect(one.catalog.log()).toEqual(["search:1990 Topps Ken Griffey Jr."]);
-      expect(c.callsUsed).toBe(1);
-    });
-  }
-
-  it('Griffey target: "Ken Griffey, J" reaches #336 through the checklist plus the confirm search, and waits in Review', async () => {
-    const { catalog, o } = withChecklist({ searches: { "1990 topps ken griffey jr.": GRIFFEY_CONFIRM } });
-    const r = await lookupCard(read({ names: ["Ken Griffey, J"] }), "background", o);
-    expect(r.sure?.sourceId).toBe("551033");
-    expect(lookupConfidence(r, 0.4)).toBe(CHECK_CONFIDENCE);
-    expect(catalog.log()).toEqual(["search:1990 Topps Ken Griffey Jr."]);
+  it('Griffey target: "Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr." with no number are not sure, #336 is the top candidate, no call', async () => {
+    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr.", "Griff", "Ken Griff"]) {
+      // Every search would answer with #336 itself, to prove no search is made or trusted.
+      const { catalog, o } = withChecklist({ everySearch: () => CHECKLIST_CARDS.filter((c) => c.cardNumber === "336") });
+      const r = await lookupCard(read({ names: [name] }), "background", o);
+      expect(r, name).toMatchObject({ sure: null, sureBy: null, callsUsed: 0 });
+      expect(r.candidates[0]?.sourceId, name).toBe("551033");
+      expect(catalog.count(), name).toBe(0);
+      expect(lookupConfidence(r, 0.4)).toBe(0.4);
+    }
   });
 
-  it("a whole checklist in memory that gave no sure card: no more searches, except the single confirm search", async () => {
-    for (const names of [["Xavier Nobody"], ["Smith"], ["D Smith", "O Smith"], ["Rickey Henderson"], ["Nolan Ryan Salute"], ["Checklist 1"]]) {
+  it("with the number 336 read and the name agreeing, #336 is sure by number from the checklist, no call", async () => {
+    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr.", "Eriffey"]) {
       const { catalog, o } = withChecklist();
+      const r = await lookupCard(read({ names: [name], cardNumber: "336" }), "background", o);
+      expect(r, name).toMatchObject({ sure: { sourceId: "551033", cardNumber: "336" }, sureBy: "number", callsUsed: 0 });
+      expect(lookupConfidence(r, 0.4)).toBe(REVIEW_THRESHOLD);
+      expect(catalog.count()).toBe(0);
+    }
+  });
+
+  it("a checklist in memory that gave no sure card: no more searches at all", async () => {
+    for (const names of [["Xavier Nobody"], ["Smith"], ["D Smith", "O Smith"], ["Rickey Henderson"], ["Nolan Ryan Salute"], ["Checklist 1"], ["Ozzie Smith"], ["Ken Griffey"], ["Dave Johnson"]]) {
+      const { catalog, o } = withChecklist({ searches: RECORDED });
       const r = await lookupCard(read({ names }), "background", o);
       expect(r.sure, names.join()).toBeNull();
       expect(catalog.count(), names.join()).toBe(0);
-    }
-    // A name that stands alone: exactly one search, whatever it answers.
-    for (const searches of [{}, RECORDED]) {
-      const { catalog, o } = withChecklist({ searches });
-      await lookupCard(read({ names: ["Ozzie Smith"] }), "background", o);
-      expect(catalog.log()).toEqual(["search:1990 Topps Ozzie Smith"]);
     }
     // A read number in the checklist that disagrees with the name: nothing is asked.
     const { catalog, o } = withChecklist();
@@ -323,28 +297,54 @@ describe("review probes: checklist 9179 (first 500 of 792) in memory, no number 
     expect(catalog.count()).toBe(0);
   });
 
-  it("with the read number the checklist alone is enough: sure by number, no call (a subset card too)", async () => {
+  it("with the read number the checklist alone is enough: sure by number, no call (a subset card stays a candidate)", async () => {
     const { catalog, o } = withChecklist();
     const as = await lookupCard(read({ names: ["Ozzie Smith"], cardNumber: "400" }), "background", o);
-    expect(as).toMatchObject({ sure: { cardNumber: "400" }, sureBy: "number", callsUsed: 0 });
+    expect(as).toMatchObject({ sure: null, callsUsed: 0 });
+    expect(as.candidates[0].cardNumber).toBe("400");
     const dwight = await lookupCard(read({ names: ["D Smith"], cardNumber: "311" }), "background", o);
     expect(dwight).toMatchObject({ sure: { cardNumber: "311" }, sureBy: "number", callsUsed: 0 });
     expect(catalog.count()).toBe(0);
   });
 });
 
-describe("a complete checklist needs no confirm search", () => {
-  it("the one fitting name of a whole set is sure by name without any search", async () => {
-    const { catalog, scan, o } = setup();
-    scan.memory.put("9179", BASEBALL_1990_TOPPS, CHECKLIST_CARDS, true);
-    scan.setIds.set(BASEBALL_1990_TOPPS, "9179");
+describe("a complete checklist (complete: true)", () => {
+  function complete(cards: CatalogCard[]) {
+    const s = setup();
+    s.scan.memory.put("9179", BASEBALL_1990_TOPPS, cards, true);
+    s.scan.setIds.set(BASEBALL_1990_TOPPS, "9179");
+    return s;
+  }
+  it("exactly one player who fits: sure by name without any search, and it waits in Review", async () => {
+    const { catalog, o } = complete(CHECKLIST_CARDS);
     const r = await lookupCard(read({ names: ["Eriffey"] }), "background", o);
     expect(r).toMatchObject({ sure: { sourceId: "551033" }, sureBy: "name", callsUsed: 0 });
+    expect(lookupConfidence(r, 0.4)).toBe(CHECK_CONFIDENCE);
     const d = await lookupCard(read({ names: ["D Smith"] }), "background", o);
     expect(d.sure?.cardNumber).toBe("311");
     // Ozzie Smith has only his All-Star card in these rows: a candidate, not sure.
     expect((await lookupCard(read({ names: ["Ozzie Smith"] }), "background", o)).sure).toBeNull();
     expect(catalog.count()).toBe(0);
+  });
+  it('"Dave Johnson" with no number is not sure: #291 (manager) and #416 "Dave Johnson (P)" both fit', async () => {
+    const { catalog, o } = complete(CHECKLIST_CARDS);
+    const r = await lookupCard(read({ names: ["Dave Johnson"] }), "background", o);
+    expect(r).toMatchObject({ sure: null, sureBy: null, callsUsed: 0 });
+    expect(r.candidates.map((c) => c.cardNumber).slice(0, 2).sort()).toEqual(["291", "416"]);
+    expect(catalog.count()).toBe(0);
+  });
+  it('"Jeff Robinson" with no number is not sure when #42 "Jeff M. Robinson" and #723 "Jeff D. Robinson" are both in the set', async () => {
+    const jeffM = CHECKLIST_CARDS.find((c) => c.cardNumber === "42") as CatalogCard;
+    const jeffD: CatalogCard = { ...jeffM, sourceId: "999723", cardNumber: "723", player: "Jeff D. Robinson", url: "https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/723-jeff-d-robinson-999723" };
+    for (const whole of [true, false]) {
+      const s = setup();
+      s.scan.memory.put("9179", BASEBALL_1990_TOPPS, [...CHECKLIST_CARDS, jeffD], whole);
+      s.scan.setIds.set(BASEBALL_1990_TOPPS, "9179");
+      const r = await lookupCard(read({ names: ["Jeff Robinson"] }), "background", s.o);
+      expect(r.sure, String(whole)).toBeNull();
+      expect(r.candidates.map((c) => c.cardNumber)).toEqual(expect.arrayContaining(["42", "723"]));
+      expect(s.catalog.count()).toBe(0);
+    }
   });
 });
 
@@ -495,7 +495,7 @@ describe("budgets and stops", () => {
   });
   it("stored answers do not count", async () => {
     const { scan, o } = setup({ fromStore: true });
-    const r = await lookupCard(read({ names: ["Ken Griffey Jr."] }), "background", o);
+    const r = await lookupCard(read({ names: ["Ken Griffey Jr."], cardNumber: "336" }), "background", o);
     expect(r.sure?.sourceId).toBe("551033");
     expect(r.callsUsed).toBe(0);
     expect(scan.used).toBe(0);
@@ -535,7 +535,7 @@ describe("budgets and stops", () => {
   it("catalog calls from a scan may try at most twice (one retry), and never more often than the budget allows", async () => {
     const { catalog, o } = setup();
     await lookupCard(read({ names: ["Eriffey"] }), "background", o);
-    expect(catalog.maxTries).toEqual([2, 2, 2, 2]);
+    expect(catalog.maxTries).toEqual([2, 2, 2]);
 
     const last = setup();
     last.scan.used = 39;
@@ -569,12 +569,12 @@ describe("budgets and stops", () => {
     const fresh = setup();
     expect((await lookupCard(read({ names: ["Ken Griffey Jr."], cardNumber: "336" }), "background", fresh.o)).sure?.sourceId).toBe("551033");
   });
-  it("a busy answer in the middle of a checklist card: the confirm search is not made and nothing is sure", async () => {
+  it("a busy answer on a card past the cut of a checklist in memory: nothing is sure and the scan makes no more calls", async () => {
     const { catalog, o } = withChecklist({ fail: "busy" });
-    const r = await lookupCard(read({ names: ["Ozzie Smith"] }), "background", o);
+    const r = await lookupCard(read({ names: ["Gerald Perry"], cardNumber: "792" }), "background", o);
     expect(r).toMatchObject({ sure: null, stopped: "busy" });
     expect(catalog.count()).toBe(1);
-    await lookupCard(read({ names: ["Ken Griffey, J"] }), "background", o);
+    await lookupCard(read({ names: ["Mike Witt"], cardNumber: "650" }), "background", o);
     expect(catalog.count()).toBe(1);
   });
   it("a failed call is counted and the look up goes on to the next step", async () => {
@@ -583,5 +583,30 @@ describe("budgets and stops", () => {
     expect(r.sure).toBeNull();
     expect(r.callsUsed).toBe(catalog.count());
     expect(catalog.count()).toBeGreaterThan(1);
+  });
+});
+
+describe("speed on this server", () => {
+  it("a full look up on an 800 row checklist in memory with 5 spellings: under 20 ms", async () => {
+    const more = CHECKLIST_CARDS.slice(0, 300).map((c, i) => ({ ...c, sourceId: `9${i}`, cardNumber: String(501 + i), player: `${c.player ?? "Joe Smith"}son` }));
+    const s = setup();
+    // Parsed once for the scan, when the checklist is kept.
+    const t0 = performance.now();
+    s.scan.memory.put("9179", BASEBALL_1990_TOPPS, [...CHECKLIST_CARDS, ...more], true);
+    const prep = performance.now() - t0;
+    s.scan.setIds.set(BASEBALL_1990_TOPPS, "9179");
+    const names = ["Eriffey", "Ken Griffey, J", "KEN GRIFFEY JR", "K Grifey", "Griffcy"];
+    await lookupCard(read({ names }), "background", s.o);
+    const runs: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const t = performance.now();
+      const r = await lookupCard(read({ names }), "background", s.o);
+      runs.push(performance.now() - t);
+      expect(r.callsUsed).toBe(0);
+    }
+    const ms = [...runs].sort((a, b) => a - b)[3];
+    console.log(`lookup timing: slim rows for 800 cards ${prep.toFixed(2)} ms, full look up 800 x 5 spellings ${ms.toFixed(2)} ms`);
+    expect(s.catalog.count()).toBe(0);
+    expect(ms).toBeLessThan(20);
   });
 });
