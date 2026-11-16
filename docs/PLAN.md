@@ -860,3 +860,720 @@ owner says the live version is good (finished parts go to `live`).
    Recommended: yes. Reading then goes on by itself, page open or not.
 
 Run cap: 19 tasks or 4.5M delegated tokens.
+
+## Milestone 10: the card catalog (approved 2026-11-16 as part of the roadmap)
+
+What the owner can try when it is live: search any card by words and add
+it; add a card by hand; after a scan, pick the right card from a short list
+in Review; see in "More, Connections" which outside sources the app uses,
+test them, and see how many calls were made.
+
+Source of the facts below: `docs/CATALOG-TRIAL.md` (task 10.1, done, verdict
+GO with conditions) and `docs/ROADMAP.md` ("Owner answers", "Part C status",
+section 3).
+
+Rules for every task in this milestone: CLAUDE.md, the security rules above,
+`npm run check` and `npm run build` pass, no new dependency, no paid keys,
+tests never touch the network (recorded answers in `tests/fixtures/catalog/`
+or fakes), screens work at 360px with 44px tap targets, no em or en dashes.
+A builder who meets a choice not settled here stops and reports back.
+"Review" in a task means a fresh reviewer who did not write the code. Every
+task that touches keys, outside calls or the database layout gets one.
+
+Not in this milestone (Milestone 11 or later, do not start): the "Which
+version is it?" picker, serial number split, rookie mark with source, photo
+rotate and crop, the new duplicate check on the canonical key, the full
+"Data sources" page, sold prices, set progress.
+
+One go live at the end (task 10.11), on the Milestone 9 way: merge into
+`live`, push, Coolify deploy call, `/api/health`, look at phone width, then
+tell the owner in plain words what to try.
+
+### Design: identity (settled)
+
+**One migration, adds only.** `drizzle/0008_*` is written in task 10.2 and
+holds every new table and column of this milestone (identity, gate,
+connection keys), so there is one reviewed change to the live database.
+Nothing is renamed, dropped or made required. Code from before the
+migration keeps running on the new layout.
+
+**Catalog cards.** New table `catalog_cards`: one row per card the owner
+confirmed (picked in Review, added from Search, or linked later). Never a
+row for a card the owner only looked at.
+
+| Column | Meaning |
+|---|---|
+| `id` | number |
+| `canonicalKey` | unique text, see below |
+| `sport`, `year`, `brand`, `setName`, `cardNumber`, `player`, `team`, `variation` | cleaned values; `cardNumber` as printed ("11T") |
+| `verified` | true when it came from a clean catalog entry (all digit id), false for an unverified listing |
+| `fieldSources` | JSON, for each filled field one of `catalog`, `owner`, `reading`, `key_list`, `wikidata` |
+| `createdAt`, `updatedAt` | times |
+
+**Canonical key.** `v1|sport|year|brand|set|number|player`, each part
+normalized: lowercase, accents and punctuation removed, spaces collapsed;
+brand through `normalizeBrand`, number through `normalizeCardNumber`, player
+through `normalizeName` (all three already in `src/lib/free/key-cards.ts`
+and moved to `src/lib/catalog/normalize.ts`, re-exported from the old
+place); set is `base` when the source says "Base Set" or nothing. A catalog
+card needs sport, year, brand and player; number may be empty. A record
+with less than that stays a plain item without a catalog link. The key is
+built in one function, `canonicalKey()`, and the `v1` prefix lets
+Milestone 11 rebuild keys when versions arrive. The version (Tiffany and so
+on) is not part of the key design work here: "Topps Tiffany" from the
+source is stored as brand `Topps`, variation `Tiffany`, and the variation
+text is the last key part only when it is not empty.
+
+**Source ids.** New table `catalog_sources`: `catalogCardId`, `source`
+(`mycardfolio`), `sourceId` ("551033"), `url` (the card's page, shown as
+"From MyCardfolio" so the source is cited), `sourceSetId` ("9179"),
+`fetchedAt`. Unique on (`source`, `sourceId`). One catalog card may have
+several source rows later (prices in Milestone 14).
+
+**Items.** New nullable columns on `items`:
+- `catalogCardId`: link to `catalog_cards`, set null on delete.
+- `firstSuggestion`: JSON written once when a scan creates the item and
+  never changed again (F21): the scanner's fields, its confidence, which
+  reader made it, the time. Items made before this milestone have null and
+  the item page then shows nothing for it.
+- `fieldSources`: JSON, for each filled field `reading`, `catalog`,
+  `owner` or `key_list`. `updateItem` and the bulk engine mark every field
+  the owner changes as `owner`. Old items have null, which is treated as
+  `owner` for every filled field (the safe reading: never overwrite).
+- `catalogCandidates`: JSON, at most 5 slim candidates from the last look
+  up (source, source id, url, year, brand, set, number, player, verified,
+  score, a few plain words on why), with the time. Cleared when the owner
+  picks one, says "None of these", confirms the item, or after 30 days.
+
+**Filling rule (used everywhere a catalog card meets an item).**
+`applyCatalogCard(item, card)` in `src/lib/catalog/apply.ts`:
+1. Empty fields are filled and marked `catalog`.
+2. A field marked `owner` is never changed.
+3. A field marked `reading` that differs from the catalog is not changed
+   by the one tap pick. The differences are listed under the pick
+   ("Scanner read team: Twins. Catalog says: Mariners") with one more
+   button "Use the catalog's values", which changes only those `reading`
+   fields.
+4. The title is rebuilt, a `valuations` row is not touched, and
+   `firstSuggestion` stays as it was.
+Unlinking sets `catalogCardId` to null and changes no other field.
+
+### Design: the shared gate for outside calls (settled, F49 core)
+
+`src/lib/outside/gate.ts`. Every call that leaves the server goes through
+`outsideCall(source, request, options)`. Nothing else in the app may call
+`fetch` for an outside address; a test greps `src/` for `fetch(` outside
+this folder and the two known exceptions (alerts, and the Wikidata fetch
+which is wrapped in this milestone).
+
+**Sources** are listed in code in `src/lib/outside/sources.ts`: id, plain
+name, fixed https host, whether it needs a key, its caps, its Test call.
+The address of a call is built from the fixed host; no part of a URL ever
+comes from the browser or from a catalog answer. Redirects are refused.
+User-Agent is `CardVault/<version>` with no personal details. Cookies are
+never stored or sent.
+
+**Limits for `mycardfolio`** (the site states no number; the trial ran one
+call per 2 seconds without trouble, so the app stays at or below that):
+
+| Limit | Value |
+|---|---|
+| Calls at the same time, all sources together | 1 |
+| Pause between call starts | at least 2,000 ms |
+| Per hour | 200 |
+| Per day (UTC) | 1,000 |
+| Timeout | 5 s (10 s for a checklist) |
+| Largest answer read | 2 MB |
+
+Wikidata is registered as a second source with its limits of today, so its
+calls are counted too; its own `player_facts` store stays as it is.
+
+**Order.** Two lines: `now` (the owner is looking at a screen: Search,
+Test, "Look up again") goes before `background` (scans). A `now` call that
+cannot start within 8 seconds gives up with "The catalog is busy. Try again
+in a moment." A `background` call that meets a cap is skipped, not queued
+for hours: the scan keeps its plain reading.
+
+**Retry and backoff.** Timeout, network error or status 500 and above: up
+to 2 more tries after 2 s and 8 s (plus up to 500 ms of random spread).
+Status 429, or 403 from the front door: no retry; the source is paused for
+the `Retry-After` time when given (1 second to 1 hour), otherwise 15
+minutes. Three failed calls in a row pause the source for 10 minutes. The
+pause is stored, so a restart does not forget it. Other 4xx: no retry.
+
+**Counters.** Table `outside_usage`, one row per source and UTC day:
+calls, answers from the store, errors, "slow down" answers, skipped by cap,
+total wait in ms. Table `outside_state`, one row per source: switched on
+or off by the owner, paused until, last good call, last error in a few
+plain words (never a URL with a key, never an answer body). Hour counts
+live in memory and are rebuilt as "0 so far" on restart, which is safe
+because the day cap and the pacing still hold.
+
+**Stored answers.** Table `outside_cache`: key (SHA-256 of source, tool and
+normalized arguments), source, kind, body, fetched at, expires at, size.
+
+| Kind | Kept for |
+|---|---|
+| search answer with results | 7 days |
+| search answer with nothing | 1 day |
+| card detail, variants | 30 days |
+| set checklist | 30 days |
+
+Total size cap 50 MB; the oldest rows go first. Pruned on write, at most
+once an hour. A stored answer is used without counting as a call.
+
+**Storage policy (the site's terms say "free for personal and assistant
+use, read only, rate limited" and nothing about storing).** Settled:
+- Search and checklist answers are kept only for the bounded times above,
+  only on this private server, only to spare the site repeat calls.
+- Kept for good: only the cards the owner confirmed (`catalog_cards`),
+  each with its source link.
+- Never: copying the whole catalog, walking sets the owner did not scan or
+  search, showing catalog data to anyone else, downloading the site's card
+  images (the app links to the card page instead).
+- "Clear stored catalog answers" on the Connections screen empties
+  `outside_cache` for a source. Switching a source off stops all calls to
+  it; the app then works as before this milestone.
+- This is written into `docs/SPEC.md` (a new "Outside sources" section) and
+  `docs/HANDOVER.md` in task 10.3.
+
+### Design: Connections screen and keys (settled)
+
+`/more/connections`, linked from More. Owner session required on the page
+and in every action.
+
+**Per source card:** name, what it is used for in one line, state (On, Off,
+"Paused until 14:20: the site asked us to slow down", "Needs a key"), a
+switch, **Test** (one small real call through the gate in the `now` line;
+for MyCardfolio a search for "1990 Topps Griffey" with limit 1; shows
+"Works, answered in 0.3 s" or a short plain reason), "Clear stored
+answers", and the **usage view**: calls today against the day cap, calls
+this hour, answers taken from the store today, errors today, last good
+call, and a 7 day list of calls per day. Test may be tapped once per 10
+seconds per source and counts as a call. The full "Data sources" page with
+"why a lookup waited" is Milestone 11 and is not built here.
+
+**Keys** (design from the owner answers; first real use is Milestone 14).
+`src/lib/outside/keys.ts`, table `connection_keys` (source as primary key,
+ciphertext, iv, auth tag, last 4 characters, saved at, last test at, last
+test result).
+- Encryption: AES-256-GCM from `node:crypto`, a fresh random 12 byte iv on
+  every save, the source id as additional authenticated data. The 32 byte
+  key comes from HKDF-SHA256 over `SETTINGS_KEY` (new optional setting, at
+  least 32 characters), falling back to `SESSION_SECRET`; fixed salt
+  `crd-connections-v1`, info `key:<source id>`.
+- Write only: the key is pasted once and never sent back to the browser.
+  The screen shows "Saved, ends in ...4f2a" and the date. Buttons: Replace,
+  Remove, Test.
+- Each source gives a shape rule (length and characters) checked with zod
+  before saving; at most 200 characters; surrounding spaces removed.
+- When a key cannot be opened (the setting changed) the card says "This
+  key must be entered again" and the source counts as "Needs a key".
+- The key never appears in logs, audit rows, errors, the CSV export or the
+  usage view. The gate adds the key to the request at the last step and
+  the logger gets the request without headers.
+- New audit events: `connection_key_saved`, `connection_key_removed`,
+  `connection_tested`, `connection_switched`, `catalog_answers_cleared`.
+  Detail holds the source name and the outcome, never the key or its end.
+- No source with a key is live in this milestone (MyCardfolio and Wikidata
+  need none). The key part is built and proven with a `demo` source that
+  exists only when `NODE_ENV` is not `production`; Milestone 14 adds the
+  first real one as one entry in `sources.ts`.
+- `SETTINGS_KEY` is added to `.env.example` and, at go live, set once in
+  Coolify by the main agent (random, 48 characters), so no key is ever
+  stored under the session secret.
+
+### Design: MyCardfolio client (settled)
+
+`src/lib/catalog/`: `types.ts` (the one interface, so the catalog can be
+swapped), `mycardfolio.ts`, `clean.ts`.
+
+```ts
+// src/lib/catalog/types.ts
+export type CatalogCard = {
+  source: "mycardfolio"; sourceId: string; url: string; sourceSetId: string | null
+  verified: boolean                 // clean entry: id is all digits
+  sport: Sport | null; year: number | null; brand: string | null; setName: string | null
+  cardNumber: string | null; player: string | null; otherPlayers: string[]
+  variation: string | null; tags: string[]   // "RC", "IR", "TC"... kept for Milestone 11
+}
+export type CatalogResult<T> = { ok: true; value: T; fromStore: boolean } | { ok: false; reason: "off" | "paused" | "cap" | "busy" | "failed" }
+export type Line = "now" | "background"
+export interface Catalog {
+  search(q: { text: string; sport?: Sport; year?: number; limit?: number }, line: Line): Promise<CatalogResult<CatalogCard[]>>
+  card(sourceId: string, line: Line): Promise<CatalogResult<CatalogCard | null>>
+  checklist(sourceSetId: string, line: Line): Promise<CatalogResult<{ cards: CatalogCard[]; complete: boolean }>>
+}
+```
+
+**Wire format.** POST to `https://mycardfolio.com/api/mcp` with
+`Content-Type: application/json` and `Accept: application/json,
+text/event-stream`; body is JSON-RPC `tools/call`. The answer is read as
+text, the `data:` line is parsed as JSON, then `result.content[0].text` is
+parsed as JSON again, then checked with zod (unknown fields ignored, a bad
+entry dropped, never the whole answer thrown away for one bad row). "No
+card found with card_id" is a normal "nothing" answer. `find_variants`,
+`identify_card`, `browse` and `card_of_the_day` are not used in this
+milestone.
+
+**Noise.** An entry is clean only when its id is all digits. Ids starting
+`ebay_` or `ing_`, and any other shape, are noise. Rule: when a query has
+at least one clean entry, noise is dropped. When it has none, at most 3
+noise entries are kept, marked `verified: false`, shown as "Unverified
+listing", never applied by the app itself, never used for close-spelling
+matching, and their team and rookie words are ignored.
+
+**Cleaning** (`clean.ts`, pure functions, table driven tests):
+- Name: trailing tags removed into `tags` (IR, RC, TC, AS, DP, UER, ERR,
+  COR, HOF, "NO NAME ON FRONT", BLACKBOX and the like, from one list);
+  capitals turned into name case with Mc, Mac, O', De, Van, St. handled;
+  "Jr" and "Sr" get their period; "DAN MARINO IR" becomes "Dan Marino".
+- Number: "#", "No." and spaces removed, capitals, leading zeros removed,
+  letters kept ("11T", "27T", "BC12"). Anything that is not 1 to 4 digits
+  with up to 3 letters before or 2 after (for example "or", "6m7", "0p6")
+  becomes empty.
+- Year: the first four digits ("1986-87" gives 1986). Sport: lowercase and
+  matched to `SPORTS`. Product: a known brand at the start becomes `brand`,
+  the rest `variation` ("Topps Tiffany"). Set "Base Set" becomes empty.
+- Set id: taken from the card's `url` (the digits at the end of the set
+  part, "base-set-9179") only when the host is mycardfolio.com, else from
+  the `set` block of `get_card`.
+- The catalog gives no team and no rookie flag. The client never invents
+  them. Rookie marks keep coming from `key-cards.ts`.
+
+**Checklist probe.** `get_set_checklist` was not called in the trial. Task
+10.5 starts with at most 40 real calls by hand (one per 2.1 seconds, same
+User-Agent as the trial) to learn: how a set with more than 500 cards is
+paged (1990 Topps has 792), the answer size and time, and whether a search
+for "1990 Topps" with limit 50 gives the base set id through the urls. The
+answers are recorded as `checklist_9179_*.json` and
+`search_1990_topps_sets.json`, and the findings go into
+`docs/CATALOG-TRIAL.md`. If a set cannot be paged past 500, the client
+returns the first 500 and says so (`complete: false`); matching then adds
+one search by year, brand and number.
+
+### Design: matching done by Card Vault (settled)
+
+The site forgives no spelling mistake, so the app matches names itself.
+`src/lib/catalog/match.ts`, pure and testable, plus `lookup.ts` which
+spends calls.
+
+**Input:** what the reader found: year (or none), up to 2 possible brands,
+sport, up to 5 name spellings, card number (or none).
+
+**Budget:** at most 8 outside calls per card and 40 per scan (a photo with
+many cards); cards beyond the budget keep their plain reading and get the
+"Look up again" button in Review. Stored answers do not count. Because of
+the 30 day checklist store, the second card of the same set costs no call.
+
+**Steps, stop at the first that gives a sure card:**
+1. *Exact search* (needs year and brand): "year brand full name", then
+   "year brand surname", then "year brand number" when a number was read.
+   Clean entries only. Up to 3 calls.
+2. *Checklist and close spelling* (needs year and brand): find the base
+   set id (from step 1's urls, else one search "year brand" with limit 50),
+   fetch the checklist of at most 2 sets per card (two possible brands, or
+   one brand in the year and the year before when the year came only from
+   the last stat row), then match locally.
+3. *Year or brand unknown:* no checklist is fetched. One search with what
+   is known ("year full name" or "brand full name" or the full name with
+   the sport). The clean results become candidates for Review and are never
+   applied by the app, except when exactly one clean entry agrees with a
+   read card number and the name. When the name itself was misread too,
+   nothing is found: the plain reading stands, Review asks, and once the
+   owner has typed a year or brand, "Look up again" runs step 1 and 2.
+
+**Close-spelling rule (step 2, local):** names are normalized (lowercase,
+no accents, no punctuation, "jr" and "sr" set apart). Each read spelling is
+compared with each checklist name by edit distance where a swap of two
+neighbours counts 1 and the usual reading mix-ups count one half (l, I and
+1; O and 0; S and 5; B and 8; rn and m; a cut off last word). Allowed:
+surname up to 3 letters must be exact; 4 to 7 letters distance at most 1;
+8 or more at most 2. A first name or initial that was read must not
+contradict ("K" or "Ken" fits Ken, not Kevin). Score order: number and
+name agree; name exact; name close.
+- *Sure* (applied by the app): name close or exact AND the read number
+  equals the checklist number; or name exact, number not read, and no
+  other card in the fetched sets is within the allowed distance. A close
+  name without the number is sure only when it wins by a clear margin: no
+  other name in the sets within one more edit.
+- *Not sure:* up to 5 candidates go to Review in score order.
+- A read number that disagrees with the best name match is never
+  overwritten: both cards become candidates.
+- Tiffany and other special products are candidates only, never applied
+  (the version question is Milestone 11).
+
+**Confidence.** Number and name agree: at or above `REVIEW_THRESHOLD`
+(filed as sure, as key list hits are today). Applied without a read number:
+`CHECK_CONFIDENCE` (0.7), so it waits in Review with the card already
+filled in. Candidates only: the reading's own confidence.
+
+**Slow server.** A checklist is turned once into slim rows (id, number,
+normalized name) and the last 4 sets are kept in memory (well under 1 MB).
+A comparison stops early when the lengths differ by more than the allowed
+distance. 800 names times 5 spellings must take under 50 ms on this server
+(measured in the task). All calls for scans run in the `background` line,
+one at a time, after the reading; the owner never waits (Part A).
+
+**Sports honesty.** Clean entries exist for baseball (15 of 16 in the
+trial) and football (4 of 5), and for none of the 10 basketball and hockey
+cards. For those two sports most scans will get no sure card. Then the
+plain free reading stands exactly as today, unverified listings may appear
+as candidates marked "Unverified listing", and Review asks the owner. The
+Search screen says so in one line when the sport filter is basketball or
+hockey. Nothing in this milestone makes those sports worse than today.
+
+### Design: screens (settled)
+
+**Search cards** (`/search`, linked from More, from Inventory's empty state
+and from the Scan page as "Or search by words"). One text box (2 to 80
+characters), optional sport and year, a Search button (no call per typed
+letter). Results: clean cards first as rows (year, brand, number, player,
+set when not base), then "Unverified listings" folded shut. Each row:
+"Add to my collection" and "From MyCardfolio" (link to the card page, new
+tab). Adding creates the catalog card, a `card` item with status
+`confirmed`, quantity 1, every field marked `catalog`, and opens the item
+page; the existing duplicate notice shows when there is a similar item.
+Catalog off, paused or busy: a plain line and a link to Add by hand.
+
+**Add by hand** (`/items/new`, linked from More, Scan and Search). The
+existing `ItemForm` with the kind choice on top. Only one of player, set
+name or description is needed; everything else may stay empty. Saved as
+`confirmed`, all filled fields marked `owner`, no outside call.
+
+**Link later.** An item page of a card without a catalog link shows "Find
+this card in the catalog": it opens Search filled with the item's year,
+brand and player; rows then show "This is my card" instead of "Add". The
+pick follows the filling rule, so the owner's words stay. A linked item
+shows a "Catalog card" block: the card line, "From MyCardfolio", "Unlink".
+Under it, folded shut, "What the scanner first read" from `firstSuggestion`.
+
+**Review.** Under an item with candidates: up to 3 rows (2 more behind
+"More"), each with the card line, "Unverified listing" where it applies,
+and "This one". One tap applies the filling rule, links the catalog card,
+confirms the item and takes it out of Review. "None of these" clears the
+candidates. "Look up again" (also shown when there are no candidates and
+the item has a player or a number) runs the look up in the `now` line with
+the item's fields of the moment, at most once per 10 seconds per item. The
+name suggestions from task 9.14 are not built; the candidates replace them.
+
+All new actions: `requireOwner`, zod on every input (ids as integers, the
+candidate chosen by its position in the stored list, never by fields sent
+from the browser), audit events `catalog_card_added`, `catalog_card_linked`,
+`catalog_card_unlinked`.
+
+### Design: Part C finished through the catalog (settled)
+
+Branch `work/m9c` (commits f331a2b, c35ebc3, ecef104) is merged into
+`work/m10` in task 10.10. Kept as they are: the extra reading passes, the
+sentence rule, name particles, header years, the Griffey fixture.
+
+**Team and brand.**
+- Brand: from the catalog card when one is applied; the read brand only
+  chooses which sets to fetch.
+- Team: the catalog has no team. So the team read from text becomes a
+  *hint*, and a hint is written into the team field only when it is
+  confirmed: a catalog card was applied (so player and sport are known),
+  the hint's sport equals the card's sport, and the team is in that
+  player's team list from the existing Wikidata facts (`PlayerFacts.teams`,
+  stored 90 days). A confirmed team is marked `wikidata` in `fieldSources`.
+- Not confirmed (no catalog card, no facts, or not in the list): the team
+  field stays empty and the hint is shown in Review and on the item page
+  as a "Did you mean: Mariners" chip, one tap to fill.
+- Without any catalog card, the team rules that are live today (before
+  `work/m9c`) keep working so nothing gets worse; the new close-spelling,
+  lowercase and split-row team rules of `work/m9c` only ever make hints.
+
+**Test list from the second review** (each one a named test in
+`parse.test.ts` or `recognizer.test.ts`; all must pass):
+
+| Id | Case | Must give |
+|---|---|---|
+| H1 | lowercase bio word "twins" on the back, misread team on the front | no team "Twins" in the item; at most a hint |
+| M1 | split stat rows with four digit years | the year is kept |
+| M2 | club-only two digit rows next to a header like "88 ROOKIE" | the header is not a stat row and gives no year |
+| M3 | small l read where capital I stands in a capitals word | matched as I |
+| M4 | plain words STARS, BEARS, MAGIC, HEAT, BILLS, KINGS, JETS, TIGERS in text | no team written without confirmation |
+| L1 | FALCONE, ANGELL, PILATES and similar | no team, no hint |
+| L2 | close team spelling with a position of another sport | no team, no hint |
+
+**Griffey target in full.** End to end through `FreeRecognizer` with the
+real text reader on the two photo fixtures, the catalog faked with the
+recorded answers (search, card 551033, checklist 9179), the player lookup
+faked with a recorded facts row that lists the Seattle Mariners, no
+network:
+
+| Field | Must be |
+|---|---|
+| player | `Ken Griffey Jr.` |
+| sport | `baseball` |
+| year | `1990` |
+| brand | `Topps` |
+| card number | `336` (from the catalog; the photo cuts it off) |
+| team | contains `Mariners` |
+| title | contains `Griffey`, does not contain `Graduated` |
+| confidence | at least 0.5 |
+| catalog | linked candidate is source id `551033`, not the Tiffany card, not Ken Griffey Sr. |
+
+A second run with the catalog switched off must still give a Griffey
+spelling as player, year 1990, no wrong number and no wrong team.
+
+### Tasks
+
+Order: 10.2 first. Then 10.3. Then 10.4 and 10.5 side by side. Then 10.6.
+Then 10.7, 10.8 and 10.9 (10.7 and 10.8 side by side). Then 10.10, 10.11.
+
+**10.1 Catalog trial** (Sonnet). Done 2026-11-16, see
+`docs/CATALOG-TRIAL.md`. Verdict: go, with conditions that are built into
+the designs above.
+
+**10.2 Data model and the one migration** (Fable, review)
+- Files: `src/db/schema.ts`, `drizzle/0008_*`, `src/lib/catalog/normalize.ts`
+  (+ test), `src/lib/catalog/key.ts` (+ test), `src/lib/catalog/apply.ts`
+  (+ test), `src/lib/items/from-recognition.ts`, `src/lib/items/update.ts`,
+  `src/lib/items/bulk.ts`, `src/lib/free/key-cards.ts` (re-export only),
+  `src/lib/export/` (new columns left out of the CSV).
+- Depends on: 10.1.
+- Done when: all tables and columns of the designs exist (`catalog_cards`,
+  `catalog_sources`, four item columns, `outside_usage`, `outside_state`,
+  `outside_cache`, `connection_keys`); `canonicalKey` and
+  `applyCatalogCard` work as designed; a scan writes `firstSuggestion`
+  once and marks its fields `reading`; owner edits (single and bulk) mark
+  fields `owner`; new audit event names are in `AUDIT_EVENTS` with plain
+  labels.
+- Check: migration applies to a copy of a database made by `0007` with
+  items in it, and the old item rows read back unchanged; a test that the
+  build before this task still starts on the migrated copy (old code, new
+  layout); key tests (same card from two spellings gives one key; "11T"
+  and "11" differ; Tiffany differs from base); filling rule tests for
+  each of the 4 rules including "old item with null sources is never
+  overwritten"; `firstSuggestion` unchanged after edit, bulk edit and pick.
+
+**10.3 Shared gate for outside calls** (Opus, review)
+- Files: `src/lib/outside/gate.ts`, `sources.ts`, `usage.ts`, `cache.ts`
+  (+ tests), `src/lib/free/wikidata.ts` (its fetch goes through the gate,
+  its store stays), `docs/SPEC.md`, `docs/HANDOVER.md`.
+- Depends on: 10.2.
+- Done when: pacing, caps, the two lines, retry, pause, counters, stored
+  answers with their ages and the size cap work as designed with an
+  injected clock and an injected `fetch`; a switched off source makes no
+  call; the storage policy stands in SPEC.md and HANDOVER.md.
+- Check: tests with a fake clock for: 2 s spacing, one call at a time
+  under 5 parallel requests, hour cap, day cap across a restart, `now`
+  before `background`, `now` gives up after 8 s, retry on 500 and timeout
+  (2 then stop), 429 with and without `Retry-After`, three failures pause,
+  pause survives a restart, stored answer used and not counted, expired
+  answer fetched again, 2 MB limit, redirect refused, size cap prunes the
+  oldest; the "no other fetch in src" test; all Wikidata tests still green.
+
+**10.4 Connections screen, keys, Test button, usage view** (Opus, review)
+- Files: `src/lib/outside/keys.ts` (+ test), `src/lib/outside/actions.ts`,
+  `src/app/(app)/more/connections/page.tsx`, `src/components/connections/*`,
+  `src/app/(app)/more/page.tsx`, `src/lib/env.ts`, `.env.example`,
+  `src/lib/audit/labels.ts`, `src/lib/log.ts` (only if a redaction rule is
+  missing).
+- Depends on: 10.3. Can run beside 10.5 (Test for MyCardfolio is wired
+  when 10.5 lands; until then it uses the source's raw test call).
+- Done when: the screen shows MyCardfolio and Wikidata with state, switch,
+  Test, Clear stored answers and the usage view; the key flow works for
+  the `demo` source outside production as designed; `SETTINGS_KEY` is read
+  with the fallback.
+- Check: key tests (save then open gives the key back inside the server
+  only; a second save of the same key gives a different ciphertext; a
+  changed bit, a changed source id or a changed setting fails closed with
+  "enter again"; fallback to `SESSION_SECRET`; shape rule; 200 character
+  limit); a test that renders the page and every action answer and finds
+  the key nowhere; a test that captures the logger and the audit table
+  through save, test, failed test and remove and finds neither the key nor
+  its last 4; actions refuse without a session; Test limited to one per
+  10 seconds; screenshots at 360px (two sources, a paused source, the demo
+  key card before and after saving).
+
+**10.5 MyCardfolio client** (Sonnet, review)
+- Files: `src/lib/catalog/types.ts`, `mycardfolio.ts`, `clean.ts`
+  (+ tests), `tests/fixtures/catalog/*` (new recordings),
+  `docs/CATALOG-TRIAL.md` (probe findings), `scripts/catalog-probe.mjs`
+  (hand run only, never in tests or the build).
+- Depends on: 10.3.
+- Done when: the checklist probe is done and written down; `search`,
+  `card` and `checklist` work through the gate and return cleaned
+  `CatalogCard` rows; noise and cleaning rules as designed.
+- Check: tests on the recorded answers: Griffey search gives clean
+  `551033` first and no noise; the Jordan search gives at most 3 rows, all
+  `verified: false`; card detail gives set id `9179`; a checklist recording
+  parses and contains #336; cleaning table ("DAN MARINO IR", "FRANK THOMAS
+  NO NAME ON FRONT", "Emmitt Smith RC", "Ken Griffey Jr", "11T", "0336",
+  "or", "6m7", "1986-87", "Topps Tiffany", "O-PEE-CHEE"); broken answers
+  (no `data:` line, bad inner JSON, one bad row among good ones, an error
+  result) give `failed` or drop the row and never throw; a url from another
+  host gives no set id.
+
+**10.6 Matching: exact steps, checklist, close spelling** (Opus, review)
+- Files: `src/lib/catalog/match.ts`, `lookup.ts` (+ tests),
+  `tests/fixtures/catalog/trial-cards.json` (the 31 trial cards with their
+  damaged spellings).
+- Depends on: 10.5.
+- Done when: `lookupCard(read, line)` returns `{ sure: CatalogCard | null,
+  candidates: CatalogCard[], callsUsed }` following the steps, budgets and
+  rules as designed.
+- Check: with a fake catalog built from the recordings: "Eriffey", "Ken
+  Griffey, J" and "KEN GRIFFEY JR" against checklist 9179 give `551033`;
+  Ken Griffey Sr. of the same set is not chosen for "Ken Griffey, J"; a
+  three letter surname needs an exact match; "Kevin" does not fit "Ken";
+  a read number that disagrees gives two candidates and no sure card;
+  Tiffany is never sure; unknown year or unknown brand fetches no
+  checklist; never more than 8 calls per card and 40 per scan (counted on
+  the fake); a second card of the same set uses 0 calls; `off`, `paused`
+  and `cap` answers give "no card" without an error; the timing test
+  (800 names, 5 spellings, under 50 ms) run on the server and noted in
+  STATUS.md; noise rows are never matched by close spelling.
+
+**10.7 Search cards screen and "Add to my collection"** (Sonnet)
+- Files: `src/app/(app)/search/page.tsx`, `src/components/catalog/*`,
+  `src/lib/catalog/actions.ts` (+ test), `src/app/(app)/more/page.tsx`,
+  `src/app/(app)/scan/page.tsx`, `src/app/(app)/items/page.tsx`.
+- Depends on: 10.2, 10.5.
+- Done when: the screen works as designed; adding stores the catalog card
+  and its source row once (a second add of the same card makes a second
+  item, not a second catalog card); off, paused and busy states show plain
+  lines.
+- Check: action tests (no session refused; bad input refused; add twice
+  gives one `catalog_cards` row and two items; the chosen row is taken
+  from the server's own answer, not from fields the browser sent);
+  screenshots at 360px: results with clean rows, only unverified listings,
+  nothing found, catalog paused.
+
+**10.8 Add by hand and link later** (Sonnet)
+- Files: `src/app/(app)/items/new/page.tsx`, `src/lib/items/create.ts`
+  (+ test), `src/lib/items/actions.ts`, `src/components/items/ItemForm.tsx`,
+  `src/app/(app)/items/[id]/page.tsx`, `src/components/catalog/CatalogBlock.tsx`.
+- Depends on: 10.2; the link part on 10.7.
+- Done when: a record with only a player (or only a description) can be
+  saved; the item page shows the catalog block, "Find this card in the
+  catalog", "Unlink" and the folded "What the scanner first read".
+- Check: create tests (nearly empty record accepted, fully empty refused,
+  fields marked `owner`); link test: an item with the owner's player and
+  team keeps both after linking to a card with other values, empty year
+  and number are filled; unlink changes no field; screenshots at 360px of
+  the form, a linked item, an unlinked item.
+
+**10.9 Catalog in the scan and one tap pick in Review** (Opus, review)
+- Files: `src/lib/free/recognizer.ts` (new optional `catalog` in
+  `FreeDeps`), `src/lib/recognition/types.ts` (optional catalog part of an
+  item, default empty), `src/lib/scans/process.ts`,
+  `src/lib/items/from-recognition.ts`, `src/lib/items/review-actions.ts`,
+  `src/lib/items/duplicates.ts` (candidates in the review rows),
+  `src/components/items/CatalogCandidates.tsx`, `src/app/(app)/review/page.tsx`,
+  tests beside each.
+- Depends on: 10.2, 10.6.
+- Done when: after the reading, a card scan runs `lookupCard` in the
+  `background` line; a sure card is applied (fields marked `catalog`, the
+  link set, confidence as designed); candidates are stored on the item;
+  Review shows them with "This one", "Use the catalog's values", "None of
+  these" and "Look up again" as designed; sealed and bulk scans make no
+  catalog call; sample mode and the Anthropic mode are unchanged.
+- Check: recognizer tests with a fake catalog (sure card applied; only
+  candidates; catalog off gives exactly today's result, compared field by
+  field with a run without the dep; a failing catalog never fails the
+  scan); pick tests: fills empty fields only, an `owner` field survives,
+  a `reading` difference is listed and changes only through the second
+  button, `firstSuggestion` identical before and after, item leaves
+  Review, audit row written; a pick of position 7 of a 3 row list is
+  refused; "Look up again" limited to one per 10 seconds; a basketball
+  scan with only unverified listings applies nothing; screenshots at 360px
+  of Review with candidates, with a difference list, and with none.
+
+**10.10 Merge `work/m9c`, finish Part C through the catalog** (Opus, review)
+- Files: merge of `work/m9c` (`src/lib/free/ocr.ts`, `parse.ts`, their
+  tests, `griffey.test.ts`, `tests/fixtures/cards/*`, `tests/helpers/*`),
+  then `src/lib/free/parse.ts` (team hints, M1 to M3), `recognizer.ts`
+  (team confirmation), `src/components/items/SmartChips.tsx` or the Review
+  row (the "Did you mean" team chip), `tests/fixtures/catalog/*`,
+  `tests/fixtures/README.md`, `docs/STATUS.md`.
+- Depends on: 10.9.
+- Done when: the branch is merged with history kept; `parseCardText`
+  returns `teamHint` apart from `team`; team and brand follow the design;
+  every row of the test list (H1, M1 to M4, L1, L2) is a passing named
+  test; the Griffey target table is met in full, and the second run with
+  the catalog off holds.
+- Check: `griffey.test.ts` end to end (real text reader, recorded catalog
+  and facts, no network) green three times in a row on the server; the
+  seven review cases green; `accuracy.test.ts` of today still green (no
+  card that had a right team before loses it); reading time and container
+  memory after one scan noted in STATUS.md (memory under 1 GB); the
+  reviewer is given the two earlier review reports and asked to try 10 new
+  plain word cases of their own against the team rule.
+
+**10.11 Review and go live** (Opus review, main agent deploys)
+- Files: fixes only, `docs/STATUS.md`, `docs/SPEC.md`, `docs/HANDOVER.md`.
+- Depends on: 10.2 to 10.10.
+- Done when: a fresh security review (keys, the gate, every new action and
+  page, the migration, what is stored from the site) has no open finding;
+  backup checked before the deploy; `SETTINGS_KEY` set in Coolify;
+  Milestone 10 is live; the owner is told in plain words to try: Search
+  ("1990 Topps Griffey"), Add by hand, a scan of the Griffey card and
+  three others, and the Connections screen.
+- Check: `npm run check`, `npm run build`, live `/api/health`, the
+  migration applied on a copy of the live database first, the Test button
+  on the live Connections screen answers "Works" (this is the only real
+  catalog call made by the builder on the live site), usage view shows
+  that call, no key or secret in the diff.
+
+| # | Task | Model | Depends on |
+|---|---|---|---|
+| 10.1 | Catalog trial (done) | Sonnet | |
+| 10.2 | Data model and the one migration | Fable + review | 10.1 |
+| 10.3 | Shared gate for outside calls | Opus + review | 10.2 |
+| 10.4 | Connections screen, keys, Test, usage view | Opus + review | 10.3 |
+| 10.5 | MyCardfolio client and checklist probe | Sonnet + review | 10.3 |
+| 10.6 | Matching: exact steps, checklist, close spelling | Opus + review | 10.5 |
+| 10.7 | Search cards screen, add to collection | Sonnet | 10.2, 10.5 |
+| 10.8 | Add by hand, link later | Sonnet | 10.2, 10.7 |
+| 10.9 | Catalog in the scan, one tap pick in Review | Opus + review | 10.2, 10.6 |
+| 10.10 | Merge `work/m9c`, finish Part C, Griffey in full | Opus + review | 10.9 |
+| 10.11 | Review and go live | Opus + main | all |
+
+### Risks
+
+- **One hobby site.** MyCardfolio can change, slow down or go away. The
+  one interface, the switch on the Connections screen and the rule "the
+  plain reading always stands by itself" limit the damage.
+- **Terms say nothing about storing.** The bounded store is a careful
+  reading of "free for personal use", not a permission. If the site
+  objects, the ages in one file go to zero and the app still works, with
+  more calls. No message has been sent to the site yet (see the question).
+- **Unknown rate limit.** The caps are our own guess, set below what the
+  trial ran. A 429 pauses the source by itself.
+- **Checklist tool never called yet.** Paging, size and speed are learned
+  in the 10.5 probe. If checklists are not usable, step 2 of the matching
+  falls back to searches by year, brand and number, and misread names
+  without a number go to Review.
+- **Basketball and hockey.** Mostly no clean entries. The owner will see
+  "Unverified listing" or nothing for those. Said on the Search screen and
+  in the go live message.
+- **Wrong card applied.** Close spelling can pick the wrong player. The
+  number rule, the clear margin rule, the cap at 0.7 without a number and
+  `firstSuggestion` limit this; "Unlink" undoes the link.
+- **Team needs two sources.** A team is only written when Wikidata knows
+  the player. For lesser known players the team stays a chip to tap.
+- **Slower scans.** Up to 8 paced calls can add about 20 seconds to a
+  card's reading in the worst case; usually 1 to 3 calls. It runs in the
+  background (Part A).
+- **Migration on the live database.** Adds only, tried on a copy first,
+  backup checked before the deploy, old code runs on the new layout.
+- **Key store without a real user yet.** Proven only by tests and the demo
+  source until Milestone 14. The independent review of 10.4 is the guard.
+
+### Questions for the owner
+
+None blocks the build. One for later:
+
+1. **Before the set progress feature (Milestone 15), the site should be
+   asked whether keeping whole set lists is fine. It can only be reached
+   on X (Twitter). Will you send that short message, or shall the feature
+   wait in its careful form?** Recommended: decide when Milestone 15
+   starts. Until then the app keeps set lists for 30 days at most and only
+   for sets you scanned or searched.
+
+Run cap for this milestone: 14 task runs (10 tasks plus up to 4 review
+repeats) or 3M delegated tokens, inside the roadmap cap of 75 tasks or 12M.
