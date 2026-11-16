@@ -1,7 +1,7 @@
 import sharp from "sharp";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { REVIEW_THRESHOLD, type RecognitionPhoto } from "@/lib/recognition/types";
-import { closeTextReader, getTextReader, type OcrResult, type TextReader } from "./ocr";
+import type { OcrResult, TextReader } from "./ocr";
 import { FreeRecognizer } from "./recognizer";
 import type { PlayerFacts } from "./wikidata";
 
@@ -168,21 +168,4 @@ describe("FreeRecognizer passes what it saw as evidence, not as fields", () => {
     const item = await run("NO. 414\nFRANK THOMAS\nROOKIE\nREPRINT\n© 1990 THE TOPPS COMPANY, INC.");
     expect(item.evidence).toMatchObject({ rookieWord: true, reprint: true });
   });
-});
-
-describe("FreeRecognizer end to end with the real text reader", () => {
-  afterAll(() => closeTextReader());
-  it("reads a printed card back and identifies it", async () => {
-    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1400">
-      <rect width="100%" height="100%" fill="#e9dfc4"/>
-      <text x="70" y="140" font-family="sans-serif" font-size="64" font-weight="700" fill="#222">NO. 1</text>
-      <text x="70" y="260" font-family="sans-serif" font-size="64" font-weight="700" fill="#222">KEN GRIFFEY JR.</text>
-      <text x="70" y="340" font-family="sans-serif" font-size="40" fill="#222">SEATTLE MARINERS  OF</text>
-      <text x="70" y="1300" font-family="sans-serif" font-size="32" fill="#222">© 1989 THE UPPER DECK CO.</text></svg>`);
-    const data = await sharp(svg).jpeg({ quality: 90 }).toBuffer();
-    const r = new FreeRecognizer({ reader: getTextReader(), lookup: async () => null });
-    const [item] = await r.recognize({ mode: "single", photos: [{ role: "front", data, width: 1000, height: 1400 }] });
-    expect(item).toMatchObject({ year: 1989, brand: "Upper Deck", cardNumber: "1", player: "Ken Griffey Jr.", rarityTier: "grail" });
-    expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
-  }, 60000);
 });

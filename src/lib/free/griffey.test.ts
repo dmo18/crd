@@ -4,7 +4,7 @@ import type { RecognitionPhoto, RecognizedItem } from "@/lib/recognition/types";
 import { buildTitle } from "@/lib/title";
 import { FakeCatalog, GRIFFEY_SEARCH, RECORDED } from "../../../tests/helpers/fake-catalog";
 import { fixturePhotos, GRIFFEY, recordedOcr } from "../../../tests/helpers/ocr-fixture";
-import { closeTextReader, type TextReader } from "./ocr";
+import { createTextReader, pythonEngine, readerSettings, type TextReader } from "./ocr";
 import { parseCardText } from "./parse";
 import { FreeRecognizer } from "./recognizer";
 import type { PlayerFacts } from "./wikidata";
@@ -113,18 +113,22 @@ describe("1990 Topps Ken Griffey Jr., recorded text, catalog off", () => {
   });
 });
 
-describe("1990 Topps Ken Griffey Jr., read from the photos with the real text reader", () => {
+/** The real reader (Python worker) only when OCR_TEST_PYTHON is set; see ocr.integration.test.ts. */
+const TEST_PYTHON = process.env.OCR_TEST_PYTHON?.trim();
+
+describe.skipIf(!TEST_PYTHON)("1990 Topps Ken Griffey Jr., read from the photos with the real text reader", () => {
   let item: RecognizedItem;
+  const engine = TEST_PYTHON ? pythonEngine({ ...readerSettings(), python: TEST_PYTHON }) : null;
 
   beforeAll(async () => {
-    const recognizer = new FreeRecognizer({ lookup: async (name) => (/griffey/i.test(name) ? GRIFFEY_FACTS : null) });
+    const recognizer = new FreeRecognizer({ reader: createTextReader(engine!), lookup: async (name) => (/griffey/i.test(name) ? GRIFFEY_FACTS : null) });
     const started = Date.now();
     [item] = await recognizer.recognize({ mode: "single", photos: fixturePhotos(GRIFFEY) });
     console.log(`Griffey scan took ${((Date.now() - started) / 1000).toFixed(1)} s`);
   }, 120_000);
 
   afterAll(async () => {
-    await closeTextReader();
+    await engine?.close();
   });
 
   it("reads sport, year, number, brand and no sentence words", () => checkStableFields(item));

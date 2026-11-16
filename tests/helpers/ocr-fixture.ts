@@ -6,8 +6,9 @@ import type { OcrResult, TextReader } from "@/lib/free/ocr";
 /**
  * Card photo fixtures and their recorded text. The recording lets parsing
  * tests run fast and exactly on what the real reader returned. To record it
- * again after a change to the reader, run the tests with UPDATE_OCR=1:
- *   UPDATE_OCR=1 npx vitest run src/lib/free/ocr.test.ts
+ * again after a change to the reader, run the real reader test with UPDATE_OCR=1
+ * (it needs a Python with rapidocr, see ocr/README.txt):
+ *   UPDATE_OCR=1 OCR_TEST_PYTHON=/path/to/python npx vitest run src/lib/free/ocr.integration.test.ts
  */
 
 const DIR = path.join(process.cwd(), "tests", "fixtures", "cards");

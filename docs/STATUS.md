@@ -1,5 +1,33 @@
 # Status
 
+## Milestone 12R: make reading right (in progress, branch work/reading)
+- 12R.2 done (not deployed): tesseract.js is gone. The text reader is now
+  RapidOCR (PP-OCR models on onnxruntime) in a Python worker the app starts
+  in the same container (ocr/worker.py, src/lib/free/ocr-worker.ts). One
+  long-lived process, one picture at a time, 4 threads, 60 s per picture,
+  restarted when it dies. Pictures go as PNG files in a private temp folder;
+  answers are checked with zod and capped at 2 MB. No network: Python
+  sockets are blocked and onnxruntime's own telemetry (it does connect out
+  by default) is switched off with ORT_DISABLE_TELEMETRY.
+- Packages pinned with sha256 (ocr/requirements.txt, Python 3.11 x86_64);
+  models fetched at image build and checked by sha256 then and at every
+  worker start (ocr/models.txt). Licences in ocr/README.txt, all allow
+  commercial use. The image build runs the worker's self test as uid 1001.
+- A sideways photo (most text in tall boxes) is read once more turned
+  upright, so boxes sit where they are on the card. Band, edge and label
+  passes are gone (the new reader finds that text itself).
+- Health: /api/health also says reader "ready", "waiting" or "down"; `ok`
+  does not depend on it. The worker starts with the first scan.
+- Measured on this server: worker peak 396 MB, 144 MB idle; 1.0 to 1.2 s a
+  front, 3 to 9 s a back, 11 to 16 s a sideways back (two reads). Image
+  1.06 GB before, 1.64 GB after (content 237 MB to 403 MB).
+- Unit tests use a fake worker (Node). The real reader tests run only with
+  OCR_TEST_PYTHON set (src/lib/free/ocr.integration.test.ts, Griffey).
+- Known: the Griffey recording is still tesseract text (12R.4 retunes the
+  rules). npm audit shows 11 moderate advisories in dev tools only
+  (drizzle-kit's esbuild, eslint's minimatch), same as before this task;
+  npm audit --omit=dev is 0.
+
 ## Milestone 10: the card catalog (live 2026-11-16, commit 0b19b1d)
 - Search cards (free MyCardfolio catalog, no key), Add by hand, link and
   unlink later; every scan asks the catalog in the background and Review

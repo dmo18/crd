@@ -4,6 +4,8 @@ import { randomBytes } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { env } from "@/lib/env";
+import { textReaderStatus } from "@/lib/free/ocr";
+import type { ReaderStatus } from "@/lib/free/ocr-worker";
 
 /** The data folder write test runs at most this often; the answer is reused in between. */
 export const WRITE_CHECK_EVERY_MS = 60 * 1000;
@@ -27,18 +29,30 @@ function canWrite(dir: string, now: number): boolean {
   return ok;
 }
 
+export type Health = { ok: boolean; reader: ReaderStatus };
+
 /**
  * Is the app able to do its job? Checks that the database answers (every
  * call) and that the data folder can be written (at most once a minute, so a
- * watchdog polling often does not write to disk each time). Returns only a
- * yes or no: never details, because the health route is public.
+ * watchdog polling often does not write to disk each time). Also says
+ * whether the text reader is up: "ready", "waiting" (not started yet, it
+ * starts with the first scan) or "down" (it stopped and starts again with the
+ * next scan). The reader does not change `ok`: the rest of the app works
+ * without it. Returns only these words, never details, because the health
+ * route is public. Never starts the reader.
  */
-export function checkHealth(db?: Db, dataDir?: string, now: number = Date.now()): { ok: boolean } {
+export function checkHealth(db?: Db, dataDir?: string, now: number = Date.now(), reader: () => ReaderStatus = textReaderStatus): Health {
+  let status: ReaderStatus;
+  try {
+    status = reader();
+  } catch {
+    status = "down";
+  }
   try {
     (db ?? getDb()).run(sql`select 1`);
-    return { ok: canWrite(path.resolve(dataDir ?? env().DATA_DIR), now) };
+    return { ok: canWrite(path.resolve(dataDir ?? env().DATA_DIR), now), reader: status };
   } catch {
-    return { ok: false };
+    return { ok: false, reader: status };
   }
 }
 

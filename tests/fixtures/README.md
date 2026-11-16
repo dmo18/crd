@@ -14,10 +14,12 @@ cropped so the name reads "KEN GRIFFEY, J" and the cap hides part of
 "MARINERS"; the back is cropped so the card number (336) is cut off.
 
 `griffey-1990-topps.ocr.json` is the text the real reader returned for both
-photos, so parsing tests run fast and exactly. Record it again after a change
-to the reader with:
+photos, so parsing tests run fast and exactly. It is still the old reader's
+(tesseract.js) text; the parsing rules are tuned on it until task 12R.4.
+Record it again with the current reader (needs a Python with rapidocr, see
+ocr/README.txt) with:
 
-    UPDATE_OCR=1 npx vitest run src/lib/free/ocr.test.ts
+    UPDATE_OCR=1 OCR_TEST_PYTHON=/path/to/python npx vitest run src/lib/free/ocr.integration.test.ts
 
 ## catalog/
 
