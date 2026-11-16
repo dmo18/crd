@@ -19,11 +19,11 @@ Cloudflare and Coolify.
 | 5 | Console window | Paste the setup command (below). Answer: token, your email, Enter to skip the SSH key, `n` for alerts. Write down the temporary Coolify password it prints |
 | 6 | Cloudflare Zero Trust | Access controls, Applications: add the two sign-in rules (below) |
 | 7 | Cloudflare | Tunnel `appy`, Routes: add the four routes (below). Cloudflare makes their DNS records |
-| 8 | Cloudflare, console | Access controls, Service credentials, tab SSH (not Service Tokens), Add a certificate, Application `appy-ssh`, Generate certificate. Copy the public key, run `sudo server-ssh-ca set` and paste it. Terminal is then at `https://appy-ssh.yourdomain.com`, user name `owner` |
+| 8 | Cloudflare, console | Access controls, Service credentials, tab SSH (not Service Tokens), Add a certificate, Application `appy-ssh`, Generate certificate. Copy the public key, run `sudo server-ssh-ca set` and paste it. Terminal is then at `https://appy-ssh.yourdomain.com`. It logs in as your sign-in email before the @; if that is not an Ubuntu user, create it: `sudo useradd -m -s /bin/bash -G sudo NAME && echo NAME \| sudo tee /etc/ssh/principals/NAME && sudo passwd NAME` |
 | 9 | `https://appy.yourdomain.com` | Sign in with the temporary password, choose "This Machine", Settings: domain `https://appy.yourdomain.com`, Registration off, Auto Update off. Profile: new password and two-factor. Then run the cleanup command (below) |
 | 10 | Browser terminal | `sudo server-alert setup` (Telegram or Discord) |
 | 11 | Browser terminal | `sudo server-backup setup`, save the passphrase, then `sudo server-backup run` |
-| 12 | Coolify, Cloudflare | New project, Public Repository `https://github.com/dmo18/crd`, Build Pack Docker Compose, Domain `https://cards.yourdomain.com:3000`, HTTPS redirect off, variable `CLIENT_IP_HEADER` = `cf-connecting-ip`, Deploy. Then tunnel route `cards` to `http://127.0.0.1:80` (no sign-in rule: Card Vault has its own password) |
+| 12 | Coolify, GitHub, Cloudflare | Coolify, Keys & Tokens: generate an ED25519 key, add its public key in GitHub, repository Settings, Deploy keys (read only). New resource, Private Git Repository (with Deploy Key), `git@github.com:dmo18/crd.git`, Build Pack Docker Compose, Domain `https://cards.yourdomain.com:3000`, HTTPS redirect off, variable `CLIENT_IP_HEADER` = `cf-connecting-ip`, Deploy. Then tunnel route `cards` to `http://127.0.0.1:80` (no sign-in rule: Card Vault has its own password) |
 | 13 | Coolify, phone | Copy `SETUP_CODE` from Environment Variables, open `https://cards.yourdomain.com`, Set your password, scan a card |
 | 14 | Browser terminal | `sudo server-check` |
 
