@@ -137,8 +137,20 @@ describe("text reader over the worker", () => {
     const result = await createTextReader(fake("sideways")).read(await photo(500, 700));
     expect(result.passes).toBe(2);
     expect(result.passes).toBeLessThanOrEqual(MAX_PASSES);
-    // The second read got the picture turned to 700 wide, 500 high.
-    expect(result.text).toContain("size 700x500");
+    // The second read got the picture turned upright (wider than high), cut
+    // to the text read (no card stands out on this plain picture).
+    const size = /size (\d+)x(\d+)/.exec(result.text)!;
+    expect(Number(size[1])).toBeGreaterThan(Number(size[2]));
+    expect(result.crops).toBe(0);
+  });
+
+  it("reads the four corners of a back again, and nothing more for a quick read", async () => {
+    const back = await createTextReader(fake("ok")).read(await photo(), { back: true });
+    expect(back.passes).toBe(1);
+    expect(back.crops).toBe(4);
+    const quick = await createTextReader(fake("sideways")).read(await photo(500, 700), { quick: true, back: true });
+    expect(quick.passes).toBe(2);
+    expect(quick.crops).toBe(0);
   });
 
   it("thorough reads skip the sideways re-read", async () => {

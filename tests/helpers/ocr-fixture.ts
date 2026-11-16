@@ -37,7 +37,7 @@ export function fixturePhotos(card: CardFixture): RecognitionPhoto[] {
 /** Reads both sides with the given reader and, with UPDATE_OCR=1, writes the recording. */
 export async function readFixture(card: CardFixture, reader: TextReader): Promise<RecordedOcr> {
   const front = await reader.read(fs.readFileSync(card.front));
-  const back = await reader.read(fs.readFileSync(card.back));
+  const back = await reader.read(fs.readFileSync(card.back), { back: true });
   const result = { front, back };
   if (updatingOcr) fs.writeFileSync(card.recording, `${JSON.stringify(result, null, 1)}\n`);
   return result;

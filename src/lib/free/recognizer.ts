@@ -242,7 +242,7 @@ export class FreeRecognizer implements Recognizer {
     const front = photos.find((p) => p.role === "front") ?? photos[0];
     const back = photos.find((p) => p.role === "back");
     const frontText = await this.read(front.data);
-    const backText = back ? await this.read(back.data) : null;
+    const backText = back ? await this.read(back.data, { back: true }) : null;
     return this.cardFromText(frontText, backText, { sourceIndex: 0, box: null });
   }
 
