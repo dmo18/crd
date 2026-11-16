@@ -1,13 +1,14 @@
+import fs from "node:fs";
 import sharp from "sharp";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, locations, scans, valuations } from "@/db/schema";
-import { readPhoto } from "@/lib/images/store";
+import { readPhoto, uploadsDir } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan, ScanInputError } from "./create";
 import { enqueueScan, processScan, queueIdle, queueOrder, RECOGNITION_DEADLINE_MS, recoverScans, retryScan, TOO_SLOW } from "./process";
-import { getScanView } from "./view";
+import { getScanView, scanStatusCounts } from "./view";
 
 async function photo(color = "#336699"): Promise<Buffer> {
   return sharp({ create: { width: 900, height: 1200, channels: 3, background: color } }).jpeg().toBuffer();
@@ -252,5 +253,75 @@ describe("retryScan", () => {
     db.delete(images).run();
     expect(retryScan(scanId, db)).toMatchObject({ ok: false, status: 410 });
     expect(db.select().from(scans).get()?.status).toBe("failed");
+  });
+});
+
+const KEY = "6f9619ff-8b86-4011-b42d-00c04fc964ff";
+const filesOnDisk = () => {
+  const count = (dir: string): number => fs.existsSync(dir)
+    ? fs.readdirSync(dir, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? count(`${dir}/${e.name}`) : 1), 0)
+    : 0;
+  return count(uploadsDir());
+};
+
+describe("createScan with a clientKey", () => {
+  it("first upload makes a scan and stores the key", async () => {
+    const r = await createScan({ mode: "single", clientKey: KEY, photos: [{ role: "front", data: await photo() }] }, db);
+    expect(r.duplicate).toBe(false);
+    expect(db.select().from(scans).where(eq(scans.id, r.scanId)).get()!.clientKey).toBe(KEY);
+  });
+
+  it("the same key twice gives one scan, the same id and no new files", async () => {
+    const photos = [{ role: "front" as const, data: await photo() }];
+    const first = await createScan({ mode: "single", clientKey: KEY, photos }, db);
+    const filesAfterFirst = filesOnDisk();
+    const second = await createScan({ mode: "single", clientKey: KEY, photos }, db);
+    expect(second).toEqual({ scanId: first.scanId, duplicate: true });
+    expect(db.select().from(scans).all()).toHaveLength(1);
+    expect(db.select().from(images).all()).toHaveLength(1);
+    expect(filesOnDisk()).toBe(filesAfterFirst);
+  });
+
+  it("two repeats racing give one scan and leave no stray files", async () => {
+    const photos = [{ role: "front" as const, data: await photo() }];
+    const before = filesOnDisk();
+    const [a, b] = await Promise.all([
+      createScan({ mode: "single", clientKey: KEY, photos }, db),
+      createScan({ mode: "single", clientKey: KEY, photos }, db),
+    ]);
+    expect(a.scanId).toBe(b.scanId);
+    expect([a.duplicate, b.duplicate].sort()).toEqual([false, true]);
+    expect(db.select().from(scans).all()).toHaveLength(1);
+    expect(db.select().from(images).all()).toHaveLength(1);
+    // The files added equal what one lone upload adds: nothing from the loser remains.
+    const raced = filesOnDisk() - before;
+    const mid = filesOnDisk();
+    await createScan({ mode: "single", photos }, db);
+    expect(raced).toBeGreaterThan(0);
+    expect(raced).toBe(filesOnDisk() - mid);
+  });
+
+  it("no key works as before, and two keyless scans stay separate", async () => {
+    const photos = [{ role: "front" as const, data: await photo() }];
+    const a = await createScan({ mode: "single", photos }, db);
+    const b = await createScan({ mode: "single", photos }, db);
+    expect(a.scanId).not.toBe(b.scanId);
+    expect(a.duplicate).toBe(false);
+  });
+});
+
+describe("scanStatusCounts", () => {
+  it("counts scans by state and items needing review", () => {
+    const mk = (status: "queued" | "processing" | "done" | "failed") => db.insert(scans).values({ mode: "single", status }).returning({ id: scans.id }).get().id;
+    const done = mk("done");
+    mk("queued"); mk("queued"); mk("processing"); mk("failed");
+    const item = (status: "needs_review" | "confirmed") =>
+      db.insert(items).values({ kind: "card", status, title: "x", scanId: done }).run();
+    item("needs_review"); item("needs_review"); item("confirmed");
+    expect(scanStatusCounts(db)).toEqual({ reading: 3, failed: 1, toReview: 2 });
+  });
+
+  it("is all zero on an empty database", () => {
+    expect(scanStatusCounts(db)).toEqual({ reading: 0, failed: 0, toReview: 0 });
   });
 });

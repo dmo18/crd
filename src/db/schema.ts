@@ -75,7 +75,9 @@ export const scans = sqliteTable("scans", {
   /** When processing last began. Null while the scan waits in the queue. */
   startedAt: ts("started_at"),
   finishedAt: ts("finished_at"),
-}, (t) => [index("scans_status_idx").on(t.status)]);
+  /** Random id the scan screen makes per entry, so a repeated upload never makes a second scan. */
+  clientKey: text("client_key"),
+}, (t) => [index("scans_status_idx").on(t.status), uniqueIndex("scans_client_key_uq").on(t.clientKey)]);
 
 /**
  * Everything in the collection. One table for three kinds:

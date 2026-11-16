@@ -97,3 +97,13 @@ export function scanSourcePhotos(scanId: number, db: Db = getDb()) {
   return db.select({ file: images.file, thumbFile: images.thumbFile, role: images.role })
     .from(images).where(and(eq(images.scanId, scanId), inArray(images.role, ["front", "back", "source"]))).orderBy(asc(images.id)).all();
 }
+
+export type ScanStatusCounts = { reading: number; failed: number; toReview: number };
+
+/** Small numbers for the "being read" pill: scans waiting or running, scans that failed, items to check. */
+export function scanStatusCounts(db: Db = getDb()): ScanStatusCounts {
+  const reading = db.select({ n: count() }).from(scans).where(inArray(scans.status, ["queued", "processing"])).get()?.n ?? 0;
+  const failed = db.select({ n: count() }).from(scans).where(eq(scans.status, "failed")).get()?.n ?? 0;
+  const toReview = db.select({ n: count() }).from(items).where(eq(items.status, "needs_review")).get()?.n ?? 0;
+  return { reading, failed, toReview };
+}
