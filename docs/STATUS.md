@@ -1,6 +1,10 @@
 # Status
 
-## Milestone 12R: make reading right (in progress, branch work/reading)
+## Milestone 12R: make reading right (live 2026-11-16, commit 9084b93, tag m12r-live)
+- Live through Coolify after a data backup (/root/cardvault-db-backups/pre-12r). Reader self test passes inside the live container as uid 1001. Not yet proven live: a full scan through the app (needs the owner's login).
+- Bench: zero wrong fields on all 19 test cards; sure fill for year and number is under the bar, so most cards wait in Review with a "Check this" note.
+- Next: the owner scans 10 to 15 of his own cards as the real exam; then delete /agent/reading-bench.
+- Server note: disk use grew from 19G to 32G of 61G during image builds (Docker build cache).
 - 12R.2 done (not deployed): tesseract.js is gone. The text reader is now
   RapidOCR (PP-OCR models on onnxruntime) in a Python worker the app starts
   in the same container (ocr/worker.py, src/lib/free/ocr-worker.ts). One
