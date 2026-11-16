@@ -1376,6 +1376,22 @@ the designs above.
   answer fetched again, 2 MB limit, redirect refused, size cap prunes the
   oldest; the "no other fetch in src" test; all Wikidata tests still green.
 
+**10.3 review decisions (settled 2026-11-16, main session; fixed in 10.6a)**
+- Stored-answer key = sha256 of method, host, path, sorted query and the
+  JSON body exactly as sent; only named free-text fields (search words) are
+  lowercased and trimmed before hashing.
+- The `now` line has one overall deadline of 12 s for the whole call
+  (queue, tries and waits); after that the owner sees the plain "busy"
+  message. `background` keeps the retries.
+- The gate map lives on globalThis next to the database.
+- Prune runs when the stored total passes the cap (checked on write) and
+  at most hourly otherwise; deletes run in one transaction.
+- Retries only for requests marked safe to repeat (all MCP reads are).
+- "No other fetch" test also flags node:http, node:https, undici imports,
+  `fetchImpl(` and `.fetch(` outside the allowed list.
+- Failure streak: three failed requests in a row (each try counts), any
+  answer from the server (including 4xx) resets it.
+
 **10.4 Connections screen, keys, Test button, usage view** (Opus, review)
 - Files: `src/lib/outside/keys.ts` (+ test), `src/lib/outside/actions.ts`,
   `src/app/(app)/more/connections/page.tsx`, `src/components/connections/*`,
