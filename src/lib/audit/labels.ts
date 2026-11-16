@@ -40,6 +40,16 @@ export function describeAudit(row: { event: AuditEvent; ip: string; detail: stri
       return d ? `Deleted location ${d}` : "Deleted a location";
     case "item_restored":
       return d ? `Brought back ${d} from Recently deleted` : "Brought back an item from Recently deleted";
+    case "bulk_edit":
+      return d ? `Changed many at once: ${d}` : "Changed many items at once";
+    case "bulk_delete":
+      return d ? `Deleted many at once: ${d}` : "Deleted many items at once";
+    case "bulk_restore":
+      return d ? `Brought back from Recently deleted: ${d}` : "Brought back items from Recently deleted";
+    case "bulk_purge":
+      return d ? `Deleted forever: ${d}` : "Deleted items forever";
+    case "bulk_undo":
+      return d ? `Undid a change to many items: ${d}` : "Undid a change to many items";
     case "backup_note":
       return d ? `Backup: ${d}` : "Backup note";
   }

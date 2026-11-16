@@ -1,4 +1,4 @@
-import { and, asc, count, eq, isNull, ne } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, ne } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items, valuations, type Item } from "@/db/schema";
 import { liveItem } from "./live";
@@ -47,6 +47,30 @@ export function findDuplicates(itemId: number, db: Db = getDb()): Item[] {
     const k = keyFor(c);
     return k !== null && k.every((v, i) => v === key[i]);
   });
+}
+
+/**
+ * Ids of live items that have at least one possible duplicate, by the same
+ * rule as findDuplicates: another confirmed item of the same kind and key.
+ * For the "Possible duplicates" filter. Lowest id first.
+ */
+export function duplicateIds(db: Db = getDb()): number[] {
+  const rows = db.select().from(items).where(and(liveItem, inArray(items.kind, ["card", "sealed"]))).all();
+  const groups = new Map<string, { id: number; confirmed: boolean }[]>();
+  for (const row of rows) {
+    const key = keyFor(row);
+    if (!key) continue;
+    const k = JSON.stringify([row.kind, ...key]);
+    const list = groups.get(k) ?? [];
+    list.push({ id: row.id, confirmed: row.status === "confirmed" });
+    groups.set(k, list);
+  }
+  const out: number[] = [];
+  for (const list of groups.values()) {
+    const confirmed = list.filter((x) => x.confirmed).length;
+    for (const x of list) if (confirmed - (x.confirmed ? 1 : 0) > 0) out.push(x.id);
+  }
+  return out.sort((a, b) => a - b);
 }
 
 export const MERGE_PROBLEMS = ["not_same", "gone", "too_many"] as const;

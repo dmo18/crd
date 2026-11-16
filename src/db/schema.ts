@@ -20,6 +20,7 @@ export const AUDIT_EVENTS = [
   "sign_in_ok", "sign_in_failed", "sign_in_blocked", "setup_done", "setup_failed", "password_changed",
   "signed_out", "signed_out_others", "export_csv", "item_deleted", "failed_scans_deleted", "items_merged",
   "location_deleted", "backup_note", "item_restored",
+  "bulk_edit", "bulk_delete", "bulk_restore", "bulk_purge", "bulk_undo",
 ] as const;
 /** Sign-in and account events. The rest are changes to the collection. */
 export const SECURITY_AUDIT_EVENTS = [
