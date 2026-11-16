@@ -208,10 +208,11 @@ export function unmapBox(b: Box, part: Box): Box {
  * Where a box of the photo sits on the card picture: cut to `region` (when
  * given), then turned `turn` degrees clockwise. Null when it falls off the card.
  */
-export function toView(b: Box, region: Box | undefined, turn: 0 | 90 | 270): Box | null {
+export function toView(b: Box, region: Box | undefined, turn: 0 | 90 | 180 | 270): Box | null {
   let r = region ? unmapBox(b, region) : b;
   if (turn === 90) r = { x: 1 - (r.y + r.h), y: r.x, w: r.h, h: r.w };
   else if (turn === 270) r = { x: r.y, y: 1 - (r.x + r.w), w: r.h, h: r.w };
+  else if (turn === 180) r = { x: 1 - (r.x + r.w), y: 1 - (r.y + r.h), w: r.w, h: r.h };
   const x0 = clamp01(r.x);
   const y0 = clamp01(r.y);
   const x1 = clamp01(r.x + r.w);
@@ -249,13 +250,16 @@ export function cornerBoxes(): Box[] {
 export const CORNER_MAX_CHARS = 6;
 
 /**
- * True when a line read in a corner part may be kept: short, and not touching
+ * True when a line read in a corner part may be kept: short, with a digit, and not touching
  * any edge of the part. A line running out of the part was cut, and one at
  * the photo's own edge may be cut too (a card number half out of the photo).
  */
 export function keepCornerLine(text: string, box: Box): boolean {
   const plain = text.replace(/\s+/g, "");
   if (plain.length === 0 || plain.length > CORNER_MAX_CHARS) return false;
+  // Corners are read again for the card number only. A word read there
+  // ("UPPER" of a stacked logo) would push out a fuller first read (12R.5).
+  if (!/\d/.test(plain)) return false;
   const edge = 0.02;
   return box.x >= edge && box.y >= edge && box.x + box.w <= 1 - edge && box.y + box.h <= 1 - edge;
 }

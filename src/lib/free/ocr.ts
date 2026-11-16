@@ -56,6 +56,8 @@ const MIN_LINE_CONFIDENCE = 0.3;
 const MIN_LINE_CHARS = 2;
 /** A box this much taller than wide holds text running up or down. */
 const TALL = 1.5;
+/** A photo is upside down when at least this share of its text was read turned over. */
+const UPSIDE_DOWN_SHARE = 0.7;
 /** The upright re-read of a sideways photo wins unless it scores below this share of the first read. */
 const UPRIGHT_SHARE = 0.8;
 /** The photo is kept at most this large for the crops (corners need the detail). */
@@ -163,10 +165,12 @@ function summarize(lines: OcrLine[], passes: number, crops = 0): OcrResult {
  * or 0 when most of its text already runs across. The worker turns tall boxes
  * a quarter to the left before reading and says when it then also turned a
  * line upside down: such text runs up the photo (turn 90), other tall text
- * runs down it (turn 270).
+ * runs down it (turn 270). Text running across that was mostly turned over
+ * means the photo is upside down (turn 180).
  */
-export function sidewaysTurn(read: WorkerRead): 0 | 90 | 270 {
+export function sidewaysTurn(read: WorkerRead): 0 | 90 | 180 | 270 {
   let across = 0;
+  let acrossTurned = 0;
   let up = 0;
   let down = 0;
   for (const l of read.lines) {
@@ -180,9 +184,14 @@ export function sidewaysTurn(read: WorkerRead): 0 | 90 | 270 {
       else down += weight;
     } else {
       across += weight;
+      if (l.turned) acrossTurned += weight;
     }
   }
-  if (up + down <= across || up + down < 4) return 0;
+  // Text running across but upside down (the worker turned most lines over):
+  // the photo is upside down, so boxes sit mirrored from where they are on
+  // the card (12R.5). Turned right round so corners and rows read right.
+  if (up + down <= across) return across >= 4 && acrossTurned > UPSIDE_DOWN_SHARE * across ? 180 : 0;
+  if (up + down < 4) return 0;
   return up > down ? 90 : 270;
 }
 
@@ -208,7 +217,7 @@ async function oriented(image: Buffer): Promise<Buffer> {
  */
 async function part(
   src: Buffer,
-  opts: { region?: Region; turn?: 0 | 90 | 270; edge?: number; maxUp?: number; scale?: number; squeeze?: number; pad?: boolean } = {},
+  opts: { region?: Region; turn?: 0 | 90 | 180 | 270; edge?: number; maxUp?: number; scale?: number; squeeze?: number; pad?: boolean } = {},
 ): Promise<Picture> {
   let pipe = sharp(src);
   if (opts.region) {

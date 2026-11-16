@@ -179,6 +179,13 @@ describe("sidewaysTurn", () => {
   it("ignores a few tall letters", () => {
     expect(sidewaysTurn(read([line(tall, true, "AB")]))).toBe(0);
   });
+  it("turns 180 when text runs across but most of it was read turned over (12R.5)", () => {
+    expect(sidewaysTurn(read([line(wide, true), line(wide, true), line(wide, false, "AB")]))).toBe(180);
+    // Half turned over: not sure, left as it is.
+    expect(sidewaysTurn(read([line(wide, true), line(wide, false)]))).toBe(0);
+    // Too little text to judge.
+    expect(sidewaysTurn(read([line(wide, true, "AB")]))).toBe(0);
+  });
 });
 
 describe("boxOf", () => {

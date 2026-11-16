@@ -67,6 +67,12 @@ describe("box mapping", () => {
     const t = toView(leftEdge, undefined, 270)!;
     expect(t.y).toBeCloseTo(0.9);
     expect(toView({ x: 0.95, y: 0.95, w: 0.04, h: 0.04 }, { x: 0, y: 0, w: 0.5, h: 0.5 }, 0)).toBeNull();
+    // Upside down: a box at the top left lands at the bottom right.
+    const turned = toView({ x: 0.1, y: 0.05, w: 0.2, h: 0.1 }, undefined, 180)!;
+    expect(turned.x).toBeCloseTo(0.7);
+    expect(turned.y).toBeCloseTo(0.85);
+    expect(turned.w).toBeCloseTo(0.2);
+    expect(turned.h).toBeCloseTo(0.1);
   });
 });
 
@@ -79,6 +85,9 @@ describe("corner reads", () => {
     expect(keepCornerLine("65", { x: 0.85, y: 0.3, w: 0.15, h: 0.3 })).toBe(false);
     expect(keepCornerLine("336", { x: 0.3, y: 0.0, w: 0.2, h: 0.2 })).toBe(false);
     expect(keepCornerLine("CAREER HIGHLIGHTS", { x: 0.2, y: 0.3, w: 0.5, h: 0.3 })).toBe(false);
+    // A word without a digit is never a card number (12R.5).
+    expect(keepCornerLine("UPPER", { x: 0.2, y: 0.3, w: 0.2, h: 0.3 })).toBe(false);
+    expect(keepCornerLine("98T", { x: 0.2, y: 0.3, w: 0.2, h: 0.3 })).toBe(true);
   });
 });
 
