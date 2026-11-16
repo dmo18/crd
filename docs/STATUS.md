@@ -6,7 +6,25 @@
   checklist in memory with 5 spellings about 7 ms (limit 20 ms); judging
   800 names with 5 spellings about 7 ms; turning 800 cards into slim rows
   (once per scan) about 5 ms.
-- 10.6d (simpler rule after the second failed review): a catalog card is
+- 10.6f (FINAL rule, replaces the sure rules of 10.6d and 10.6e): a
+  catalog card is sure only when the read number equals the card's number,
+  a whole first name and the surname (and the suffix) equal the card's
+  parsed names after folding, the card row has a first name, sport, year
+  and brand were read with one brand and one year tried (not a year from
+  stat rows), the base set id is confirmed by its fetched Base Set
+  checklist and the card is in it, no other player of the pool (checklist
+  rows and every answer seen for this card) carries that surname or one
+  ending in it unless the read first name tells them apart, and the card
+  is not a subset, variation, insert or multi-player card. Sure by name in
+  a complete set is gone. "Von Hayes" now parses as first Von; particles
+  join the surname only in names of three or more words. A second clean set
+  id for a key in any later answer marks a conflict for the rest of the
+  scan. Step 1 stops as soon as a card would be sure and fetches the
+  checklist to confirm (a cold start Griffey #336 costs 2 calls).
+  Choices made inside the rule: rows of another whole name ("Jeff D." and
+  "Jeff M. Robinson", "Dave Johnson (P)") are other players; "Ken Griffey"
+  is not exact for "Ken Griffey Jr."; only clean rows count as rivals.
+- 10.6d (simpler rule after the second failed review, sure rules replaced by 10.6f): a catalog card is
   sure only when (a) the read number and the name agree with one clean base
   card (not a subset card, not a variation), or (b) the checklist is
   complete and exactly one player fits the read name, compared on parsed

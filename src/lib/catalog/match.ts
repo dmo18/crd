@@ -17,6 +17,8 @@ export type NameParts = {
   suffix: Suffix | null;
   /** A last word cut off at the card's edge that looks like the start of "Jr" or "Sr" ("Ken Griffey, J"). */
   suffixCut: "jr" | "sr" | null;
+  /** The last word of the surname ("cruz" of "delacruz"), to see who else carries it. */
+  lastWord: string;
 };
 
 const SUFFIXES: readonly Suffix[] = ["jr", "sr", "ii", "iii", "iv"];
@@ -32,16 +34,20 @@ export function dropQualifiers(raw: string): string {
 }
 
 /**
- * Words that belong to the surname when they stand before it ("De La Cruz",
- * "St. Claire", "La Russa", "O Neill"). Such a word is never a first name or
- * the start of one. normalizeName has already dropped the dot of "St.".
+ * Words that belong to the surname when they stand before it in a name of
+ * three or more words ("Elly De La Cruz", "Randy St. Claire", "Tony La
+ * Russa"). In a name of two words the first word stays the first name, even a
+ * particle ("Von Hayes": first Von, surname Hayes; "Del Ennis"). normalizeName
+ * has already dropped the dot of "St.".
  */
 const PARTICLES: ReadonlySet<string> = new Set(["de", "la", "del", "los", "las", "da", "di", "le", "van", "von", "st", "mc", "o"]);
 
 /**
  * Lowercase, no accents, no punctuation, bracketed qualifiers dropped, "jr"
- * and "sr" set apart, particles joined into the surname ("Elly De La Cruz"
- * gives surname "delacruz"). Null when there is no usable surname.
+ * and "sr" set apart, particles joined into the surname only in a name of
+ * three or more words ("Elly De La Cruz" gives surname "delacruz"; "Von
+ * Hayes" gives first "von", surname "hayes"). Null when there is no usable
+ * surname.
  */
 export function parseName(raw: string | null | undefined): NameParts | null {
   const tokens = normalizeName(dropQualifiers(String(raw ?? "").slice(0, MAX_NAME))).split(" ").filter(Boolean);
@@ -55,10 +61,12 @@ export function parseName(raw: string | null | undefined): NameParts | null {
     suffixCut = last === "j" ? "jr" : "sr";
     tokens.pop();
   }
-  let surname = tokens.pop();
-  while (surname && tokens.length > 0 && PARTICLES.has(tokens[tokens.length - 1])) surname = tokens.pop() + surname;
-  if (!surname || surname.length < 2) return null;
-  return { first: tokens.length >= 1 ? tokens[0] : null, surname, suffix, suffixCut };
+  const words = tokens.length;
+  const lastWord = tokens.pop();
+  let surname = lastWord;
+  if (words >= 3) while (surname && tokens.length > 0 && PARTICLES.has(tokens[tokens.length - 1])) surname = tokens.pop() + surname;
+  if (!surname || !lastWord || surname.length < 2) return null;
+  return { first: tokens.length >= 1 ? tokens[0] : null, surname, suffix, suffixCut, lastWord };
 }
 
 /**
@@ -216,6 +224,12 @@ export type SlimRow = {
    * usable surname.
    */
   playerKey: string;
+  /**
+   * The whole name as written, qualifiers and middle initials kept ("jeff d
+   * robinson", "dave johnson p"): two rows with other whole names are two
+   * players, even when the parsed names agree.
+   */
+  wholeName: string;
   /** A variation (Tiffany or any other), an insert set or an unverified listing: never applied by the app. */
   special: boolean;
   /** All-Star, Record Breaker, Checklist and the like: never applied, a candidate only. */
@@ -256,7 +270,7 @@ export function slimRow(card: CatalogCard): SlimRow {
     if (p) names.push(p);
   }
   return {
-    card, number: card.cardNumber, names, playerKey: playerKeyOf(parseName(card.player)),
+    card, number: card.cardNumber, names, playerKey: playerKeyOf(parseName(card.player)), wholeName: normalizeName(String(card.player ?? "").slice(0, MAX_NAME)),
     special: isSpecial(card), subset: isSubset(card),
   };
 }
@@ -351,56 +365,73 @@ function toCandidate(s: Scored): Candidate {
 }
 
 /**
- * The number path's name check: surname exact after folding, a read first
- * name or initial agrees, and a shared surname needs a first name read.
+ * The one sure case's name check (docs/PLAN.md, "10.6 fourth review
+ * decision"): a whole first name (not an initial) and the surname were read
+ * and both equal the card's parsed names after folding the reading mix-ups;
+ * the suffix too ("Ken Griffey" is not exact for "Ken Griffey Jr."); the card
+ * row has a first name; and no other player of the pool carries that surname
+ * (or a surname whose last word equals it, Von Hayes and Charlie Hayes)
+ * unless the read first name tells them apart exactly. Rows of another whole
+ * name count as another player ("Jeff D. Robinson" and "Jeff M. Robinson").
  */
-function strictName(s: Scored, read: MatchRead, pool: readonly Scored[]): boolean {
+function sureName(s: Scored, read: MatchRead, pool: readonly SlimRow[]): boolean {
+  if (s.row.names.length !== 1) return false;
   const truth = s.row.names[0];
-  if (!truth) return false;
+  if (!truth.first || truth.first.length < 2) return false;
+  const first = foldOcr(truth.first);
   const surname = foldOcr(truth.surname);
-  const shared = pool.some((o) => o.row.playerKey !== s.row.playerKey && o.row.names.some((n) => foldOcr(n.surname) === surname));
-  return read.spellings.some((r) => {
-    if (foldOcr(r.surname) !== surname) return false;
-    const rs = r.suffix ?? r.suffixCut;
-    if (rs && truth.suffix && rs !== truth.suffix) return false;
-    return r.first ? firstFits(r.first, truth.first) : !shared;
-  });
+  const last = foldOcr(truth.lastWord);
+  const exact = read.spellings.some(
+    (r) => r.first !== null && r.first.length >= 2 && foldOcr(r.first) === first && foldOcr(r.surname) === surname && !r.suffixCut && r.suffix === truth.suffix,
+  );
+  if (!exact) return false;
+  for (const o of pool) {
+    // The same player's other cards (an All-Star card, a second plain card) are no rival.
+    if (!o.card.verified || (o.playerKey === s.row.playerKey && o.wholeName === s.row.wholeName)) continue;
+    for (const n of o.names) {
+      const same = foldOcr(n.surname) === surname || foldOcr(n.lastWord) === surname || foldOcr(n.surname) === last;
+      if (!same) continue;
+      // Told apart only by a whole, other first name on that row.
+      if (!n.first || n.first.length < 2 || foldOcr(n.first) === first) return false;
+    }
+  }
+  return true;
 }
 
 export type Judgement = {
   sure: Candidate | null;
-  /** "number": number and name agree. "name": the one player of a complete set, applied without a read number. */
-  sureBy: "number" | "name" | null;
+  /** "number": the one sure case (number, first name and surname agree). */
+  sureBy: "number" | null;
   candidates: Candidate[];
 };
 
 export const MAX_CANDIDATES = 5;
 
 /**
- * Judges a pool of rows. `wholeSet`: the pool holds whole sets (every
- * checklist complete), so "no other player fits" can be checked. A search
- * answer or a checklist cut short (the source sends at most 500 cards) is
- * never a whole set.
- *
- * A card is sure ONLY when
- * (a) the read number and the name agree with exactly one clean card that is
- *     not a subset card and not a variation, or
- * (b) no number was read, the pool is a whole set, exactly one player in it
- *     fits the read name (first name, surname and suffix compared on parsed
- *     names), and that player has exactly one plain card there.
- * Everything else is a ranked candidate for Review.
- *
- * `baseSetIds`: the known base set ids of the read sport, year and brand. A
- * sure card must come from one of them; an empty list means nothing is sure
- * (sport, year or brand not read, or no base set known). Left out only by
- * tests of the name rules alone; lookup always passes it.
- *
- * On the number path the surname must be exact after folding the reading
- * mix-ups (no close spelling), a read first name or initial must agree, and
- * when another player of the pool carries that surname a first name or
- * initial must have been read.
+ * What lookup has proven before anything may be sure. Left out (or null):
+ * nothing is sure, candidates only.
+ * `baseSetIds`: base set ids confirmed by a fetched Base Set checklist of the
+ * read sport, the one read year and the one read brand (empty when any of
+ * that is missing, two brands or two years are tried, the year came from
+ * stat rows, or a second clean set showed up for that key).
+ * `rivals`: every other row seen in this card's look up (search answers and
+ * checklists), so a second player of the same surname anywhere blocks sure.
  */
-export function judge(rows: readonly SlimRow[], read: MatchRead, wholeSet: boolean, baseSetIds?: readonly string[]): Judgement {
+export type SureGate = { baseSetIds: readonly string[]; rivals?: readonly SlimRow[] };
+
+/**
+ * Judges a pool of rows: up to 5 ranked candidates for Review, and a sure
+ * card ONLY in this one case (docs/PLAN.md, "10.6 fourth review decision"):
+ * - a number was read and equals the card's number;
+ * - a whole first name and the surname were read and equal the card's parsed
+ *   names after folding (see `sureName`), with no other player of the pool
+ *   of that surname the first name does not tell apart;
+ * - the card comes from a confirmed base set (`gate.baseSetIds`);
+ * - it is not a subset, variation, insert or multi-player card, and it is
+ *   the only such card that agrees.
+ * There is no sure by name alone, not even in a complete set.
+ */
+export function judge(rows: readonly SlimRow[], read: MatchRead, gate?: SureGate | null): Judgement {
   const scored: Scored[] = [];
   const seen = new Set<string>();
   rows.forEach((row, i) => {
@@ -418,33 +449,16 @@ export function judge(rows: readonly SlimRow[], read: MatchRead, wholeSet: boole
     return x.order - y.order;
   });
   const candidates = keep.slice(0, MAX_CANDIDATES).map(toCandidate);
-  const verified = scored.filter((s) => s.row.card.verified);
-  // Only a clean base card is ever applied: no variation, insert, listing or subset card.
-  const inBase = (s: Scored) => !baseSetIds || (s.row.card.sourceSetId !== null && baseSetIds.includes(s.row.card.sourceSetId));
-  const plain = verified.filter((s) => !s.row.special && !s.row.subset && inBase(s));
   let sure: Scored | null = null;
-  let sureBy: Judgement["sureBy"] = null;
-
-  if (read.number) {
+  if (gate && gate.baseSetIds.length > 0 && read.number) {
+    const base = gate.baseSetIds;
+    const plain = scored.filter(
+      (s) => s.row.card.verified && !s.row.special && !s.row.subset && s.row.card.sourceSetId !== null && base.includes(s.row.card.sourceSetId),
+    );
     // A read number that disagrees with the best name match is never overwritten.
     const both = plain.filter((s) => s.fits && s.numberAgrees);
-    if (both.length === 1 && strictName(both[0], read, verified)) {
-      sure = both[0];
-      sureBy = "number";
-    }
-  } else if (wholeSet) {
-    const fitting = verified.filter((s) => s.fits).sort((x, y) => x.distance - y.distance || x.order - y.order);
-    const best = fitting[0];
-    if (best && best.row.playerKey) {
-      const player = best.row.playerKey;
-      // Another player who fits too (exact name), or comes within one more edit (close name).
-      const rival = verified.some((s) => s.row.playerKey !== player && (best.distance === 0 ? s.fits : s.distance <= best.distance + 1));
-      const base = plain.filter((s) => s.fits && s.row.playerKey === player);
-      if (!rival && base.length === 1) {
-        sure = base[0];
-        sureBy = "name";
-      }
-    }
+    const pool = gate.rivals ? [...rows, ...gate.rivals] : rows;
+    if (both.length === 1 && sureName(both[0], read, pool)) sure = both[0];
   }
-  return { sure: sure ? toCandidate(sure) : null, sureBy, candidates };
+  return { sure: sure ? toCandidate(sure) : null, sureBy: sure ? "number" : null, candidates };
 }

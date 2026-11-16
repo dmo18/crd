@@ -4,7 +4,7 @@ import type { CallLimits, Catalog, CatalogCard, CatalogFailure, CatalogResult, L
 import { createMyCardfolio } from "./mycardfolio";
 import { cleanCardNumber, setIdFromUrl, splitProduct } from "./clean";
 import { normalizeBrand } from "./normalize";
-import { MAX_CANDIDATES, judge, matchRead, slimRows, type Candidate, type Judgement, type MatchRead, type SlimRow } from "./match";
+import { MAX_CANDIDATES, judge, matchRead, slimRows, type Candidate, type Judgement, type MatchRead, type SlimRow, type SureGate } from "./match";
 
 /**
  * The look up of one read card in the catalog: spends calls, then lets
@@ -15,7 +15,7 @@ import { MAX_CANDIDATES, judge, matchRead, slimRows, type Candidate, type Judgem
 /** What the reader found. */
 export type LookupRead = {
   year: number | null;
-  /** True when the year came only from the last stat row: the set of the year before is tried too. */
+  /** True when the year came only from the last stat row: the set of the year before is tried too, and nothing is sure. */
   yearFromStats?: boolean;
   /** Up to 2 possible brands, the likeliest first. */
   brands: string[];
@@ -41,8 +41,6 @@ export type LookupResult = {
 
 export const CARD_CALLS = 8;
 export const SCAN_CALLS = 40;
-/** Applied without a read number: waits in Review with the card filled in. */
-export const CHECK_CONFIDENCE = 0.7;
 /** Small answers only: a search with limit 50 took 7 s in the probe. */
 const SEARCH_LIMIT = 10;
 const MAX_SETS = 2;
@@ -63,6 +61,10 @@ const DISCOVERY_LIMIT = 5;
 export class ChecklistMemory {
   private sets = new Map<string, { key: string; rows: SlimRow[]; complete: boolean }>();
   constructor(private readonly size = 4) {}
+  /** Without changing the order. */
+  peek(setId: string) {
+    return this.sets.get(setId) ?? null;
+  }
   get(setId: string) {
     const v = this.sets.get(setId);
     if (v) {
@@ -99,6 +101,11 @@ export type ScanBudget = {
   stopped: CatalogFailure | null;
   /** "baseball|1990|topps" to the base set id, learned from clean answers of that sport. */
   setIds: Map<string, string>;
+  /**
+   * Keys for which a second clean set id showed up in any answer: nothing of
+   * that sport, year and brand is sure for the rest of the scan.
+   */
+  conflicts: Set<string>;
   /** Checklists fetched in this scan. */
   memory: ChecklistMemory;
   /** Search answers of this scan, so the same words are never asked twice. */
@@ -106,15 +113,14 @@ export type ScanBudget = {
 };
 
 export function createScanBudget(max = SCAN_CALLS): ScanBudget {
-  return { used: 0, max, stopped: null, setIds: new Map(), memory: new ChecklistMemory(), searches: new Map() };
+  return { used: 0, max, stopped: null, setIds: new Map(), conflicts: new Set(), memory: new ChecklistMemory(), searches: new Map() };
 }
 
 export type LookupOptions = { catalog?: Catalog; scan?: ScanBudget };
 
-/** Confidence for the item: sure by number and name is filed as sure; sure by name in a complete set waits in Review. */
+/** Confidence for the item: a sure card is filed as sure; anything else keeps the reading's confidence. */
 export function lookupConfidence(result: Pick<LookupResult, "sure" | "sureBy">, readingConfidence: number): number {
   if (result.sure && result.sureBy === "number") return Math.max(readingConfidence, REVIEW_THRESHOLD);
-  if (result.sure) return CHECK_CONFIDENCE;
   return readingConfidence;
 }
 
@@ -208,11 +214,15 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   // Set ids learned from other cards are used only for the same sport. With
   // no sport read, only what this card's own searches taught is used.
   const setIds = sport ? scan.setIds : new Map<string, string>();
+  const conflicts = sport ? scan.conflicts : new Set<string>();
   const keyOf = (t: Target) => setKey(sport ?? ("unknown" as Sport), t.year, t.brand);
   const sportFits = (c: CatalogCard) => !sport || c.sport === sport;
 
   const tried = new Map<string, CatalogCard[]>();
   const noise: CatalogCard[] = [];
+  /** Every clean row of the read sport seen in this card's answers: who else carries the surname. */
+  const seenRows: SlimRow[] = [];
+  const seenIds = new Set<string>();
   /** `forCard`: the words were this card's name or number (a set id search gives no candidates). */
   async function search(text: string, year: number | null, forCard: boolean, limit = SEARCH_LIMIT): Promise<CatalogCard[]> {
     const key = `${sport ?? ""}|${year ?? ""}|${limit}|${text.toLowerCase()}`;
@@ -226,24 +236,35 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
       cards = got ?? [];
     }
     tried.set(key, cards);
+    const fresh = cards.filter((c) => c.verified && sportFits(c) && !seenIds.has(c.sourceId));
+    for (const c of fresh) seenIds.add(c.sourceId);
+    if (fresh.length > 0) seenRows.push(...slimRows(fresh));
     if (forCard) for (const c of cards) if (!c.verified && !noise.some((n) => n.sourceId === c.sourceId)) noise.push(c);
     // Base set ids come only from a clean, verified Base Set card of the read
     // sport, read from its url (the probe: a broad search gives none; a
     // Tiffany or insert card is another set).
-    // A set id already known for the scan is kept. When one answer shows two
-    // different clean sets for a year and brand not known yet, no base set is
-    // learned ("" marks the conflict), so nothing of it can be sure.
+    // A set id already known for the scan is kept for fetching. A second
+    // clean set id for the same key, in this answer or any later one, marks
+    // the conflict for the rest of the scan: nothing of it is sure. When the
+    // first answer for a key already shows two, no base set is learned ("").
     const seen = new Map<string, Set<string>>();
     for (const c of cards) {
       if (c.verified && c.sourceSetId && c.year && c.brand && !c.variation && !c.setName && sportFits(c) && setIdFromUrl(c.url) === c.sourceSetId) {
         const k = keyOf({ year: c.year, brand: c.brand });
-        if (setIds.has(k)) continue;
         const ids = seen.get(k) ?? new Set<string>();
         ids.add(c.sourceSetId);
         seen.set(k, ids);
       }
     }
-    for (const [k, ids] of seen) setIds.set(k, ids.size === 1 ? [...ids][0] : "");
+    for (const [k, ids] of seen) {
+      const known = setIds.get(k);
+      if (known !== undefined) {
+        if (known === "" || [...ids].some((id) => id !== known)) conflicts.add(k);
+        continue;
+      }
+      if (ids.size > 1) conflicts.add(k);
+      setIds.set(k, ids.size === 1 ? [...ids][0] : "");
+    }
     return cards;
   }
 
@@ -267,7 +288,7 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     const text = r.year !== null ? `${r.year} ${full}` : r.brands.length > 0 ? `${r.brands[0]} ${full}` : full;
     const cards = await search(text, r.year, true);
     const rows = rowsOf(cards, r.year, r.brands[0] ? normalizeBrand(r.brands[0]) : null);
-    const j = judge(rows, m, false, []);
+    const j = judge(rows, m, null);
     return done(j, mergeCandidates(j.candidates, noiseCandidates()));
   }
 
@@ -283,32 +304,68 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     return learned ?? (sport ? memory.setIdFor(keyOf(t)) : null);
   };
   /**
-   * A sure card needs sport, year and brand read and must come from a known
-   * base set of the sets tried. Looked up at each judging: searches teach set ids.
+   * Sure is possible only with sport, year and brand read, exactly one brand
+   * and one year tried, and a year not taken from stat rows.
    */
-  const baseIds = (): string[] => (sport ? targets.map(knownSetId).filter((id): id is string => id !== null) : []);
+  const oneTarget = Boolean(sport) && r.brands.length === 1 && !r.yearFromStats && targets.length === 1;
+  /**
+   * The base set id confirmed by its fetched checklist (in this scan or from
+   * stored answers): held in memory for this sport, year and brand, and every
+   * row a plain Base Set card of them. A conflict for the key confirms nothing.
+   */
+  const confirmedId = (t: Target): string | null => {
+    const k = keyOf(t);
+    if (conflicts.has(k)) return null;
+    const id = knownSetId(t);
+    const set = id ? memory.peek(id) : null;
+    if (!id || !set || set.key !== k || set.rows.length === 0) return null;
+    const brandKey = normalizeBrand(t.brand);
+    const base = set.rows.every(
+      (row) =>
+        row.card.sourceSetId === id && row.card.setName === null && !row.card.variation && row.card.year === t.year &&
+        row.card.brand !== null && normalizeBrand(row.card.brand) === brandKey && row.card.sport === sport,
+    );
+    return base ? id : null;
+  };
+  /** What may make a card sure. Looked up at each judging: checklists and answers change it. */
+  const gate = (extraRivals: readonly SlimRow[] = []): SureGate => {
+    const id = oneTarget ? confirmedId(targets[0]) : null;
+    return { baseSetIds: id ? [id] : [], rivals: [...seenRows, ...extraRivals] };
+  };
+  /**
+   * Step 1 found a card that would be sure once its set is confirmed: the
+   * learned set id, no conflict, everything else as for sure. Then step 1
+   * stops and the checklist is fetched to confirm it.
+   */
+  const wouldBeSure = (rows: readonly SlimRow[]): boolean => {
+    if (!oneTarget) return false;
+    const k = keyOf(targets[0]);
+    const id = setIds.get(k);
+    if (!id || conflicts.has(k)) return false;
+    return judge(rows, m, { baseSetIds: [id], rivals: seenRows }).sure !== null;
+  };
 
   /**
-   * The end of step 2: judges the fetched checklists. `allTargets`: every set
-   * to try is in `sets`. A checklist cut short gets one search by year, brand
-   * and number for a read number past its end; no other search is spent here.
-   * `oneSearch`: the checklists came from memory, so at most one such search.
+   * The end of step 2: judges the fetched checklists together with the clean
+   * rows step 1 found (`step1`). A checklist cut short gets one search by
+   * year, brand and number for a read number past its end; no other search is
+   * spent here. `oneSearch`: the checklists came from memory, so at most one
+   * such search.
    */
-  async function decide(sets: FetchedSet[], allTargets: boolean, oneSearch: boolean, others: Candidate[]): Promise<LookupResult> {
-    const pool: SlimRow[] = [];
+  async function decide(sets: FetchedSet[], oneSearch: boolean, step1: readonly SlimRow[], others: Candidate[]): Promise<LookupResult> {
+    const pool: SlimRow[] = [...step1];
     let searches = 0;
     for (const set of sets) {
       pool.push(...set.rows.filter((row) => sportFits(row.card)));
       // The checklist stops at 500 cards: one search by year, brand and number.
-      if (!set.complete && r.number && !set.rows.some((row) => row.number === r.number) && !(oneSearch && searches > 0)) {
+      if (!set.complete && r.number && !pool.some((row) => row.number === r.number) && !(oneSearch && searches > 0)) {
         searches++;
         const extra = await search(`${set.target.year} ${set.target.brand} ${r.number}`, set.target.year, true);
         pool.push(...rowsOf(extra, set.target.year, normalizeBrand(set.target.brand)));
       }
     }
-    // "No other player fits" counts only over complete sets, and only when the sport is known.
-    const whole = Boolean(sport) && allTargets && sets.every((s) => s.complete);
-    const j = judge(pool, m, whole, baseIds());
+    // Every checklist row tried is a possible rival, not only the read sport's year and brand rows judged.
+    const j = judge(pool, m, gate(sets.flatMap((s) => s.rows)));
     return done(j, mergeCandidates(j.candidates, others, noiseCandidates()));
   }
 
@@ -320,12 +377,7 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     if (set) remembered.push({ target: t, rows: set.rows, complete: set.complete });
   }
   // Every set to try is in memory: no step 1 searches are spent on this card.
-  if (remembered.length === targets.length) return decide(remembered, true, true, []);
-  if (remembered.length > 0 && m.number) {
-    // Number and name agree in a set we already have: nothing to ask.
-    const j = judge(remembered.flatMap((s) => s.rows.filter((row) => sportFits(row.card))), m, false, baseIds());
-    if (j.sure) return done(j, j.candidates);
-  }
+  if (remembered.length === targets.length) return decide(remembered, true, [], []);
 
   // ---- Step 1: exact search, clean entries only, up to 3 calls.
   const brand = r.brands[0];
@@ -340,11 +392,11 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   if (r.number) queries.push(`${year} ${brand} ${r.number}`);
   for (const text of queries) {
     step1.push(...rowsOf(await search(text, year, true), year, normalizeBrand(brand)));
-    const j = judge(step1, m, false, baseIds());
-    if (j.sure) return done(j, j.candidates);
+    // Nothing is sure before its base set is confirmed by the checklist (step 2).
+    if (wouldBeSure(step1)) break;
     if (halted()) break;
   }
-  const step1Judged = judge(step1, m, false, []);
+  const step1Judged = judge(step1, m, null);
 
   // ---- Step 2: checklist and close spelling, at most 2 sets.
   const fetched: FetchedSet[] = [];
@@ -368,6 +420,6 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     }
     if (set) fetched.push({ target: t, rows: set.rows, complete: set.complete });
   }
-  if (fetched.length > 0) return decide(fetched, fetched.length === targets.length, false, step1Judged.candidates);
+  if (fetched.length > 0) return decide(fetched, false, step1, step1Judged.candidates);
   return done(nothing, mergeCandidates(step1Judged.candidates, noiseCandidates()));
 }

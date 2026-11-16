@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CatalogCard } from "./types";
 import { parseChecklist } from "./mycardfolio";
-import { allowedDistance, editDistance, firstFits, foldOcr, isSpecial, isSubset, judge, matchRead, nameDistance, parseName, slimRow, slimRows, type NameParts } from "./match";
+import { allowedDistance, editDistance, firstFits, foldOcr, isSpecial, isSubset, judge, matchRead, nameDistance, parseName, slimRow, slimRows, type NameParts, type SureGate } from "./match";
 
 function fixture(name: string) {
   return JSON.parse(fs.readFileSync(path.join(process.cwd(), "tests/fixtures/catalog", name), "utf8"));
@@ -20,6 +20,8 @@ const SENIOR: CatalogCard = { ...griffey, sourceId: "999469", cardNumber: "469",
 function card(over: Partial<CatalogCard>): CatalogCard {
   return { ...griffey, ...over };
 }
+/** Base set 9179 confirmed by its checklist, as lookup proves it. */
+const BASE: SureGate = { baseSetIds: ["9179"] };
 function p(name: string): NameParts {
   const n = parseName(name);
   if (!n) throw new Error(name);
@@ -28,9 +30,9 @@ function p(name: string): NameParts {
 
 describe("names", () => {
   it("parses suffixes and a cut off Jr", () => {
-    expect(parseName("KEN GRIFFEY JR")).toEqual({ first: "ken", surname: "griffey", suffix: "jr", suffixCut: null });
-    expect(parseName("Ken Griffey, J")).toEqual({ first: "ken", surname: "griffey", suffix: null, suffixCut: "jr" });
-    expect(parseName("Eriffey")).toEqual({ first: null, surname: "eriffey", suffix: null, suffixCut: null });
+    expect(parseName("KEN GRIFFEY JR")).toEqual({ first: "ken", surname: "griffey", suffix: "jr", suffixCut: null, lastWord: "griffey" });
+    expect(parseName("Ken Griffey, J")).toEqual({ first: "ken", surname: "griffey", suffix: null, suffixCut: "jr", lastWord: "griffey" });
+    expect(parseName("Eriffey")).toEqual({ first: null, surname: "eriffey", suffix: null, suffixCut: null, lastWord: "eriffey" });
     expect(parseName("Ken Griffey Sr.")?.suffix).toBe("sr");
     expect(parseName("J")).toBeNull();
   });
@@ -68,82 +70,95 @@ describe("names", () => {
   });
 });
 
-describe("judge against the rows of checklist 9179, taken as a whole set", () => {
+describe("judge against the rows of checklist 9179 (10.6f: no sure by name, not even in a complete set)", () => {
   const rows = slimRows(CARDS);
   for (const name of ["Eriffey", "Ken Griffey, J", "KEN GRIFFEY JR"]) {
-    it(`"${name}" gives 551033 as sure`, () => {
-      const j = judge(rows, matchRead([name], null), true);
-      expect(j.sure?.sourceId).toBe("551033");
-      expect(j.sureBy).toBe("name");
+    it(`"${name}" with no number: not sure, 551033 is the top candidate`, () => {
+      const j = judge(rows, matchRead([name], null), BASE);
+      expect(j).toMatchObject({ sure: null, sureBy: null });
+      expect(j.candidates[0].sourceId).toBe("551033");
     });
   }
-  it("number and name agree: sure by number", () => {
-    const j = judge(rows, matchRead(["Ken Griffey Jr."], "336"), true);
+  it("number, first name and surname agree in the confirmed base set: sure", () => {
+    const j = judge(rows, matchRead(["Ken Griffey Jr."], "336"), BASE);
     expect(j.sure?.sourceId).toBe("551033");
     expect(j.sureBy).toBe("number");
     expect(j.sure?.why).toBe("Number and name agree");
   });
+  it("no gate (nothing proven by lookup): never sure", () => {
+    expect(judge(rows, matchRead(["Ken Griffey Jr."], "336")).sure).toBeNull();
+    expect(judge(rows, matchRead(["Ken Griffey Jr."], "336"), null).sure).toBeNull();
+  });
   it("a read number that disagrees gives both cards as candidates and no sure card", () => {
-    const j = judge(rows, matchRead(["Ken Griffey Jr."], "337"), true);
+    const j = judge(rows, matchRead(["Ken Griffey Jr."], "337"), BASE);
     expect(j.sure).toBeNull();
     const ids = j.candidates.map((c) => c.sourceId);
     expect(ids).toContain("551033");
     expect(ids).toContain(CARDS.find((c) => c.cardNumber === "337")?.sourceId);
   });
   it("an unknown misspelling finds nothing sure", () => {
-    expect(judge(rows, matchRead(["Xqzwv"], null), true).sure).toBeNull();
+    expect(judge(rows, matchRead(["Xqzwv"], null), BASE).sure).toBeNull();
   });
 });
 
 describe("Griffey Sr. and Griffey Jr. are never confused", () => {
   const rows = slimRows([...CARDS, SENIOR]);
-  it("Ken Griffey, J and KEN GRIFFEY JR give the Jr.", () => {
-    expect(judge(rows, matchRead(["Ken Griffey, J"], null), true).sure?.sourceId).toBe("551033");
-    expect(judge(rows, matchRead(["KEN GRIFFEY JR"], null), true).sure?.sourceId).toBe("551033");
+  it("with no number nothing is sure; the Jr. leads for Ken Griffey, J and KEN GRIFFEY JR", () => {
+    for (const name of ["Ken Griffey, J", "KEN GRIFFEY JR"]) {
+      const j = judge(rows, matchRead([name], null), BASE);
+      expect(j.sure, name).toBeNull();
+      expect(j.candidates[0].sourceId, name).toBe("551033");
+    }
   });
-  it("Ken Griffey Sr. gives the Sr., never the Jr.", () => {
-    const j = judge(rows, matchRead(["Ken Griffey Sr."], null), true);
-    expect(j.sure?.sourceId).toBe("999469");
+  it("Ken Griffey Sr. leads with the Sr., never the Jr.", () => {
+    const j = judge(rows, matchRead(["Ken Griffey Sr."], null), BASE);
+    expect(j.sure).toBeNull();
+    expect(j.candidates[0].sourceId).toBe("999469");
     expect(j.candidates.map((c) => c.sourceId)).not.toContain("551033");
   });
   it("no suffix read: not sure, both are candidates", () => {
     for (const name of ["Ken Griffey", "Eriffey"]) {
-      const j = judge(rows, matchRead([name], null), true);
+      const j = judge(rows, matchRead([name], null), BASE);
       expect(j.sure).toBeNull();
       expect(j.candidates.map((c) => c.sourceId).slice(0, 2).sort()).toEqual(["551033", "999469"]);
     }
   });
   it("Jr. with the Sr.'s number: no sure card", () => {
-    expect(judge(rows, matchRead(["Ken Griffey Jr."], "469"), true).sure).toBeNull();
+    expect(judge(rows, matchRead(["Ken Griffey Jr."], "469"), BASE).sure).toBeNull();
+  });
+  it("both Griffeys in the pool: even number, first name, surname and suffix read are not sure (the first name does not tell them apart)", () => {
+    expect(judge(rows, matchRead(["Ken Griffey Jr."], "336"), BASE).sure).toBeNull();
+    expect(judge(rows, matchRead(["Ken Griffey Sr."], "469"), BASE).sure).toBeNull();
   });
 });
 
 describe("special products and noise", () => {
   const tiffany = card({ sourceId: "551885", variation: "Tiffany", sourceSetId: "9181" });
   it("Tiffany is never sure", () => {
-    const j = judge(slimRows([tiffany]), matchRead(["Ken Griffey Jr."], "336"), true);
+    const j = judge(slimRows([tiffany]), matchRead(["Ken Griffey Jr."], "336"), { baseSetIds: ["9179", "9181"] });
     expect(j.sure).toBeNull();
     expect(j.candidates[0].sourceId).toBe("551885");
     expect(j.candidates[0].why).toContain("Tiffany");
   });
   it("Tiffany read as the product is still never sure", () => {
-    expect(judge(slimRows([tiffany]), matchRead(["Ken Griffey Jr."], "336"), true).sure).toBeNull();
+    expect(judge(slimRows([tiffany]), matchRead(["Ken Griffey Jr."], "336"), BASE).sure).toBeNull();
   });
   it("base wins over Tiffany with the same number and name", () => {
-    const j = judge(slimRows([tiffany, griffey]), matchRead(["Ken Griffey Jr."], "336"), false);
+    const j = judge(slimRows([tiffany, griffey]), matchRead(["Ken Griffey Jr."], "336"), BASE);
     expect(j.sure?.sourceId).toBe("551033");
     expect(j.candidates.map((c) => c.sourceId)).toEqual(["551033", "551885"]);
   });
   it("noise rows are never matched by close spelling", () => {
     const noise = card({ sourceId: "ebay_1", verified: false, sourceSetId: null, player: "Ken Griffey Jr." });
     for (const name of ["Ken Griffey Jr.", "Eriffey"]) {
-      const j = judge(slimRows([noise]), matchRead([name], "336"), true);
+      const j = judge(slimRows([noise]), matchRead([name], "336"), BASE);
       expect(j.sure).toBeNull();
       expect(j.candidates[0]).toMatchObject({ sourceId: "ebay_1", score: 0, why: "Unverified listing" });
     }
   });
-  it("a search answer (not a whole set) is sure only with number and name", () => {
-    expect(judge(slimRows([griffey]), matchRead(["Ken Griffey Jr."], null), false).sure).toBeNull();
+  it("a single row is sure only with the number read", () => {
+    expect(judge(slimRows([griffey]), matchRead(["Ken Griffey Jr."], null), BASE).sure).toBeNull();
+    expect(judge(slimRows([griffey]), matchRead(["Ken Griffey Jr."], "336"), BASE).sure?.sourceId).toBe("551033");
   });
 });
 
@@ -166,7 +181,7 @@ describe("first names: a prefix only for an initial or a read under 3 letters", 
 
 describe("a checklist that was cut short (9179: the first 500 of 792)", () => {
   const rows = slimRows(CARDS);
-  const partial = (name: string, number: string | null = null) => judge(rows, matchRead([name], number), false);
+  const partial = (name: string, number: string | null = null) => judge(rows, matchRead([name], number), BASE);
   it("nothing is sure by name alone, whatever was read, even a name that stands alone", () => {
     for (const name of ["Ken Griffey Jr.", "Eriffey", "Ozzie Smith", "Dwight Smith", "Dave Martinez", "Bo Jackson", "Nolan Ryan", "Kent Anderson", "Mets", "Randy Johnson", "Kevin Mitchell"]) {
       const j = partial(name);
@@ -206,11 +221,9 @@ describe("a checklist that was cut short (9179: the first 500 of 792)", () => {
     expect(j.sure).toBeNull();
     expect(j.candidates.map((c) => c.cardNumber).sort()).toEqual(["450", "7"]);
   });
-  it("with the read number 336 and an agreeing name, #336 is sure by number; a close spelling of the surname is not enough", () => {
-    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "Ken Griffey Jr."]) {
-      expect(partial(name, "336"), name).toMatchObject({ sure: { sourceId: "551033" }, sureBy: "number" });
-    }
-    for (const name of ["Eriffey", "Ken Griff", "Ken Grifey"]) {
+  it("with the read number 336, only the exact whole name is sure; no first name, no suffix, a cut suffix or a close surname is not", () => {
+    expect(partial("Ken Griffey Jr.", "336")).toMatchObject({ sure: { sourceId: "551033" }, sureBy: "number" });
+    for (const name of ["Ken Griffey", "Griffey", "Ken Griffey, J", "K Griffey Jr.", "Eriffey", "Ken Griff", "Ken Grifey"]) {
       const j = partial(name, "336");
       expect(j.sure, name).toBeNull();
       expect(j.candidates[0]?.sourceId, name).toBe("551033");
@@ -233,37 +246,33 @@ describe("bracketed qualifiers and players of the same name", () => {
   const JEFF_D: CatalogCard = { ...jeffM, sourceId: "999723", cardNumber: "723", player: "Jeff D. Robinson", url: "https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/723-jeff-d-robinson-999723" };
   it("drops (P) and (Texas) before parsing, so the row has a name", () => {
     expect(davePitcher.player).toBe("Dave Johnson (P)");
-    expect(parseName("DAVE JOHNSON (P)")).toEqual({ first: "dave", surname: "johnson", suffix: null, suffixCut: null });
-    expect(parseName("Jeff Robinson (Texas)")).toEqual({ first: "jeff", surname: "robinson", suffix: null, suffixCut: null });
+    expect(parseName("DAVE JOHNSON (P)")).toEqual({ first: "dave", surname: "johnson", suffix: null, suffixCut: null, lastWord: "johnson" });
+    expect(parseName("Jeff Robinson (Texas)")).toEqual({ first: "jeff", surname: "robinson", suffix: null, suffixCut: null, lastWord: "robinson" });
     expect(parseName("Ken Griffey Jr. (Mariners")?.suffix).toBe("jr");
     expect(parseName("(P)")).toBeNull();
     expect(slimRow(davePitcher).playerKey).toBe(slimRow(daveManager).playerKey);
     expect(slimRow(jeffM).playerKey).toBe("jeff|robinson|");
     expect(slimRow(griffey).playerKey).not.toBe(slimRow(SENIOR).playerKey);
   });
-  it('"Dave Johnson" with no number is not sure: #291 and #416 both fit, even in a complete set', () => {
-    for (const whole of [true, false]) {
-      const j = judge(slimRows(CARDS), matchRead(["Dave Johnson"], null), whole);
-      expect(j.sure, String(whole)).toBeNull();
-      expect(j.candidates.map((c) => c.cardNumber).slice(0, 2).sort()).toEqual(["291", "416"]);
-    }
+  it('"Dave Johnson" with no number is not sure: #291 and #416 both fit', () => {
+    const j = judge(slimRows(CARDS), matchRead(["Dave Johnson"], null), BASE);
+    expect(j.sure).toBeNull();
+    expect(j.candidates.map((c) => c.cardNumber).slice(0, 2).sort()).toEqual(["291", "416"]);
   });
-  it('"Jeff Robinson" with no number is not sure when #42 and #723 are both in the set', () => {
+  it('"Jeff Robinson" is not sure when #42 and #723 are both in the set, not even with the number (same first name)', () => {
     const rows = slimRows([...CARDS, JEFF_D]);
-    for (const whole of [true, false]) {
-      for (const name of ["Jeff Robinson", "Robinson", "J Robinson"]) {
-        const j = judge(rows, matchRead([name], null), whole);
-        expect(j.sure, `${name} ${whole}`).toBeNull();
-        expect(j.candidates.map((c) => c.cardNumber), name).toEqual(expect.arrayContaining(["42", "723"]));
-      }
+    for (const name of ["Jeff Robinson", "Robinson", "J Robinson"]) {
+      const j = judge(rows, matchRead([name], null), BASE);
+      expect(j.sure, name).toBeNull();
+      expect(j.candidates.map((c) => c.cardNumber), name).toEqual(expect.arrayContaining(["42", "723"]));
     }
-    // With the number read, the one card is sure.
-    expect(judge(rows, matchRead(["Jeff Robinson"], "723"), false).sure?.sourceId).toBe("999723");
-    expect(judge(rows, matchRead(["Jeff Robinson"], "42"), false).sure?.cardNumber).toBe("42");
+    expect(judge(rows, matchRead(["Jeff Robinson"], "723"), BASE).sure).toBeNull();
+    expect(judge(rows, matchRead(["Jeff Robinson"], "42"), BASE).sure).toBeNull();
   });
-  it("a complete set with one player who fits gives a sure card by name", () => {
-    expect(judge(slimRows(CARDS), matchRead(["Randy Johnson"], null), true)).toMatchObject({ sure: { player: "Randy Johnson" }, sureBy: "name" });
-    expect(judge(slimRows(CARDS), matchRead(["Jeff Robinson"], null), true)).toMatchObject({ sure: { cardNumber: "42" }, sureBy: "name" });
+  it("a player alone in the set is not sure by name alone; with the number read he is", () => {
+    expect(judge(slimRows(CARDS), matchRead(["Randy Johnson"], null), BASE).sure).toBeNull();
+    const n = CARDS.find((c) => c.player === "Randy Johnson")?.cardNumber ?? null;
+    expect(judge(slimRows(CARDS), matchRead(["Randy Johnson"], n), BASE)).toMatchObject({ sure: { player: "Randy Johnson" }, sureBy: "number" });
   });
 });
 
@@ -278,14 +287,18 @@ describe("subset cards and variations", () => {
     }
     expect(isSubset(card({ otherPlayers: ["Someone Else"] }))).toBe(true);
   });
-  it("a whole set: the plain card wins over the same player's All-Star card, without a number", () => {
+  it("the plain card ranks over the same player's All-Star card; without a number neither is sure", () => {
     // Kevin Mitchell: #401 All-Star and #500 plain. Mark Davis: #205 plain and #407 All-Star.
-    expect(judge(rows, matchRead(["Kevin Mitchell"], null), true).sure?.cardNumber).toBe("500");
-    expect(judge(rows, matchRead(["Mark Davis"], null), true).sure?.cardNumber).toBe("205");
+    const kevin = judge(rows, matchRead(["Kevin Mitchell"], null), BASE);
+    expect(kevin.sure).toBeNull();
+    expect(kevin.candidates[0].cardNumber).toBe("500");
+    expect(judge(rows, matchRead(["Mark Davis"], null), BASE).candidates[0].cardNumber).toBe("205");
+    // The same player's All-Star card is no rival: with the number, the plain card is sure.
+    expect(judge(rows, matchRead(["Kevin Mitchell"], "500"), BASE).sure?.cardNumber).toBe("500");
   });
-  it("a whole set: a player with only a subset card is a candidate, never sure, even with the number", () => {
-    for (const name of ["Ozzie Smith", "Mets", "Checklist"]) expect(judge(rows, matchRead([name], null), true).sure, name).toBeNull();
-    const j = judge(rows, matchRead(["Ozzie Smith"], "400"), true);
+  it("a player with only a subset card is a candidate, never sure, even with the number", () => {
+    for (const name of ["Ozzie Smith", "Mets", "Checklist"]) expect(judge(rows, matchRead([name], null), BASE).sure, name).toBeNull();
+    const j = judge(rows, matchRead(["Ozzie Smith"], "400"), BASE);
     expect(j.sure).toBeNull();
     expect(j.candidates[0].cardNumber).toBe("400");
   });
@@ -293,12 +306,12 @@ describe("subset cards and variations", () => {
     for (const variation of ["Tiffany", "Glossy", "Big Baseball", "Traded"]) {
       const v = card({ sourceId: "77", variation });
       expect(isSpecial(v)).toBe(true);
-      const j = judge(slimRows([v]), matchRead(["Ken Griffey Jr."], "336"), true);
+      const j = judge(slimRows([v]), matchRead(["Ken Griffey Jr."], "336"), BASE);
       expect(j.sure, variation).toBeNull();
       expect(j.candidates[0].sourceId).toBe("77");
     }
     // The "No name on front" error version of #414 is a variation too.
-    expect(judge(rows, matchRead(["Frank Thomas"], "414"), true).sure).toBeNull();
+    expect(judge(rows, matchRead(["Frank Thomas"], "414"), BASE).sure).toBeNull();
     expect(isSpecial(card({ setName: "All-Star Inserts" }))).toBe(true);
   });
 });
@@ -336,7 +349,7 @@ describe("speed on this server", () => {
     const prep = time(() => slimRows(CARDS));
     const rows = slimRows(CARDS);
     const read = matchRead(spellings, null);
-    const ms = time(() => judge(rows, read, true));
+    const ms = time(() => judge(rows, read, BASE));
     console.log(`match timing: slim rows for 500 cards ${prep.toFixed(2)} ms, judge 500 x 5 spellings ${ms.toFixed(2)} ms`);
     expect(ms).toBeLessThan(50); // plan limit; measured about 7 ms when the server is quiet
   });
@@ -345,27 +358,27 @@ describe("speed on this server", () => {
     const rows = slimRows([...CARDS, ...more]);
     expect(rows).toHaveLength(800);
     const read = matchRead(spellings, null);
-    const ms = time(() => judge(rows, read, true));
+    const ms = time(() => judge(rows, read, BASE));
     console.log(`match timing: judge 800 x 5 spellings ${ms.toFixed(2)} ms`);
     expect(ms).toBeLessThan(50); // plan limit; measured about 7 ms when the server is quiet
   });
 });
 
-describe("third review: particles, folding and the stricter sure rule", () => {
-  it("particles join the surname on both sides and are never a first name", () => {
-    expect(parseName("De La Cruz")).toEqual({ first: null, surname: "delacruz", suffix: null, suffixCut: null });
-    expect(parseName("Elly De La Cruz")).toMatchObject({ first: "elly", surname: "delacruz" });
-    expect(parseName("St. Claire")).toMatchObject({ first: null, surname: "stclaire" });
+describe("third and fourth review: particles, folding and the one strict sure case", () => {
+  it("particles join the surname only in a name of three or more words; in two words the first word is the first name", () => {
+    expect(parseName("De La Cruz")).toEqual({ first: null, surname: "delacruz", suffix: null, suffixCut: null, lastWord: "cruz" });
+    expect(parseName("Elly De La Cruz")).toMatchObject({ first: "elly", surname: "delacruz", lastWord: "cruz" });
     expect(parseName("Randy St. Claire")).toMatchObject({ first: "randy", surname: "stclaire" });
-    expect(parseName("La Russa")).toMatchObject({ first: null, surname: "larussa" });
-    expect(parseName("O Neill")).toMatchObject({ first: null, surname: "oneill" });
-    expect(parseName("Paul O'Neill")).toMatchObject({ first: "paul", surname: "oneill" });
+    expect(parseName("Tony La Russa")).toMatchObject({ first: "tony", surname: "larussa" });
     expect(parseName("Mark Mc Gwire Jr")).toMatchObject({ first: "mark", surname: "mcgwire", suffix: "jr" });
+    expect(parseName("Paul O'Neill")).toMatchObject({ first: "paul", surname: "oneill" });
+    expect(parseName("Von Hayes")).toMatchObject({ first: "von", surname: "hayes" });
+    expect(parseName("Von Miller")).toMatchObject({ first: "von", surname: "miller" });
+    expect(parseName("Del Ennis")).toMatchObject({ first: "del", surname: "ennis" });
+    expect(parseName("St. Claire")).toMatchObject({ first: "st", surname: "claire" });
+    expect(parseName("La Russa")).toMatchObject({ first: "la", surname: "russa" });
     expect(parseName("Ken Griffey Jr.")).toMatchObject({ first: "ken", surname: "griffey", suffix: "jr" });
     expect(nameDistance(p("De La Cruz"), p("Deivi Cruz"), 3)).toBe(Infinity);
-    expect(nameDistance(p("St. Claire"), p("Steve Claire"), 1)).toBe(Infinity);
-    expect(nameDistance(p("La Russa"), p("Larry Russa"), 1)).toBe(Infinity);
-    expect(nameDistance(p("O Neill"), p("Paul O'Neill"), 0)).toBe(0);
   });
   it("folding forgives only the reading mix-ups", () => {
     expect(foldOcr("wltt")).toBe(foldOcr("witt"));
@@ -375,32 +388,94 @@ describe("third review: particles, folding and the stricter sure rule", () => {
     expect(foldOcr("williamson")).not.toBe(foldOcr("williams"));
   });
   const rows = slimRows(CARDS);
-  it("number path: a close surname is not sure (Williamson #41, Costello #427), an exact or folded one is", () => {
+  it("number path: a close surname is not sure (Williamson #41, Costello #427), an exact or folded whole name is", () => {
     for (const [name, number] of [["Williamson", "41"], ["Costello", "427"], ["Eriffey", "336"]] as const) {
-      for (const whole of [true, false]) expect(judge(rows, matchRead([name], number), whole).sure, name).toBeNull();
+      expect(judge(rows, matchRead([name], number), BASE).sure, name).toBeNull();
     }
-    expect(judge(rows, matchRead(["Matt Williams"], "41"), false).sure?.cardNumber).toBe("41");
-    expect(judge(rows, matchRead(["Ken Griffey Jr."], "336"), false).sure?.sourceId).toBe("551033");
-    expect(judge(rows, matchRead(["Dwlght Srnith"], "311"), false).sure?.cardNumber).toBe("311");
+    expect(judge(rows, matchRead(["Matt Williams"], "41"), BASE).sure?.cardNumber).toBe("41");
+    expect(judge(rows, matchRead(["Ken Griffey Jr."], "336"), BASE).sure?.sourceId).toBe("551033");
+    expect(judge(rows, matchRead(["Dwlght Srnith"], "311"), BASE).sure?.cardNumber).toBe("311");
   });
-  it("number path: a shared surname needs a first name read, and a read first name must agree", () => {
+  it("number path: an initial or no first name is never sure, even alone in the pool", () => {
     const senior581 = card({ sourceId: "999581", cardNumber: "581", player: "Ken Griffey Sr." });
     const both = slimRows([...CARDS, senior581]);
-    expect(judge(both, matchRead(["Griffey"], "581"), false).sure).toBeNull();
-    expect(judge(both, matchRead(["K Griffey"], "581"), false).sure?.sourceId).toBe("999581");
-    expect(judge(both, matchRead(["Kevin Griffey"], "336"), false).sure).toBeNull();
-    // Alone in the pool, the surname is enough.
-    expect(judge(slimRows([senior581]), matchRead(["Griffey"], "581"), false).sure?.sourceId).toBe("999581");
+    expect(judge(both, matchRead(["Griffey"], "581"), BASE).sure).toBeNull();
+    expect(judge(both, matchRead(["K Griffey"], "581"), BASE).sure).toBeNull();
+    expect(judge(both, matchRead(["Kevin Griffey"], "336"), BASE).sure).toBeNull();
+    expect(judge(slimRows([senior581]), matchRead(["Griffey"], "581"), BASE).sure).toBeNull();
+    expect(judge(slimRows([senior581]), matchRead(["Ken Griffey Sr."], "581"), BASE).sure?.sourceId).toBe("999581");
   });
-  it("a sure card must come from a known base set: none known or another set gives no sure card", () => {
+  it("a sure card must come from the confirmed base set: none or another set gives no sure card", () => {
     const read = matchRead(["Ken Griffey Jr."], "336");
-    expect(judge(rows, read, true, ["9179"]).sure?.sourceId).toBe("551033");
-    expect(judge(rows, read, true, []).sure).toBeNull();
-    expect(judge(rows, read, true, ["9999"]).sure).toBeNull();
-    expect(judge(rows, matchRead(["Eriffey"], null), true, ["9999"]).sure).toBeNull();
+    expect(judge(rows, read, BASE).sure?.sourceId).toBe("551033");
+    expect(judge(rows, read, { baseSetIds: [] }).sure).toBeNull();
+    expect(judge(rows, read, { baseSetIds: ["9999"] }).sure).toBeNull();
     const other = card({ sourceId: "999336", sourceSetId: "9999" });
-    const j = judge(slimRows([other, griffey]), read, false, ["9179"]);
+    const j = judge(slimRows([other, griffey]), read, BASE);
     expect(j.sure?.sourceId).toBe("551033");
     expect(j.candidates.map((c) => c.sourceId)).toContain("999336");
+  });
+
+  describe("fourth review cases: all NOT sure", () => {
+    const vonHayes = card({ sourceId: "990710", cardNumber: "710", player: "Von Hayes" });
+    const charlieHayes = card({ sourceId: "990577", cardNumber: "577", player: "Charlie Hayes" });
+    const hayes = slimRows([...CARDS, vonHayes, charlieHayes]);
+    it('"Hayes" with or without #577 when Von Hayes #710 and Charlie Hayes #577 are in the pool', () => {
+      for (const n of [null, "577", "710"]) {
+        const j = judge(hayes, matchRead(["Hayes"], n), BASE);
+        expect(j.sure, String(n)).toBeNull();
+        expect(j.candidates.map((c) => c.sourceId), String(n)).toEqual(expect.arrayContaining(n === "710" ? ["990710"] : ["990577"]));
+      }
+    });
+    it('"V. Hayes" #710 is not sure (initial only); "Von Hayes" #710 and "Charlie Hayes" #577 are, the first names tell them apart', () => {
+      expect(judge(hayes, matchRead(["V. Hayes"], "710"), BASE).sure).toBeNull();
+      expect(judge(hayes, matchRead(["C Hayes"], "577"), BASE).sure).toBeNull();
+      expect(judge(hayes, matchRead(["Von Hayes"], "710"), BASE).sure?.sourceId).toBe("990710");
+      expect(judge(hayes, matchRead(["Charlie Hayes"], "577"), BASE).sure?.sourceId).toBe("990577");
+    });
+    it("a surname whose last word equals it is a rival too (Bob De La Hayes)", () => {
+      const pool = slimRows([charlieHayes, card({ sourceId: "990720", cardNumber: "720", player: "Bob De La Hayes" })]);
+      expect(judge(pool, matchRead(["Charlie Hayes"], "577"), BASE).sure?.sourceId).toBe("990577");
+      const noFirst = slimRows([charlieHayes, card({ sourceId: "990721", cardNumber: "721", player: "De La Hayes" })]);
+      expect(judge(noFirst, matchRead(["Charlie Hayes"], "577"), BASE).sure).toBeNull();
+    });
+    it('"Miller" (Bob and Von Miller) and "Ennis" (Jim and Del Ennis), with or without the number', () => {
+      const pool = slimRows([
+        card({ sourceId: "990601", cardNumber: "601", player: "Bob Miller" }),
+        card({ sourceId: "990602", cardNumber: "602", player: "Von Miller" }),
+        card({ sourceId: "990603", cardNumber: "603", player: "Jim Ennis" }),
+        card({ sourceId: "990604", cardNumber: "604", player: "Del Ennis" }),
+      ]);
+      for (const [name, numbers] of [["Miller", [null, "601", "602"]], ["Ennis", [null, "603", "604"]]] as const) {
+        for (const n of numbers) expect(judge(pool, matchRead([name], n), BASE).sure, `${name} ${n}`).toBeNull();
+      }
+    });
+    it('a 2-card clean set: a name alone is not sure', () => {
+      const pool = slimRows([card({ sourceId: "990001", cardNumber: "1", player: "Alan Able" }), card({ sourceId: "990002", cardNumber: "2", player: "Bert Baker" })]);
+      for (const name of ["Alan Able", "Able", "Bert Baker"]) expect(judge(pool, matchRead([name], null), BASE).sure, name).toBeNull();
+    });
+    it('"Jim Thorne" #801 is not sure when Jim Thome is in the pool (rn folds to m)', () => {
+      const pool = slimRows([...CARDS, card({ sourceId: "990801", cardNumber: "801", player: "Jim Thorne" }), card({ sourceId: "990811", cardNumber: "811", player: "Jim Thome" })]);
+      expect(judge(pool, matchRead(["Jim Thorne"], "801"), BASE).sure).toBeNull();
+      expect(judge(pool, matchRead(["Jim Thome"], "811"), BASE).sure).toBeNull();
+    });
+    it('"Joe Hall" #803 is not sure when Joe Hail is in the pool (i folds to l); Mel and Drew Hall are told apart', () => {
+      const joeHall = card({ sourceId: "990803", cardNumber: "803", player: "Joe Hall" });
+      const pool = slimRows([...CARDS, joeHall, card({ sourceId: "990813", cardNumber: "813", player: "Joe Hail" })]);
+      expect(judge(pool, matchRead(["Joe Hall"], "803"), BASE).sure).toBeNull();
+      // Without Joe Hail, the other Halls of 9179 (Mel #436, Drew #463) have other first names.
+      expect(judge(slimRows([...CARDS, joeHall]), matchRead(["Joe Hall"], "803"), BASE).sure?.sourceId).toBe("990803");
+    });
+    it('"Ozzie Smith" #805 is not sure with a row "Smith" with no first name in the pool, nor when the card itself has no first name', () => {
+      const ozzie = card({ sourceId: "990805", cardNumber: "805", player: "Ozzie Smith" });
+      const bare = card({ sourceId: "990806", cardNumber: "806", player: "Smith" });
+      expect(judge(slimRows([...CARDS, ozzie, bare]), matchRead(["Ozzie Smith"], "805"), BASE).sure).toBeNull();
+      expect(judge(slimRows([...CARDS, ozzie]), matchRead(["Ozzie Smith"], "805"), BASE).sure?.sourceId).toBe("990805");
+      expect(judge(slimRows([card({ sourceId: "990807", cardNumber: "807", player: "Smith" })]), matchRead(["Ozzie Smith"], "807"), BASE).sure).toBeNull();
+    });
+    it("rivals passed by lookup (answers seen outside the judged rows) block sure too", () => {
+      const rival = slimRows([card({ sourceId: "990469", cardNumber: "469", player: "Ken Griffey Sr.", year: 1989 })]);
+      expect(judge(rows, matchRead(["Ken Griffey Jr."], "336"), { baseSetIds: ["9179"], rivals: rival }).sure).toBeNull();
+    });
   });
 });
