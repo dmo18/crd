@@ -2298,3 +2298,28 @@ Tasks:
 Bar to go live: player right on 95 of 100, fewer than 2 in 100 fields filled wrong, all 4 of the owner's cards right (player, year, brand, number; set for Hardaway may be "Fleer Ultra" or blank, never wrong).
 
 Run cap: 12 tasks or 3M delegated tokens. Fable only for the plan review and the final review (owner's wish).
+
+### 12R plan review (one Fable blind review, 2026-11-16): works with changes. All accepted.
+
+Measured by the reviewer: RapidOCR peak memory 408 MB, 1.1 to 7.0 s a photo. Cropping the card off the table and turning it upright read Hardaway "65". Squeezing the spaced Donruss band to half width read "DONRUSS 1992". Foil "ULTRA" stays unreadable.
+
+Changes to the plan above:
+- D2 is settled: a Python worker (RapidOCR pinned by hash, one long-lived process, one job at a time, 4 threads, models copied into the image) started by the app inside the same container. tesseract.js is removed. The Dockerfile load test and the health route check the worker.
+- D5 is flipped: year, brand and number come from the card first. The catalog only confirms or fills blanks. Nothing is filled from an unverified listing.
+- New step: find the card in the photo, crop off the table, turn it upright, then re-read the corners (card number) and squeeze wide spaced boxes.
+- Maker list gains Impel; Olympic and multi-sport cards: "Athletics" there is track and field, sport "other".
+- Foil logos are accepted as unreadable: brand from the copyright line, set left blank.
+- Bar: of the fields filled, at most 2 in 100 wrong; and filled at least: player 90, year 80, brand 80, number 70 in 100. Scored on photos held back from tuning. Owner cards: Griffey number may come only from the catalog (it is cut out of that photo); Hardaway year 1993; Milacki 1992 despite "1991 LEAF"; Mills on player, 1991, Impel, 24.
+- 12R.3 is replaced: no free legal source of such card pictures with answers exists. The owner scans 30 to 40 of his own cards; answers are checked once by eye; half for tuning, half held back. Tilt, dark and glare are added as extras only.
+- The app keeps the original upload of new scans in /data/reader-samples (newest 200) so the bench reads what the live reader reads.
+
+Tasks now:
+| # | Task | Model |
+|---|---|---|
+| 12R.0 | Keep original uploads as samples; deploy | main |
+| 12R.1 | Bench: runner and per-field scorecard over tests/fixtures/real-cards, old reader baseline | Sonnet |
+| 12R.2 | Python worker in the image, ocr.ts speaks to it, tesseract removed | Opus |
+| 12R.3 | Find card, crop, upright, corner and squeezed re-reads | Opus |
+| 12R.4 | Rules: name from front, card-first year, brand, number, wrong rules fixed, catalog confirms only | Opus |
+| 12R.5 | Owner's 30 to 40 scans become test cases; scorecard; at most 2 rounds of fixes | Opus |
+| 12R.6 | Final review (Fable, once), security check, backup, deploy via Coolify, re-read the owner's cards live | main |
