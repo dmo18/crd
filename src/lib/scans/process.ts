@@ -9,6 +9,7 @@ import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
 import { checkScanStreak } from "@/lib/audit/alert-rules";
 import { errorKind, log } from "@/lib/log";
+import { keepReaderSamples } from "./samples";
 import { recordSnapshot } from "@/lib/valuation/snapshots";
 import { RecognitionError, type RecognitionPhoto, type RecognizedItem, type Recognizer } from "@/lib/recognition/types";
 
@@ -70,6 +71,8 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     for (const row of photoRows) {
       photos.push({ role: row.role as RecognitionPhoto["role"], ...(await readForRecognition(row)) });
     }
+
+    await keepReaderSamples(scanId, photos);
 
     const work = recognizer.recognize({ mode: scan.mode, photos, hint: scan.hint });
     // A late failure after the deadline must not become an unhandled rejection.
