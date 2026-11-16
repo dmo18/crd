@@ -13,7 +13,10 @@ import { lookupCard } from "./lookup";
 import { getCatalog } from "./provider";
 import { saveCatalogCardIn } from "./store";
 import type { Catalog, CatalogCard } from "./types";
-import { hasSeveralVersions, isVersionRow } from "./versions";
+import { normalizeText } from "./normalize";
+import { parseFieldSources, sourceOf } from "./sources";
+import { buildTitle } from "@/lib/title";
+import { catalogVersionName, hasSeveralVersions, isVersionRow } from "./versions";
 
 /**
  * The catalog in Review: candidates wait for the owner's one tap ("This one").
@@ -79,11 +82,34 @@ export function pickCandidate(itemId: number, position: number, sourceId: string
     const saved = saveCatalogCardIn(tx as unknown as Db, card, now);
     if (!saved.ok) return { ok: false, error: saved.error };
     const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get()!;
-    const { patch, differences } = applyCatalogCard(item, row);
-    const confirmed = differences.length === 0;
+    const applied = applyCatalogCard(item, row);
+    const patch: Partial<Item> = { ...applied.patch };
+    let differences = applied.differences;
     // The owner tapped that very row: a row that shows a version ("Topps Tiffany") is the owner's choice of
-    // that version. A base row leaves the version question as it was (PLAN Milestone 11, "A pick in Review").
-    const version = isVersionRow(chosen) ? { versionState: "confirmed" as const, versionSource: "catalog" as const, versionOptions: null } : {};
+    // that version, but only when the item's variation names it. A base row leaves the version question as it
+    // was (PLAN Milestone 11, "A pick in Review"; review fix 3).
+    let version: Partial<Item> = {};
+    if (isVersionRow(chosen)) {
+      const after = { ...item, ...patch } as Item;
+      const name = catalogVersionName(after, chosen);
+      const have = after.variation?.trim() ? normalizeText(after.variation) : "";
+      if (name && have && ` ${have} `.includes(` ${normalizeText(name)} `)) {
+        version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
+      } else if (name && sourceOf(item, "variation") !== "owner") {
+        // Empty or only read by the scanner: the owner's tap writes the version name, as chooseVersion does.
+        const marks = parseFieldSources(after.fieldSources) ?? {};
+        marks.variation = "owner";
+        patch.variation = name;
+        patch.fieldSources = JSON.stringify(marks);
+        patch.title = buildTitle({ ...after, variation: name });
+        differences = differences.filter((d) => d.field !== "variation");
+        version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
+      } else if (name) {
+        // The owner's own variation says something else: nothing is decided, the difference is shown.
+        differences = [...differences.filter((d) => d.field !== "variation"), { field: "variation", itemValue: String(after.variation), catalogValue: name }];
+      }
+    }
+    const confirmed = differences.length === 0;
     tx.update(items).set({
       ...patch, ...version, catalogCandidates: null, ...(confirmed ? { status: "confirmed" as const } : {}), updatedAt: now,
     }).where(and(eq(items.id, itemId), liveItem)).run();

@@ -43,6 +43,8 @@ export const inventoryFilterSchema = z.object({
   value: z.preprocess(first, z.literal("none")).optional().catch(undefined),
   missing: z.preprocess(first, z.enum(MISSING_FIELDS)).optional().catch(undefined),
   flag: z.preprocess(first, z.enum(ITEM_FLAGS)).optional().catch(undefined),
+  /** "Version not sure": cards whose version the owner answered "Not sure yet". */
+  version: z.preprocess(first, z.literal("not_sure")).optional().catch(undefined),
   sort: z.preprocess(first, z.enum(SORTS)).catch("newest"),
   page: intText(1, 10000).catch(1),
 });
@@ -105,6 +107,7 @@ function where(f: InventoryFilters, db: Db): SQL | undefined {
   if (f.value === "none") conds.push(and(isNull(items.manualValueCents), isNull(items.estValueCents)));
   if (f.missing) conds.push(missingCondition(f.missing, db));
   if (f.flag) conds.push(flagCondition(f.flag, db));
+  if (f.version) conds.push(eq(items.versionState, "not_sure"));
   return and(...conds);
 }
 

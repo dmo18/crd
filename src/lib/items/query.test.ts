@@ -56,6 +56,15 @@ describe("filters", () => {
     expect(highlights(db).keyCards).toBe(listItems(parse({ tier: "key,grail" }), db).total);
   });
   it("rookie", () => expect(titles({ rookie: "1" })).toEqual(["Griffey Rookie"]));
+  it("version not sure keeps only cards answered Not sure yet, and the bad value is ignored", () => {
+    add({ title: "Unsure Thomas", versionState: "not_sure" });
+    add({ title: "Sure Thomas", versionState: "confirmed" });
+    expect(titles({ version: "not_sure" })).toEqual(["Unsure Thomas"]);
+    expect(parse({ version: "confirmed" }).version).toBeUndefined();
+    expect(parse({ version: "not_sure" }).version).toBe("not_sure");
+    expect(listItems(parse({ version: "not_sure" }), db).total).toBe(1);
+    expect(titles({ version: "nope" })).toHaveLength(9);
+  });
   it("year range", () => {
     expect(titles({ yearFrom: "1989", yearTo: "1990", sort: "year_asc" })).toEqual(["Griffey Rookie", "Sealed Box"]);
   });

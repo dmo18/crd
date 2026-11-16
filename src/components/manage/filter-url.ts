@@ -18,6 +18,7 @@ export function filterParams(f: Base, over: Partial<Record<"missing" | "flag" | 
   put("value", f.value);
   put("missing", "missing" in over ? over.missing : f.missing);
   put("flag", "flag" in over ? over.flag : f.flag);
+  put("version", f.version);
   if (f.sort && f.sort !== "newest") sp.set("sort", f.sort);
   return sp;
 }

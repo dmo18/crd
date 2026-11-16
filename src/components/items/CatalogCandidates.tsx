@@ -2,6 +2,7 @@
 
 import { useActionState } from "react";
 import { Badge, Button } from "@/components/ui";
+import { ChooseVersionLink } from "@/components/catalog/VersionPicker";
 import type { ReviewCatalogView } from "@/lib/catalog/pick";
 import {
   dismissCandidatesAction, lookUpAgainAction, pickCandidateAction, catalogValuesAction, type CatalogActionState,
@@ -87,6 +88,7 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
 
       {view.status === "candidates" && view.candidates.length > 0 ? (
         <>
+          {view.severalVersions ? <ChooseVersionLink itemId={id} title={title} /> : null}
           <p className="text-sm font-semibold">Is it one of these?</p>
           <ul className="flex flex-col gap-2">
             {view.candidates.slice(0, SHOWN).map((row) => <CandidateRow key={row.position} id={id} row={row} action={pick} pending={picking || looking} />)}

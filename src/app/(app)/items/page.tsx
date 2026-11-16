@@ -27,7 +27,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
   const hasFilters = Boolean(
     filters.q || filters.kind || filters.sport || filters.status || filters.tier || filters.rookie ||
     filters.yearFrom != null || filters.yearTo != null || filters.location != null || filters.value != null ||
-    filters.missing || filters.flag,
+    filters.missing || filters.flag || filters.version,
   );
   const subtitle = [
     `${plural(result.total, "item", "items")}${hasFilters ? " matching" : ""}`,

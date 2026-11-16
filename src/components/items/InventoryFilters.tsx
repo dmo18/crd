@@ -37,6 +37,7 @@ export function activeFilterLabels(f: Filters, locations: Pick<Location, "id" | 
   if (f.value === "none") out.push("Needs a value");
   if (f.missing) out.push(MISSING_LABELS[f.missing]);
   if (f.flag) out.push(FLAG_LABELS[f.flag]);
+  if (f.version) out.push("Version not sure");
   if (f.rookie) out.push("Rookies only");
   if (f.yearFrom != null) out.push(`From ${f.yearFrom}`);
   if (f.yearTo != null) out.push(`To ${f.yearTo}`);
@@ -104,6 +105,12 @@ export function InventoryFilters({ filters, locations, action = "/items" }: {
             <select id="inv-value" name="value" defaultValue={filters.value ?? ""} className={INPUT_CLASS}>
               <option value="">Any</option>
               <option value="none">Needs a value</option>
+            </select>
+          </Field>
+          <Field label="Version" htmlFor="inv-version">
+            <select id="inv-version" name="version" defaultValue={filters.version ?? ""} className={INPUT_CLASS}>
+              <option value="">Any</option>
+              <option value="not_sure">Version not sure</option>
             </select>
           </Field>
           <label htmlFor="inv-rookie" className="flex min-h-11 items-center gap-3 text-base font-semibold">

@@ -31,7 +31,9 @@ describe("known versions list", () => {
   });
 
   it("offers nothing outside the years, for another brand, or without year or brand", () => {
-    expect(names(card("Topps", 1983))).toEqual(["O-Pee-Chee"]);
+    expect(names(card("Topps", 1983))).toEqual([]);
+    expect(names(card("Topps", 1989))).toEqual(["Tiffany"]);
+    expect(names(card("Topps", 1993))).toEqual(["Gold"]);
     expect(names(card("Fleer", 1990))).toEqual([]);
     expect(names(card("Donruss", 1990))).toEqual([]);
     expect(names(card(null, 1990))).toEqual([]);
@@ -41,7 +43,15 @@ describe("known versions list", () => {
   it("keeps rows for some sports to those sports, and offers them when the sport is not known", () => {
     expect(names(card("Topps", 1991, null, "football"))).toEqual([]);
     expect(names(card("Topps", 1993, null, "football"))).toEqual(["Gold"]);
-    expect(names(card("Topps", 1990, null, "hockey"))).toEqual(["O-Pee-Chee"]);
+    // O-Pee-Chee is baseball 1990 to 1992 only.
+    expect(names(card("Topps", 1990, null, "hockey"))).toEqual([]);
+    expect(names(card("Topps", 1990, null, "baseball"))).toEqual(["Tiffany", "O-Pee-Chee"]);
+    expect(KNOWN_VERSIONS.find((r) => r.id === "opc")?.howToTell).toBe("Says O-Pee-Chee on the front and back; the number may differ.");
+    // Topps Gold: baseball 1992 to 1994, the other sports 1992 to 1993 only.
+    expect(names(card("Topps", 1994, null, "baseball"))).toEqual(["Gold"]);
+    expect(names(card("Topps", 1994, null, "football"))).toEqual([]);
+    expect(names(card("Topps", 1993, null, "hockey"))).toEqual(["Gold"]);
+    expect(names(card("Topps", 1992, null, null))).toEqual(["Gold", "Gold", "O-Pee-Chee"]);
     expect(names(card("Topps", 1991, null, null))).toEqual(["Tiffany", "Desert Shield", "O-Pee-Chee"]);
   });
 

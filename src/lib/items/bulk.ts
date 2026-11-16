@@ -60,6 +60,7 @@ export const selectionFiltersSchema = z.strictObject({
   value: z.literal("none").optional(),
   missing: z.enum(MISSING_FIELDS).optional(),
   flag: z.enum(ITEM_FLAGS).optional(),
+  version: z.literal("not_sure").optional(),
   // Ignored: a bulk change covers every page, in any order.
   sort: z.unknown().optional(),
   page: z.unknown().optional(),

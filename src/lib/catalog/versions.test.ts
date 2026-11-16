@@ -9,7 +9,7 @@ import { saveCatalogCardIn } from "./store";
 import type { CatalogCard } from "./types";
 import {
   ANOTHER_NAME, BASE_NAME, buildVersionOptions, chooseVersion, hasSeveralVersions, LIST_CHANGED, loadVersionOptions,
-  MAX_VERSION_OPTIONS, NOT_SURE_NAME, parseVersions, resetShowVersionsLimitForTests, SHOW_EVERY_MS, SHOW_WAIT,
+  MAX_VERSION_OPTIONS, NOT_SURE_NAME, parseVersions, resetShowVersionsLimitForTests, SHOW_BUSY, SHOW_EVERY_MS, SHOW_WAIT,
   versionSearches, type VersionItem,
 } from "./versions";
 import { slimCandidate } from "./candidates";
@@ -45,7 +45,7 @@ describe("buildVersionOptions on the recordings", () => {
     const o = buildVersionOptions(thomas, SEARCHES["1990 topps 414 thomas"]);
     expect(names(o)).toEqual([BASE_NAME, "Tiffany", "O-Pee-Chee", ANOTHER_NAME, NOT_SURE_NAME]);
     expect(o[0].evidence).toEqual([{ from: "catalog", text: "From MyCardfolio: 1990 Topps #414 Frank Thomas", url: expect.stringContaining("551111") }]);
-    expect(o[0].card).toBeNull();
+    expect(o[0].card?.sourceId).toBe("551111");
     expect(o[1].card?.sourceId).toBe("551963");
     expect(o[1].evidence.map((e) => e.from)).toEqual(["catalog", "known_list"]);
     expect(o[1].evidence[0]).toMatchObject({ text: "From MyCardfolio: 1990 Topps #414 Frank Thomas (Tiffany)", url: expect.stringMatching(/^https:\/\/mycardfolio\.com\/.*551963$/) });
@@ -280,14 +280,59 @@ describe("chooseVersion", () => {
     expect(db.select().from(catalogCards).all()).toHaveLength(2);
   });
 
-  it("base: variation emptied, not a parallel, mark removed, nothing linked", async () => {
+  it("base: variation emptied, not a parallel, mark removed, the catalog's base card linked", async () => {
     const id = insert({ ...thomasRow, variation: "Tiffany", isParallel: true, fieldSources: JSON.stringify({ ...JSON.parse(thomasRow.fieldSources!), variation: "reading" }) });
     const v = await shown(id);
     expect(chooseVersion(id, { position: 0, listAt: v.at }, db, T0)).toMatchObject({ ok: true, state: "confirmed", source: "owner" });
     const row = get(id);
-    expect(row).toMatchObject({ variation: null, isParallel: false, versionState: "confirmed", versionSource: "owner", catalogCardId: null });
+    expect(row).toMatchObject({ variation: null, isParallel: false, versionState: "confirmed", versionSource: "owner" });
+    expect(db.select().from(catalogCards).where(eq(catalogCards.id, row.catalogCardId!)).get()).toMatchObject({ variation: null, year: 1990 });
     expect(JSON.parse(row.fieldSources!).variation).toBeUndefined();
     expect(row.title).toBe("1990 Topps #414 Frank Thomas");
+  });
+
+  it("base on an item linked to Tiffany unlinks it and links the base card; no base card in the list: it only unlinks", async () => {
+    const id = insert(thomasRow);
+    let v = await shown(id);
+    expect(chooseVersion(id, { position: at(v, "Tiffany"), listAt: v.at }, db, T0).ok).toBe(true);
+    const tiffanyId = get(id).catalogCardId;
+    expect(tiffanyId).not.toBeNull();
+    clock = new Date(T0.getTime() + SHOW_EVERY_MS);
+    v = await shown(id);
+    expect(chooseVersion(id, { position: 0, listAt: v.at }, db, clock).ok).toBe(true);
+    const row = get(id);
+    expect(row.catalogCardId).not.toBe(tiffanyId);
+    expect(db.select().from(catalogCards).where(eq(catalogCards.id, row.catalogCardId!)).get()!.variation).toBeNull();
+    expect(row).toMatchObject({ variation: null, isParallel: false, versionState: "confirmed" });
+    // A list without a base card: the link to Tiffany just goes.
+    const id2 = insert(thomasRow);
+    const v2 = await shown(id2);
+    expect(chooseVersion(id2, { position: at(v2, "Tiffany"), listAt: v2.at }, db, T0).ok).toBe(true);
+    const stored = parseVersions(JSON.stringify({ v: 1, at: T0.getTime(), catalog: "ok", options: v2.options.map((o) => (o.kind === "base" ? { ...o, card: null } : o)) }), T0)!;
+    db.update(items).set({ versionOptions: JSON.stringify({ v: 1, at: stored.at, catalog: "ok", options: stored.options }) }).where(eq(items.id, id2)).run();
+    expect(chooseVersion(id2, { position: 0, listAt: stored.at }, db, T0).ok).toBe(true);
+    expect(get(id2)).toMatchObject({ catalogCardId: null, variation: null, versionState: "confirmed" });
+  });
+
+  it("a known list version on an item linked to the base card unlinks it", async () => {
+    const id = insert(thomasRow);
+    const base = SEARCHES["1990 topps 414 thomas"].find((c) => c.sourceId === "551111")!;
+    const saved = saveCatalogCardIn(db, base, T0);
+    if (!saved.ok) throw new Error("not saved");
+    expect(linkCatalogCard(id, saved.catalogCardId, db).ok).toBe(true);
+    const v = await shown(id);
+    expect(chooseVersion(id, { position: at(v, "O-Pee-Chee"), listAt: v.at }, db, T0).ok).toBe(true);
+    expect(get(id)).toMatchObject({ catalogCardId: null, variation: "O-Pee-Chee", versionSource: "known_list" });
+  });
+
+  it("Show versions: 6 per minute for all items together, counted in the activity log", async () => {
+    const cat = new FakeCatalog({ searches: SEARCHES });
+    const ids = Array.from({ length: 7 }, () => insert(thomasRow));
+    for (const id of ids.slice(0, 6)) expect((await loadVersionOptions(id, { db, catalog: cat, now })).ok).toBe(true);
+    expect(await loadVersionOptions(ids[6], { db, catalog: cat, now })).toEqual({ ok: false, error: SHOW_BUSY });
+    expect(get(ids[6]).versionOptions).toBeNull();
+    clock = new Date(T0.getTime() + 61_000);
+    expect((await loadVersionOptions(ids[6], { db, catalog: cat, now })).ok).toBe(true);
   });
 
   it("a known list version links nothing; another version takes the typed name", async () => {

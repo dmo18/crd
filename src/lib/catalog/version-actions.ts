@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { auditThisRequest } from "@/lib/audit/request";
+import { auditThisRequest, requestContext } from "@/lib/audit/request";
 import { requireOwner } from "@/lib/auth/guard";
 import { ANOTHER_MAX, chooseVersion, GONE, LIST_CHANGED, loadVersionOptions, MAX_VERSION_OPTIONS } from "./versions";
 
@@ -33,7 +33,8 @@ export async function showVersionsAction(_prev: VersionActionState, formData: Fo
   await requireOwner();
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) return { message: GONE };
-  const r = await loadVersionOptions(id.data);
+  const ctx = await requestContext();
+  const r = await loadVersionOptions(id.data, { who: { ip: ctx.ip, deviceId: ctx.deviceId } });
   if (!r.ok) return { message: r.error };
   refresh(id.data);
   return { message: null };

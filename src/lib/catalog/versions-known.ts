@@ -53,9 +53,14 @@ export const KNOWN_VERSIONS: readonly KnownVersion[] = [
     source: "Price guides list 1991 Topps Desert Shield, sent to soldiers in the Gulf. Recording: 1991 Topps #333 Jones.",
   },
   {
-    id: "topps-gold", name: "Gold", brands: ["Topps"], from: 1992, to: 1994,
+    id: "topps-gold", name: "Gold", brands: ["Topps"], from: 1992, to: 1994, sports: ["baseball"],
     howToTell: "gold foil in place of the printed name and team box",
-    source: "Price guides list Topps Gold parallels for 1992 to 1994. Recording: 1992 Topps #1 Ryan.",
+    source: "Price guides list Topps Gold parallels for baseball 1992 to 1994. Recording: 1992 Topps #1 Ryan.",
+  },
+  {
+    id: "topps-gold-other", name: "Gold", brands: ["Topps"], from: 1992, to: 1993, sports: ["football", "basketball", "hockey"],
+    howToTell: "gold foil in place of the printed name and team box",
+    source: "Price guides list Topps Gold parallels for football, basketball and hockey for 1992 and 1993 only.",
   },
   {
     id: "ud-electric-diamond", name: "Electric Diamond", brands: ["Upper Deck"], from: 1994, to: 1994, sports: ["baseball"],
@@ -88,9 +93,9 @@ export const KNOWN_VERSIONS: readonly KnownVersion[] = [
     source: "Price guides list Topps Stadium Club First Day Issue for 1993 and 1994.",
   },
   {
-    id: "opc", name: "O-Pee-Chee", brands: ["Topps"], from: 1980, to: 1992, sports: ["baseball", "hockey"],
-    howToTell: "Canadian printing: O-Pee-Chee on the back, often in English and French",
-    source: "Price guides list O-Pee-Chee baseball and hockey sets printed in Canada from Topps designs.",
+    id: "opc", name: "O-Pee-Chee", brands: ["Topps"], from: 1990, to: 1992, sports: ["baseball"],
+    howToTell: "Says O-Pee-Chee on the front and back; the number may differ.",
+    source: "Price guides list O-Pee-Chee baseball sets printed in Canada from Topps designs for 1990 to 1992.",
   },
 ];
 

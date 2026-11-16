@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, inArray, isNotNull, lt, or } from "drizzle-o
 import { getDb, type Db } from "@/db";
 import { images, items, scans, type Item, type Scan } from "@/db/schema";
 import { liveItem } from "@/lib/items/live";
-import { effectiveValueCents } from "@/lib/money";
+import { shownValue } from "@/lib/items/value-line";
 
 export type ItemSummary = {
   id: number;
@@ -12,6 +12,8 @@ export type ItemSummary = {
   confidence: number | null;
   quantity: number;
   valueCents: number | null;
+  /** The version is "Not sure yet" and the owner has no figure: show "Choose the version to see a value". */
+  waitingForVersion: boolean;
   lowCents: number | null;
   highCents: number | null;
   isRookie: boolean;
@@ -77,11 +79,17 @@ export function thumbsFor(itemIds: number[], db: Db = getDb()): Map<number, stri
   return out;
 }
 
+function summaryValue(r: Item) {
+  const v = shownValue(r);
+  const hide = r.versionState === "not_sure";
+  return { valueCents: v.cents, waitingForVersion: v.waitingForVersion, lowCents: hide ? null : r.estLowCents, highCents: hide ? null : r.estHighCents };
+}
+
 export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {
   const thumbs = thumbsFor(rows.map((r) => r.id), db);
   return rows.map((r) => ({
     id: r.id, kind: r.kind, status: r.status, title: r.title, confidence: r.confidence, quantity: r.quantity,
-    valueCents: effectiveValueCents(r), lowCents: r.estLowCents, highCents: r.estHighCents,
+    ...summaryValue(r),
     isRookie: r.isRookie, rarityTier: r.rarityTier, thumb: thumbs.get(r.id) ?? null,
   }));
 }

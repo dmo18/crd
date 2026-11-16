@@ -72,6 +72,8 @@ export function describeAudit(row: { event: AuditEvent; ip: string; detail: stri
       return d ? `Looked a card up again in the catalog: ${d}` : "Looked a card up again in the catalog";
     case "version_chosen":
       return d ? `Chose the version of a card: ${d}` : "Chose the version of a card";
+    case "versions_shown":
+      return d ? `Showed the versions of a card: ${d}` : "Showed the versions of a card";
     case "serial_confirmed":
       return d ? `Confirmed a serial number: ${d}` : "Confirmed a serial number";
     case "rookie_set":

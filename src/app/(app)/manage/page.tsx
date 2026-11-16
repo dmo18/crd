@@ -8,7 +8,8 @@ import { items, locations } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { latestUndoable } from "@/lib/items/bulk";
 import { inventoryFilterSchema, listItems } from "@/lib/items/query";
-import { effectiveValueCents, formatCents } from "@/lib/money";
+import { CHOOSE_VERSION_LINE, shownValue } from "@/lib/items/value-line";
+import { formatCents } from "@/lib/money";
 import { thumbsFor } from "@/lib/scans/view";
 import { count, isNotNull } from "drizzle-orm";
 
@@ -25,11 +26,11 @@ export default async function ManagePage({ searchParams }: { searchParams: Promi
   const names = new Map(locationList.map((l) => [l.id, l.name]));
   const thumbs = thumbsFor(result.rows.map((r) => r.id), db);
   const rows: ManageRow[] = result.rows.map((r) => {
-    const v = effectiveValueCents(r);
+    const v = shownValue(r);
     return {
       id: r.id, title: r.title, year: r.year, brand: r.brand, cardNumber: r.cardNumber, player: r.player, team: r.team,
       location: r.locationId == null ? null : names.get(r.locationId) ?? null,
-      value: v == null ? "No value yet" : formatCents(v), needsReview: r.status === "needs_review", thumb: thumbs.get(r.id) ?? null,
+      value: v.waitingForVersion ? CHOOSE_VERSION_LINE : v.cents == null ? "No value yet" : formatCents(v.cents), needsReview: r.status === "needs_review", thumb: thumbs.get(r.id) ?? null,
     };
   });
   const op = latestUndoable(db);

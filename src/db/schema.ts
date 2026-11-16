@@ -24,7 +24,7 @@ export const AUDIT_EVENTS = [
   "connection_key_saved", "connection_key_removed", "connection_tested", "connection_switched", "catalog_answers_cleared",
   "catalog_card_added", "catalog_card_linked", "catalog_card_unlinked",
   "catalog_none_of_these", "catalog_lookup_again",
-  "version_chosen", "serial_confirmed", "rookie_set", "photo_added", "photo_edited", "photo_restored", "duplicate_kept_apart",
+  "version_chosen", "versions_shown", "serial_confirmed", "rookie_set", "photo_added", "photo_edited", "photo_restored", "duplicate_kept_apart",
 ] as const;
 /** Sign-in and account events. The rest are changes to the collection. */
 export const SECURITY_AUDIT_EVENTS = [

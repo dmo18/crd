@@ -22,7 +22,10 @@ import { confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
 import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
 import { recognitionMode } from "@/lib/env";
-import { effectiveValueCents, formatCents } from "@/lib/money";
+import { VersionPicker } from "@/components/catalog/VersionPicker";
+import { versionView } from "@/lib/catalog/version-view";
+import { CHOOSE_VERSION_LINE, shownValue } from "@/lib/items/value-line";
+import { formatCents } from "@/lib/money";
 
 export const metadata = { title: "Item" };
 
@@ -63,7 +66,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   const location = item.locationId == null ? null
     : db.select().from(locations).where(eq(locations.id, item.locationId)).get();
 
-  const value = effectiveValueCents(item);
+  const { cents: value, waitingForVersion } = shownValue(item);
+  const estimateHidden = item.versionState === "not_sure";
   const mode = recognitionMode();
   const hasLinks = soldListingLinks(item).length > 0;
   const source = item.manualValueCents != null ? "manual" : item.valueSource;
@@ -125,11 +129,12 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       <Card className="flex flex-col gap-1">
         <h2 className="text-sm font-semibold text-muted">Value</h2>
-        <p className="text-3xl font-bold">{formatCents(value)}</p>
-        {value == null ? <p className="text-sm">Use Find the value below.</p> : null}
-        {value != null && hasRange ? <p className="text-sm">Range: {formatCents(item.estLowCents)} to {formatCents(item.estHighCents)}</p> : null}
-        {source ? <p className="text-sm text-muted">Source: {VALUE_SOURCE_LABELS[source]}</p> : null}
-        {item.valueBasis ? <p className="text-sm">{item.valueBasis}</p> : null}
+        {waitingForVersion ? null : <p className="text-3xl font-bold">{formatCents(value)}</p>}
+        {waitingForVersion ? <p className="text-sm font-semibold">{CHOOSE_VERSION_LINE}</p> : null}
+        {value == null && !waitingForVersion ? <p className="text-sm">Use Find the value below.</p> : null}
+        {value != null && !estimateHidden && hasRange ? <p className="text-sm">Range: {formatCents(item.estLowCents)} to {formatCents(item.estHighCents)}</p> : null}
+        {source && !waitingForVersion ? <p className="text-sm text-muted">Source: {VALUE_SOURCE_LABELS[source]}</p> : null}
+        {item.valueBasis && !estimateHidden ? <p className="text-sm">{item.valueBasis}</p> : null}
         <p className="pt-1 text-xs text-muted">Estimates are a guide, not an appraisal.</p>
         {mode === "free" ? null : <ValueTools itemId={item.id} />}
       </Card>
@@ -174,6 +179,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
           </ul>
         </section>
       ) : null}
+
+      {item.kind === "card" ? <VersionPicker itemId={item.id} title={item.title} view={versionView(item)} /> : null}
 
       <CatalogBlock item={item} />
 

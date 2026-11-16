@@ -2,6 +2,8 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { CATALOG_FIELDS, catalogCards, items, type Item, type VersionSource, type VersionState } from "@/db/schema";
+import { countAuditSince, recordAudit } from "@/lib/audit/store";
+import { itemLabel } from "@/lib/audit/subjects";
 import { liveItem } from "@/lib/items/live";
 import { buildTitle } from "@/lib/title";
 import { applyCatalogCard, type CatalogDifference } from "./apply";
@@ -29,6 +31,8 @@ export const MAX_VERSION_OPTIONS = 12;
 export const VERSION_DAYS = 30;
 /** "Show versions" once per 10 seconds per item. */
 export const SHOW_EVERY_MS = 10_000;
+/** "Show versions" for all items together: 6 per minute, counted from the activity log (a restart does not reset it). */
+export const SHOW_PER_MINUTE = 6;
 /** Longest version name the owner may type for "Another version". */
 export const ANOTHER_MIN = 2;
 export const ANOTHER_MAX = 120;
@@ -43,6 +47,7 @@ export const GONE = "This item no longer exists.";
 export const NOT_A_CARD = "Only a single card has a version.";
 export const LIST_CHANGED = "That list has changed. Tap Show versions again.";
 export const SHOW_WAIT = "Wait a few seconds before showing the versions again.";
+export const SHOW_BUSY = "Too many version lists were asked for in the last minute. Wait a minute and try again.";
 export const ANOTHER_NEEDS = `Type the name of the version (${ANOTHER_MIN} to ${ANOTHER_MAX} characters).`;
 
 export type EvidenceFrom = "catalog" | "known_list" | "reading";
@@ -134,6 +139,8 @@ export function buildVersionOptions(item: VersionItem, catalog: readonly Catalog
     const name = catalogVersionName(item, c);
     if (!name) {
       addEvidence(base, catalogEvidence(c));
+      // The catalog's own base card, kept so "The normal card" can link it.
+      base.card ??= slimCandidate(c);
       continue;
     }
     const key = normalizeText(name);
@@ -286,7 +293,7 @@ export type ShowResult = { ok: true; versions: StoredVersions } | { ok: false; e
  * item. Changes no field and chooses nothing. Catalog off, paused or busy:
  * the known list and the three fixed options still come back.
  */
-export async function loadVersionOptions(itemId: number, deps: { db?: Db; catalog?: Catalog; now?: () => Date } = {}): Promise<ShowResult> {
+export async function loadVersionOptions(itemId: number, deps: { db?: Db; catalog?: Catalog; now?: () => Date; who?: { ip?: string; deviceId?: string | null } } = {}): Promise<ShowResult> {
   const db = deps.db ?? getDb();
   const now = deps.now ?? (() => new Date());
   const item = db.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
@@ -296,7 +303,9 @@ export async function loadVersionOptions(itemId: number, deps: { db?: Db; catalo
   const t = now().getTime();
   const last = seen.get(itemId);
   if (last !== undefined && t - last < SHOW_EVERY_MS) return { ok: false, error: SHOW_WAIT };
+  if (countAuditSince(["versions_shown"], new Date(t - 60_000), db) >= SHOW_PER_MINUTE) return { ok: false, error: SHOW_BUSY };
   seen.set(itemId, t);
+  recordAudit({ event: "versions_shown", outcome: "ok", ip: deps.who?.ip ?? "unknown", deviceId: deps.who?.deviceId, detail: itemLabel(itemId, db) }, { db, now: now() });
   if (seen.size > 1000) for (const [k, v] of seen) if (t - v >= SHOW_EVERY_MS) seen.delete(k);
 
   const searches = versionSearches(item);
@@ -394,23 +403,31 @@ export function chooseVersion(itemId: number, input: ChooseInput, db: Db = getDb
       fieldSources: marks ? JSON.stringify(marks) : item.fieldSources,
     };
     let differences: CatalogDifference[] = [];
-    if (option.kind === "version" && option.card) {
+    // What the old link filled counts as read from now on, as after Unlink,
+    // so a new card lists its differences instead of treating them as the owner's.
+    const forgetLink = () => {
+      const m = parseFieldSources(next.fieldSources);
+      if (m) {
+        for (const f of CATALOG_FIELDS) if (m[f] === "catalog") m[f] = "reading";
+        next = { ...next, fieldSources: JSON.stringify(m) };
+      }
+    };
+    const linked = item.catalogCardId != null ? tx.select().from(catalogCards).where(eq(catalogCards.id, item.catalogCardId)).get() : undefined;
+    const linkedIsBase = Boolean(linked) && catalogVersionName(item, linked!) === "";
+    if (option.card && (option.kind === "version" || option.kind === "base")) {
       const saved = saveCatalogCardIn(tx as unknown as Db, candidateCard(option.card), now);
       if (!saved.ok) return { ok: false, error: saved.error };
       const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get();
       if (!row) return { ok: false, error: "That catalog card no longer exists." };
-      if (next.catalogCardId != null && next.catalogCardId !== row.id) {
-        // Replacing another link (the base card): what that card filled counts as read, as after Unlink,
-        // so the new card lists its differences instead of treating them as the owner's.
-        const m = parseFieldSources(next.fieldSources);
-        if (m) {
-          for (const f of CATALOG_FIELDS) if (m[f] === "catalog") m[f] = "reading";
-          next = { ...next, fieldSources: JSON.stringify(m) };
-        }
-      }
+      if (next.catalogCardId != null && next.catalogCardId !== row.id) forgetLink();
       const applied = applyCatalogCard(next, row);
       next = { ...next, ...applied.patch, catalogCardId: row.id };
       differences = applied.differences;
+    } else if (item.catalogCardId != null && ((option.kind === "base" && !linkedIsBase) || (option.kind === "version" && linkedIsBase))) {
+      // Base with no base card in the list while linked to another version, or a known-list
+      // version (no catalog card) while linked to the base card: the link would say the opposite, so it goes.
+      forgetLink();
+      next = { ...next, catalogCardId: null };
     }
     tx.update(items).set({
       variation: next.variation, isParallel: next.isParallel, fieldSources: next.fieldSources,

@@ -133,6 +133,35 @@ describe("a version picked in Review", () => {
     expect(get(b)).toMatchObject({ versionState: null, versionSource: null, variation: null });
   });
 
+  it("a Tiffany row writes the version name into an empty or read variation, as the choose action does", () => {
+    const a = reviewItem();
+    db.update(items).set({ variation: "Gold", fieldSources: JSON.stringify({ sport: "reading", year: "reading", brand: "reading", cardNumber: "reading", player: "reading", variation: "reading" }) }).where(eq(items.id, a)).run();
+    const tiffany = THOMAS.findIndex((c) => c.sourceId === "551963");
+    expect(pick.pickCandidate(a, tiffany, "551963", db).ok).toBe(true);
+    const row = get(a);
+    expect(row).toMatchObject({ variation: "Tiffany", versionState: "confirmed", versionSource: "catalog" });
+    expect(JSON.parse(row.fieldSources!).variation).toBe("owner");
+    expect(row.title).toContain("Tiffany");
+  });
+
+  it("an owner variation that differs: nothing is decided and the difference is shown", () => {
+    const a = reviewItem();
+    db.update(items).set({ variation: "Blue foil", fieldSources: JSON.stringify({ variation: "owner" }) }).where(eq(items.id, a)).run();
+    const tiffany = THOMAS.findIndex((c) => c.sourceId === "551963");
+    const r = pick.pickCandidate(a, tiffany, "551963", db);
+    expect(r).toMatchObject({ ok: true, confirmed: false });
+    expect(r.ok && r.differences).toContainEqual({ field: "variation", itemValue: "Blue foil", catalogValue: "Tiffany" });
+    expect(get(a)).toMatchObject({ variation: "Blue foil", versionState: null, versionSource: null, status: "needs_review" });
+  });
+
+  it("an owner variation that already names the version is confirmed", () => {
+    const a = reviewItem();
+    db.update(items).set({ variation: "Tiffany", fieldSources: JSON.stringify({ variation: "owner" }) }).where(eq(items.id, a)).run();
+    const tiffany = THOMAS.findIndex((c) => c.sourceId === "551963");
+    expect(pick.pickCandidate(a, tiffany, "551963", db).ok).toBe(true);
+    expect(get(a)).toMatchObject({ variation: "Tiffany", versionState: "confirmed", versionSource: "catalog" });
+  });
+
   it("Review says there is more than one version when the candidates hold base and Tiffany", () => {
     const id = reviewItem();
     expect(pick.reviewCatalogView(get(id), db)?.severalVersions).toBe(true);
