@@ -4498,13 +4498,11 @@ print_summary_cloudflare() {
     local ssh_host="${DASHBOARD_HOST%%.*}-ssh.$base" routes
     # Same order and spelling as the guide (docs/SERVER.md, step 7).
     routes="$(
-        printf '       %-22s %-49s %s\n' \
-            "$DASHBOARD_HOST" 'path ^/webhooks/source/github/events(/manual)?$' 'HTTP 127.0.0.1:8000' \
+        printf '       %-22s %-20s %s\n' \
             "$DASHBOARD_HOST" 'path ^/app/' 'HTTP 127.0.0.1:6001' \
             "$DASHBOARD_HOST" 'path ^/terminal/ws' 'HTTP 127.0.0.1:6002' \
             "$DASHBOARD_HOST" '(no path)' 'HTTP 127.0.0.1:8000' \
-            "$ssh_host" '(no path)' 'SSH  127.0.0.1:22' \
-            "*.$base" '(no path)' 'HTTP 127.0.0.1:80'
+            "$ssh_host" '(no path)' 'SSH  127.0.0.1:22'
     )"
     printf '\n%s============================================================%s\n' "$C_BOLD" "$C_RESET"
     printf '%s Done. What this script did%s\n' "$C_BOLD" "$C_RESET"
@@ -4521,11 +4519,10 @@ print_summary_cloudflare() {
     cat <<EOF
 
 ${C_BOLD}Next steps in the Cloudflare dashboard${C_RESET} (step by step: docs/SERVER.md):
-  1. FIRST, Zero Trust, Access, Applications: protect $DASHBOARD_HOST,
-     $ssh_host (browser rendering: SSH) and *.$base with your email.
-     Add a Bypass application for $DASHBOARD_HOST, path
-     webhooks/source/github/events, so GitHub can tell Coolify to deploy.
-  2. Only then, your tunnel, Routes, add these in this order:
+  1. FIRST, Zero Trust, Access controls, Applications, two self-hosted apps:
+     $DASHBOARD_HOST (Allow: your email) and
+     $ssh_host (Allow: your email, no Bypass; browser rendering: SSH).
+  2. Only then, your tunnel, Routes, add these (paths above the empty one):
 $routes
   3. SSH CA for the browser terminal: Access controls, Service credentials,
      SSH, Add a certificate, application $ssh_host, Generate certificate.
