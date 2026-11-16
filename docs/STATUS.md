@@ -1,5 +1,23 @@
 # Status
 
+## Milestone 9 Part C: better reading (in progress, branch work/m9c)
+- 9.10 done: the owner's two photos of the 1990 Topps Ken Griffey Jr. card
+  are a permanent test (`tests/fixtures/cards/`, recorded text in
+  `griffey-1990-topps.ocr.json`). New reading passes for card photos: up to
+  3 wide colored or dark bands read as one line each, and the left and right
+  edge strips turned upright when no year was read. At most 9 passes a photo.
+- Measured on this server, both Griffey photos together: before 9.10 about
+  12 s for the whole scan, after 9.10 about 12 to 14 s (front 9 passes, back
+  6). Limit is 40 s.
+- Reads now: "KEN GRIFFEY, J" from the front name strip and
+  "Ken Griffey, Jr. OF" from the dark back header. Not read: MARINERS on
+  the front (the cap hides part of it; the band reader gets nothing), and
+  TOPPS anywhere (the logo is script, the copyright print on the right edge
+  is too small and sits inside the photo, not in the outer 9% strip).
+- The same photo can read slightly differently depending on what the text
+  engine read just before (seen in testing). The band reading of the back
+  header's G switches between "Griffey" and "Criffey" with small changes.
+
 ## Milestone 8: blind review, owner-approved updates, backups, logging, agent-ready
 - Blind review in four areas (app, card reading, server, guides); fixes for
   every critical, high and medium finding plus most lows.
