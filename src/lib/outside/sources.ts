@@ -7,8 +7,26 @@ import pkg from "../../../package.json";
  * Design: docs/PLAN.md, Milestone 10, "the shared gate for outside calls".
  */
 
-export const OUTSIDE_SOURCES = ["mycardfolio", "wikidata"] as const;
+/**
+ * `demo` exists only outside production: it proves the key flow (task 10.4)
+ * until Milestone 14 adds the first real source with a key. Its host ends in
+ * `.invalid`, a name that never exists, so even its Test never reaches anyone.
+ */
+export const OUTSIDE_SOURCES = ["mycardfolio", "wikidata", "demo"] as const;
 export type SourceId = (typeof OUTSIDE_SOURCES)[number];
+
+/** Sources that exist only when NODE_ENV is not production. */
+const DEV_ONLY: readonly SourceId[] = ["demo"];
+
+/** True when this source may be used here (the demo source never in production). */
+export function sourceAvailable(id: SourceId, nodeEnv: string | undefined = process.env.NODE_ENV): boolean {
+  return nodeEnv !== "production" || !DEV_ONLY.includes(id);
+}
+
+/** The sources shown on More, Connections, in order. */
+export function availableSources(nodeEnv: string | undefined = process.env.NODE_ENV): SourceId[] {
+  return OUTSIDE_SOURCES.filter((id) => sourceAvailable(id, nodeEnv));
+}
 
 /** One call, described without a full address. The gate builds the URL. */
 export type OutsideRequest = {
@@ -31,6 +49,11 @@ export type SourceConfig = {
   usedFor: string;
   hosts: readonly string[];
   needsKey: boolean;
+  /**
+   * For a source with a key: how the gate adds it at the last step (one
+   * request header), and the shape a pasted key must have.
+   */
+  key?: { header: string; shape: RegExp; hint: string };
   /** Least time between two call starts. */
   minGapMs: number;
   perHour: number | null;
@@ -127,8 +150,29 @@ export const SOURCES: Record<SourceId, SourceConfig> = {
       query: { action: "wbsearchentities", search: "Ken Griffey Jr.", language: "en", type: "item", limit: "1", format: "json" },
     },
   },
+
+  demo: {
+    id: "demo",
+    name: "Demo source",
+    usedFor: "Only for trying the key screen. Not in the live app.",
+    hosts: ["demo.invalid"],
+    needsKey: true,
+    key: { header: "X-Demo-Key", shape: /^[A-Za-z0-9_-]+$/, hint: "Letters, digits, _ or -, 16 to 200 characters." },
+    minGapMs: 2000,
+    perHour: 20,
+    perDay: 100,
+    timeoutMs: 5000,
+    maxBytes: 64 * 1024,
+    retryDelaysMs: [],
+    defaultPauseMs: 15 * 60 * 1000,
+    pauseOn403: false,
+    pauseOn503WithRetryAfter: false,
+    userAgent: appUserAgent,
+    testCall: { tool: "ping", path: "/ping" },
+  },
 };
 
+/** A known source that may be used here (the demo source is refused in production). */
 export function isSourceId(v: string): v is SourceId {
-  return (OUTSIDE_SOURCES as readonly string[]).includes(v);
+  return (OUTSIDE_SOURCES as readonly string[]).includes(v) && sourceAvailable(v as SourceId);
 }

@@ -1,7 +1,8 @@
 import { getDb, type Db } from "@/db";
 import { log } from "@/lib/log";
 import { CACHE_CAP_BYTES, cacheKey, getCached, pruneCache, putCached, type CacheKind } from "./cache";
-import { SOURCES, type OutsideRequest, type SourceConfig, type SourceId } from "./sources";
+import { openKey } from "./keys";
+import { SOURCES, sourceAvailable, type OutsideRequest, type SourceConfig, type SourceId } from "./sources";
 import { bumpUsage, getSourceState, pauseSource, recordError, recordOk, usageOn, utcDay } from "./usage";
 
 /**
@@ -288,7 +289,10 @@ export class Gate {
 
   // ---------- one network attempt ----------
 
-  private async attempt(src: SourceConfig, url: string, init: RequestInit, timeoutMs: number, fetchImpl: typeof fetch): Promise<Attempt> {
+  private async attempt(
+    src: SourceConfig, url: string, init: RequestInit, timeoutMs: number, fetchImpl: typeof fetch,
+    secretHeader: Record<string, string> | null = null,
+  ): Promise<Attempt> {
     const controller = new AbortController();
     let timedOut = false;
     let cancelTimer: () => void = () => undefined;
@@ -301,7 +305,9 @@ export class Gate {
     });
     timeout.catch(() => undefined);
     try {
-      const res = await Promise.race([fetchImpl(url, { ...init, signal: controller.signal }), timeout]);
+      // The last step: the key joins the headers only for the fetch itself.
+      const headers = secretHeader ? { ...(init.headers as Record<string, string>), ...secretHeader } : init.headers;
+      const res = await Promise.race([fetchImpl(url, { ...init, headers, signal: controller.signal }), timeout]);
       const status = res.status;
       const discard = () => { res.body?.cancel().catch(() => undefined); };
       if ((status >= 300 && status < 400) || res.type === "opaqueredirect") {
@@ -347,9 +353,15 @@ export class Gate {
     } catch {
       return fail("bad_request");
     }
-    if (!getSourceState(db, source).enabled) return fail("off");
-    // Keys arrive in task 10.4; until then a source that needs one makes no call.
-    if (src.needsKey) return fail("needs_key");
+    if (!sourceAvailable(source) || !getSourceState(db, source).enabled) return fail("off");
+    // A source with a key: opened here, inside the server, at call time. It is
+    // added to the request only in `attempt`, and never logged or returned.
+    let secretHeader: Record<string, string> | null = null;
+    if (src.needsKey) {
+      const k = src.key ? openKey(db, source) : null;
+      if (!src.key || k === null) return fail("needs_key");
+      secretHeader = { [src.key.header]: k };
+    }
 
     const key = options.cache ? cacheKey(source, request.tool, options.cache.args) : null;
     if (key) {
@@ -378,7 +390,7 @@ export class Gate {
         if (atStart) return atStart;
         this.recentStarts(source).push(startAt);
         bumpUsage(db, source, startAt, { calls: 1, waitMs: startAt - queuedAt });
-        result = await this.attempt(src, built.url, built.init, timeoutMs, fetchImpl);
+        result = await this.attempt(src, built.url, built.init, timeoutMs, fetchImpl, secretHeader);
       } finally {
         this.release();
       }

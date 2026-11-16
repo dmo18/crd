@@ -50,6 +50,12 @@ export default async function MorePage() {
       </Card>
 
       <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Connections</h2>
+        <p className="text-sm text-muted">Outside sources the app uses for card facts. Test them, switch them off, and see how many calls were made.</p>
+        <LinkButton href="/more/connections" variant="secondary">See connections</LinkButton>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Card reading</h2>
         <Notice tone={mode === "sample" ? "warn" : "accent"}>
           {mode === "free"
