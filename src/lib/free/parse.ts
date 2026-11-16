@@ -2,6 +2,9 @@ import type { ProductType, Sport } from "@/db/schema";
 import { GIVEN_NAMES } from "./given-names";
 import { KEY_CARDS, normalizeName } from "./key-cards";
 import type { OcrLine, OcrResult } from "./ocr";
+import { CERTAIN_FIELDS, type CertainField } from "@/lib/recognition/types";
+
+type Certainty = "sure" | "unsure";
 
 /**
  * Turns noisy text read from a card, slab label or product box into card details.
@@ -58,6 +61,8 @@ export type ParsedCard = {
   isAutograph: boolean;
   /** The card says REPRINT: it is not the original card. */
   isReprint: boolean;
+  /** Per filled field: "sure" when two independent signs on the card agree, else "unsure". */
+  certainty: Partial<Record<CertainField, Certainty>>;
   /** Short plain notes of what was read, for the item's notes. */
   evidence: string[];
 };
@@ -93,6 +98,8 @@ type Line = {
   side: Side;
   /** "band": read from a wide colored strip on its own, so it may be a headline. */
   source: "page" | "band" | "edge";
+  /** Read the same in two reads of its spot (see OcrLine.twice). */
+  twice: boolean;
 };
 
 const MAX_LINES = 400;
@@ -140,11 +147,11 @@ function letterize(up: string): string {
   return out;
 }
 
-function makeLine(text: string, conf: number, box: LineBox, side: Side, source: Line["source"] = "page"): Line | null {
+function makeLine(text: string, conf: number, box: LineBox, side: Side, source: Line["source"] = "page", twice = false): Line | null {
   const raw = cleanRaw(text);
   if (!raw) return null;
   const up = upper(raw);
-  return { raw, up, lz: letterize(up), tokens: raw.split(" "), conf, box, side, source };
+  return { raw, up, lz: letterize(up), tokens: raw.split(" "), conf, box, side, source, twice };
 }
 
 function lineSource(v: unknown): Line["source"] {
@@ -160,7 +167,7 @@ function toLines(ocr: OcrResult | null | undefined, side: Side): Line[] {
       if (!l || typeof l.text !== "string") continue;
       const b = (l.box ?? {}) as Partial<LineBox>;
       const box = { x: num(b.x, 0), y: num(b.y, 0.5), w: num(b.w, 1), h: num(b.h, 0.03) };
-      const line = makeLine(l.text, num(l.confidence, 0.5), box, side, lineSource(l.source));
+      const line = makeLine(l.text, num(l.confidence, 0.5), box, side, lineSource(l.source), l.twice === true);
       if (line) out.push(line);
     }
     return out;
@@ -351,8 +358,10 @@ function yearFromTable(lines: Line[]): YearFind | null {
     if (rows.length !== 1 || !below) return null;
     return { year: last + 1, how: "stats", score: 2, lastSeason: last, twoYear };
   }
+  // In order: one season apart, the same season (two clubs in one year), or
+  // two apart (a season not played, or a row the reader lost).
   const step = last - rows[rows.length - 2].season;
-  if (step !== 0 && step !== 1) return null;
+  if (step < 0 || step > 2) return null;
   return { year: last + 1, how: "stats", score: 2, lastSeason: last, twoYear };
 }
 
@@ -397,7 +406,11 @@ function findYear(lines: Line[], brandLines: Set<Line>): YearFind | null {
  * joined, so a column of running text beside the table stays out.
  */
 function tableRows(lines: Line[]): Line[] {
-  const cells = lines.filter((l) => l.tokens.length <= 2 && l.box.h > 0);
+  // A cell much taller than the usual cell (several numbers read as one
+  // tall box) would join two rows into one: left out.
+  const short = lines.filter((l) => l.tokens.length <= 2 && l.box.h > 0);
+  const usual = middle(short.map((l) => l.box.h));
+  const cells = short.filter((l) => l.box.h <= 2 * usual);
   const used = new Set<Line>();
   const out: Line[] = [];
   const sorted = [...cells].sort((a, b) => a.box.y - b.box.y);
@@ -421,11 +434,17 @@ function sameRow(a: Line, b: Line): boolean {
   return Math.abs(a.box.y + a.box.h / 2 - (b.box.y + b.box.h / 2)) < Math.min(a.box.h, b.box.h) * 0.6;
 }
 
-/** "'93-94", "93-94" (seasons in a row) or "'87": the first year, or null. */
+/**
+ * "'93-94", "93-94", "2003-04", "2003-2004" (a season over two years) or
+ * "'87": the first year, or null. Season sports name a set by the season's
+ * first year.
+ */
 function seasonYear(t: string): number | null {
   const s = stripEnds(t.replace(/^'/, "x")).replace(/^x/, "'");
   let m = /^'?(\d{2})-(\d{2})$/.exec(s);
   if (m && (Number(m[1]) + 1) % 100 === Number(m[2])) return twoDigit(Number(m[1]));
+  m = /^((?:19|20)\d{2})-((?:19|20)?\d{2})$/.exec(s);
+  if (m && (Number(m[1]) + 1) % (m[2].length === 4 ? 10000 : 100) === Number(m[2])) return validYear(Number(m[1]));
   m = /^'(\d{2})$/.exec(s);
   if (m) return twoDigit(Number(m[1]));
   return null;
@@ -498,16 +517,19 @@ type CardYear = {
  *    a last season after the copyright year cannot be settled: no year;
  * 3. else the last stat season plus one, else a year on a line with the maker's name.
  */
-function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<Line>): CardYear | null {
+function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<Line>, seen: { conflict: boolean } = { conflict: false }): CardYear | null {
   // 1. The front: a row with a maker's name and a year.
   let frontYear: number | null = null;
+  let frontSeason = false;
   for (const l of front) {
     if (!brandLines.has(l) || isCopyrightLine(l)) continue;
     for (const o of front.filter((x) => x === l || sameRow(x, l))) {
       for (const t of o.tokens) {
-        const y = (o === l || o.tokens.length <= 2 ? fixedYear(t) : null) ?? seasonYear(t);
+        const plain = o === l || o.tokens.length <= 2 ? fixedYear(t) : null;
+        const y = plain ?? seasonYear(t);
         if (y != null && validYear(y)) {
           frontYear = y;
+          frontSeason = plain == null && /\d-\d/.test(t);
           break;
         }
       }
@@ -534,15 +556,25 @@ function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<
   const last = stats?.lastSeason ?? null;
 
   if (frontYear != null) {
+    // Signs that cannot fit the front's year leave the year blank: a card is
+    // copyrighted in its year or the year before (season sets: the season's
+    // second year too), and its stat table never runs past its year.
+    const season = frontSeason;
+    if ((copyright != null && (copyright < frontYear - 1 || copyright > frontYear + (season ? 1 : 0))) || (last != null && last > frontYear)) {
+      seen.conflict = true;
+      return null;
+    }
     let signs = 1;
-    if (copyright != null && (copyright === frontYear || copyright === frontYear - 1)) signs++;
-    if (last != null && last === frontYear - 1) signs++;
+    if (copyright != null && copyright >= frontYear - 1) signs++;
+    if (last != null && (last === frontYear - 1 || (season && last === frontYear))) signs++;
     return { year: frontYear, how: "front", copyright: copyright ?? undefined, lastSeason: last ?? undefined, signs };
   }
   // A large short year in a logo on the back ("TOP PROSPECT '91") one year
   // after the copyright: sets are made the year before they are named for.
+  // One sign only (12R.5 round 2): a logo year is easy to take from a jersey
+  // or a picture, so the year is filled but not sure.
   if (copyright != null && logoShortYear(back) === copyright + 1) {
-    return { year: copyright + 1, how: "copyright", copyright, lastSeason: last ?? undefined, signs: 2, logoYear: true };
+    return { year: copyright + 1, how: "copyright", copyright, lastSeason: last ?? undefined, signs: 1, logoYear: true };
   }
   if (copyright != null && stats?.twoYear && last != null && (copyright === last + 1 || copyright === last + 2)) {
     // Basketball and hockey: the set is named by the season's first year
@@ -552,7 +584,10 @@ function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<
   }
   if (copyright != null) {
     if (last == null) return { year: copyright, how: "copyright", copyright, signs: 1 };
-    if (last > copyright) return null;
+    if (last > copyright) {
+      seen.conflict = true;
+      return null;
+    }
     if (last === copyright) return { year: copyright + 1, how: "copyright", copyright, lastSeason: last, signs: 2 };
     return { year: copyright, how: "copyright", copyright, lastSeason: last, signs: last === copyright - 1 ? 2 : 1 };
   }
@@ -573,8 +608,17 @@ function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<
 
 type BrandDef = {
   key: string;
+  /** The maker. For a product, the company that makes it ("Prizm": Panini). */
   brand: string;
+  /** The product (set) the words name, when they name one. */
   set?: string;
+  /**
+   * The modern era of a name (12R.5 round 2): from this year on, Donruss,
+   * Score and the like are products of `brand` (Panini) with this set name;
+   * before it they are makers themselves (`brand` above, no set), or with
+   * `setOnly` the words name only a set ("Select" was a Score set too).
+   */
+  modern?: { from: number; brand: string; set: string; setOnly?: boolean };
   re: RegExp;
   copyrightOnly?: boolean;
   /** A plain word that counts only as logo text: a short line of its own. */
@@ -585,16 +629,39 @@ type BrandDef = {
   sportWeight?: number;
 };
 
+/**
+ * Makers and their products, one table for brand and set (12R.5 round 2).
+ * A product's words give its maker as the brand and the product as the set
+ * ("PRIZM": Panini, Prizm; "BLACK DIAMOND": Upper Deck, Black Diamond).
+ * Names that changed hands carry their modern era (Donruss and Score are
+ * Panini products from 2010 on). A one word product that is also a plain
+ * word counts only as logo text.
+ */
 const BRANDS: BrandDef[] = [
   { key: "udminor", brand: "Upper Deck", set: "Upper Deck Minor League", re: /\bUPPER\s*DECK\s*MINOR\s*LEAGUE\b/g, sport: "baseball", sportWeight: 2 },
+  { key: "spauth", brand: "Upper Deck", set: "SP Authentic", re: /\bSP\s*AUTHENTIC\b/g },
+  { key: "spx", brand: "Upper Deck", set: "SPx", re: /\bSPX\b/g, logoOnly: true },
   { key: "sp", brand: "Upper Deck", set: "SP", re: /\bUPPER\s*DECK\s*SP\b|^SP$/g },
+  { key: "blackdiamond", brand: "Upper Deck", set: "Black Diamond", re: /\bBLACK\s*DIAMOND\b/g },
+  { key: "younguns", brand: "Upper Deck", set: "Young Guns", re: /\bYOUNG\s*GUNS\b/g, logoOnly: true },
+  { key: "udice", brand: "Upper Deck", set: "Ice", re: /^(?:UPPER\s*DECK\s*)?ICE$/g, logoOnly: true },
   { key: "stadiumclub", brand: "Topps", set: "Stadium Club", re: /\bSTADIUM\s*CLUB\b/g },
+  { key: "bowmanchrome", brand: "Topps", set: "Bowman Chrome", re: /\bBOWMAN\s*CHROME\b/g },
+  { key: "heritage", brand: "Topps", set: "Heritage", re: /\bTOPPS\s*HERITAGE\b|^HERITAGE$/g, logoOnly: true },
+  { key: "ginter", brand: "Topps", set: "Allen & Ginter", re: /\bALLEN\s*(?:&|AND)\s*GINTER\b/g },
   { key: "ultra", brand: "Fleer", set: "Fleer Ultra", re: /\bULTRA\b/g },
   { key: "flair", brand: "Fleer", set: "Flair", re: /\bFLAIR\b/g, logoOnly: true },
   { key: "finest", brand: "Topps", set: "Finest", re: /\bFINEST\b/g, logoOnly: true },
   { key: "chrome", brand: "Topps", set: "Topps Chrome", re: /\bTOPPS\s*CHROME\b/g },
   { key: "collchoice", brand: "Upper Deck", set: "Collector's Choice", re: /\bCOLLECTOR'?S\s*CHOICE\b/g },
   { key: "prizm", brand: "Panini", set: "Prizm", re: /\bPRIZM\b/g },
+  { key: "optic", brand: "Panini", set: "Optic", re: /\bOPTIC\b/g, logoOnly: true },
+  { key: "mosaic", brand: "Panini", set: "Mosaic", re: /\bMOSAIC\b/g, logoOnly: true },
+  { key: "chronicles", brand: "Panini", set: "Chronicles", re: /\bCHRONICLES\b/g, logoOnly: true },
+  { key: "contenders", brand: "Playoff", set: "Contenders", re: /\bCONTENDERS\b/g, logoOnly: true, modern: { from: 2010, brand: "Panini", set: "Contenders" } },
+  { key: "absolute", brand: "Playoff", set: "Absolute", re: /\bABSOLUTE\b/g, logoOnly: true, modern: { from: 2010, brand: "Panini", set: "Absolute" } },
+  { key: "certified", brand: "Panini", set: "Certified", re: /^CERTIFIED$/g, logoOnly: true, modern: { from: 2010, brand: "Panini", set: "Certified", setOnly: true } },
+  { key: "select", brand: "Panini", set: "Select", re: /^SELECT$/g, logoOnly: true, modern: { from: 2010, brand: "Panini", set: "Select", setOnly: true } },
   { key: "panini", brand: "Panini", re: /\bPANINI\b/g },
   // "Score Board, Inc." made memorabilia cards; it is not the Score brand.
   { key: "scoreboard", brand: "Score Board", re: /\bSCORE\s*BOARD\b(?=\s*,?\s*INC)/g, copyrightOnly: true },
@@ -606,8 +673,9 @@ const BRANDS: BrandDef[] = [
   { key: "artifacts", brand: "Upper Deck", set: "Artifacts", re: /\bARTIFACTS\b/g, logoOnly: true },
   // "F1EER" is a common misread; the 1 becomes I in the letter version of the line.
   { key: "fleer", brand: "Fleer", re: /\bF[LI]EER\b/g },
-  { key: "donruss", brand: "Donruss", re: /\bDONRUS{1,2}\b/g, sport: "baseball", sportWeight: 1 },
-  { key: "score", brand: "Score", re: /\bSCORE\b(?!\s*BOARD)/g },
+  // Donruss and Score made cards of several sports: the name is no sign of one.
+  { key: "donruss", brand: "Donruss", re: /\bDONRUS{1,2}\b/g, modern: { from: 2010, brand: "Panini", set: "Donruss" } },
+  { key: "score", brand: "Score", re: /\bSCORE\b(?!\s*BOARD)/g, modern: { from: 2010, brand: "Panini", set: "Score" } },
   { key: "sportflics", brand: "Sportflics", re: /\bSPORTFLICS\b/g, sport: "baseball", sportWeight: 1 },
   // Score cards were made by Major League Marketing, named in the copyright line.
   { key: "mlm", brand: "Score", re: /\bMAJOR\s*LEAGUE\s*MARKETING\b/g },
@@ -615,26 +683,26 @@ const BRANDS: BrandDef[] = [
   { key: "opc", brand: "O-Pee-Chee", re: /\bO\s*-?\s*PEE\s*-?\s*CHEE\b|\bOPC\b/g },
   { key: "leafinc", brand: "Leaf", re: /\bLEAF\s*,?\s*INC\b/g },
   { key: "leaf", brand: "Leaf", re: /\bLEAF\b(?!\s*,?\s*INC)/g },
-  { key: "proset", brand: "Pro Set", re: /\bPRO\s*SET\b/g, sport: "football", sportWeight: 1 },
+  { key: "proset", brand: "Pro Set", re: /\bPRO\s*SET\b/g },
   { key: "hoops", brand: "NBA Hoops", re: /\bHOOPS\b/g, sport: "basketball", sportWeight: 2 },
   // League and players' union names ("NBA Properties", "MLBPA", "NHLPA") are
   // licence text that every maker prints: never a brand (12R.5).
-  { key: "skybox", brand: "SkyBox", re: /\bSKY\s*BOX\b/g, sport: "basketball", sportWeight: 1 },
+  { key: "skybox", brand: "SkyBox", re: /\bSKY\s*BOX\b/g },
   { key: "pinnacle", brand: "Pinnacle", re: /\bPINNACLE\b/g },
   { key: "classic", brand: "Classic", re: /\bCLASSIC\b/g, copyrightOnly: true },
-  { key: "star", brand: "Star", re: /\bSTAR\s*CO\b|\bSTAR\s*COMPANY\b/g, sport: "basketball", sportWeight: 1 },
-  { key: "starc", brand: "Star", re: /\bSTAR\b(?!\s*PICS)/g, copyrightOnly: true, sport: "basketball", sportWeight: 1 },
+  { key: "star", brand: "Star", re: /\bSTAR\s*CO\b|\bSTAR\s*COMPANY\b/g },
+  { key: "starc", brand: "Star", re: /\bSTAR\b(?!\s*PICS)/g, copyrightOnly: true },
   { key: "pacific", brand: "Pacific", re: /\bPACIFIC\s*TRADING\b/g },
   { key: "pacificc", brand: "Pacific", re: /\bPACIFIC\b/g, copyrightOnly: true },
-  { key: "actionpacked", brand: "Action Packed", re: /\bACTION\s*PACKED\b/g, sport: "football", sportWeight: 1 },
+  { key: "actionpacked", brand: "Action Packed", re: /\bACTION\s*PACKED\b/g },
   { key: "procards", brand: "Pro Cards", re: /\bPRO\s*CARDS\b/g, sport: "baseball", sportWeight: 2 },
-  { key: "kelloggs", brand: "Kellogg's", re: /\bKELLOGG'?S?\b/g, sport: "baseball", sportWeight: 1 },
+  { key: "kelloggs", brand: "Kellogg's", re: /\bKELLOGG'?S?\b/g },
   { key: "drakes", brand: "Drake's", re: /\bDRAKE'?S\b/g, sport: "baseball", sportWeight: 1 },
   { key: "parkhurst", brand: "Parkhurst", re: /\bPARKHURST\b/g, sport: "hockey", sportWeight: 2 },
   { key: "itg", brand: "In The Game", re: /\bIN\s*THE\s*GAME\b/g, copyrightOnly: true, sport: "hockey", sportWeight: 1 },
   // Impel Marketing made the U.S. Olympic and early SkyBox era sets.
   { key: "impel", brand: "Impel", re: /\bIMPEL\b/g },
-  { key: "playoff", brand: "Playoff", re: /\bPLAYOFF\s*(?:CORP|INC)\b/g, copyrightOnly: true, sport: "football", sportWeight: 1 },
+  { key: "playoff", brand: "Playoff", re: /\bPLAYOFF\s*(?:CORP|INC)\b/g, copyrightOnly: true },
   { key: "wildcard", brand: "Wild Card", re: /\bWILD\s*CARD\b/g, copyrightOnly: true },
   { key: "presspass", brand: "Press Pass", re: /\bPRESS\s*PASS\b/g },
   { key: "frontrow", brand: "Front Row", re: /\bFRONT\s*ROW\b/g, copyrightOnly: true },
@@ -647,7 +715,33 @@ const BRANDS: BrandDef[] = [
  * ("SELECT" was a Score set in the 1990s and a Panini set later). Counted
  * only on a short line of its own, never in running text.
  */
-const SET_LOGOS: [RegExp, string][] = [[/^SELECT$/, "Select"]];
+const SET_LOGOS: [RegExp, string][] = [[/^SELECT$/, "Select"], [/^CERTIFIED$/, "Certified"], [/^METAL(?:\s*UNIVERSE)?$/, "Metal"]];
+
+/**
+ * Makers that are one company, or owned one another, in the years cards
+ * carry both names (Leaf, Inc. owned Donruss; Pinnacle Brands made Score
+ * and later Donruss; Panini bought Donruss Playoff; Fleer and SkyBox merged;
+ * Bowman is Topps). Two such names on one card agree; names of two
+ * different families contradict each other.
+ */
+const MAKER_FAMILIES: string[][] = [
+  ["Topps", "Bowman", "O-Pee-Chee"],
+  ["Upper Deck", "O-Pee-Chee"],
+  ["Fleer", "SkyBox", "NBA Hoops", "Impel"],
+  ["Donruss", "Leaf", "Playoff", "Panini", "Score", "Pinnacle", "Sportflics", "Action Packed"],
+];
+
+function sameMaker(a: string, b: string): boolean {
+  return a === b || MAKER_FAMILIES.some((f) => f.includes(a) && f.includes(b));
+}
+
+/** What a hit names in the card's year: its maker (null: only a set) and its set. */
+function hitNames(def: BrandDef, year: number | null): { brand: string | null; set: string | null } {
+  const m = def.modern;
+  if (m && year != null && year >= m.from) return { brand: m.brand, set: m.set };
+  if (m?.setOnly) return { brand: null, set: m.set };
+  return { brand: def.brand, set: def.set ?? null };
+}
 
 /** `logo`: read on a short line of its own, not a copyright line: the maker's logo text. */
 type BrandHit = { def: BrandDef; line: Line; score: number; logo: boolean };
@@ -737,28 +831,49 @@ const FUZZY_LOGOS: { word: string; key: string }[] = [
   { word: "SKYBOX", key: "skybox" }, { word: "PARKHURST", key: "parkhurst" }, { word: "SPORTFLICS", key: "sportflics" },
 ];
 
-type BrandPick = { brand: string; subSet: string | null; sport: Sport | null; sportWeight: number; lines: Line[] };
+type BrandPick = {
+  brand: string; subSet: string | null; sport: Sport | null; sportWeight: number; lines: Line[];
+  /** Independent places that name the brand: a logo on the front, a logo on the back, a copyright line (0 to 3). */
+  signs: number;
+  /** Lines that named the set as a product ("PRIZM"), for the set's own signs. */
+  setLines: Line[];
+};
 
+/** Where a hit stands, for counting independent signs: a logo on one side, a copyright line, or other text. */
+function hitKind(h: BrandHit): string | null {
+  if (h.logo) return `logo-${h.line.side}`;
+  if (isCopyrightLine(h.line)) return "copyright";
+  return isSentence(h.line) ? null : `text-${h.line.side}`;
+}
+
+/**
+ * The brand. Returns null when two makers of different families are both
+ * named as a logo or in a copyright line: signs that contradict each other
+ * leave the brand blank (12R.5 round 2). Licence text is never a hit.
+ */
 function pickBrand(hits: BrandHit[], year: number | null): BrandPick | null {
   if (hits.length === 0) return null;
   const scores = new Map<string, number>();
   const has = (k: string) => hits.some((h) => h.def.key === k);
   const leafIncOnly = has("leafinc") && !has("leaf");
-  for (const h of hits) {
-    let brand = h.def.brand;
+  const brandOf = (h: BrandHit): string | null => {
     if (h.def.key === "leafinc") {
       // Donruss cards carry "Leaf, Inc." in the copyright line, since Leaf, Inc.
       // owned Donruss. From 1990 the same company also made the Leaf brand, so
       // "Leaf, Inc." alone no longer says which of the two it is.
-      if (has("donruss") || (leafIncOnly && year != null && year < 1990)) brand = "Donruss";
-      else if (leafIncOnly) continue;
+      if (has("donruss") || (leafIncOnly && year != null && year < 1990)) return "Donruss";
+      return leafIncOnly ? null : "Leaf";
     }
-    scores.set(brand, (scores.get(brand) ?? 0) + h.score);
+    return hitNames(h.def, year).brand;
+  };
+  for (const h of hits) {
+    const brand = brandOf(h);
+    if (brand) scores.set(brand, (scores.get(brand) ?? 0) + h.score);
   }
   // A logo name beats the copyright owner ("1991 LEAF, INC" with a DONRUSS
   // logo is Donruss, "PINNACLE BRANDS" with a SCORE logo is Score): when a
   // logo was read, only brands read as a logo are chosen from, the front's first.
-  const logoBrands = (side: Side) => new Set(hits.filter((h) => h.logo && h.def.key !== "leafinc" && h.line.side === side).map((h) => h.def.brand));
+  const logoBrands = (side: Side) => new Set(hits.filter((h) => h.logo && h.def.key !== "leafinc" && h.line.side === side).map(brandOf).filter((b): b is string => b !== null));
   const front = logoBrands("front");
   const allowed = front.size > 0 ? front : logoBrands("back");
   let best: string | null = null;
@@ -771,15 +886,25 @@ function pickBrand(hits: BrandHit[], year: number | null): BrandPick | null {
     }
   }
   if (!best) return null;
-  const mine = hits.filter((h) => (h.def.brand === best && h.def.key !== "leafinc") || (h.def.key === "leafinc" && (best === "Donruss" || best === "Leaf")));
-  const sub = mine.find((h) => h.def.set);
+  const chosen = best;
+  // A logo or copyright line of a maker outside the chosen one's family.
+  const strong = (h: BrandHit) => h.logo || (isCopyrightLine(h.line) && !h.def.weak);
+  if (hits.some((h) => strong(h) && brandOf(h) !== null && !sameMaker(brandOf(h)!, chosen))) return null;
+  const mine = hits.filter((h) => brandOf(h) === chosen || (h.def.key === "leafinc" && (chosen === "Donruss" || chosen === "Leaf")));
+  const sub = mine.find((h) => hitNames(h.def, year).set);
   const sportDef = mine.find((h) => h.def.sport);
+  const kinds = new Set(mine.map(hitKind).filter((k): k is string => k !== null));
+  // The same family's copyright line ("Leaf, Inc." for Donruss, "Pinnacle Brands" for Score) agrees too.
+  if (hits.some((h) => isCopyrightLine(h.line) && brandOf(h) !== null && sameMaker(brandOf(h)!, chosen))) kinds.add("copyright");
+  const subSet = sub ? hitNames(sub.def, year).set : null;
   return {
-    brand: best,
-    subSet: sub?.def.set ?? null,
+    brand: chosen,
+    subSet,
     sport: sportDef?.def.sport ?? null,
     sportWeight: sportDef?.def.sportWeight ?? 0,
     lines: mine.map((h) => h.line),
+    signs: Math.min(3, kinds.size),
+    setLines: subSet ? hits.filter((h) => hitNames(h.def, year).set === subSet).map((h) => h.line) : [],
   };
 }
 
@@ -802,13 +927,13 @@ const SUBSET_WORDS: [RegExp, string][] = [
  * for a Fleer Ultra card whose foil logo could not be read.
  */
 function findSetName(pick: BrandPick | null, lines: Line[], cardNumber: string | null): string | null {
+  if (pick?.subSet) return pick.subSet;
   for (const l of lines) {
     if (l.tokens.length > 2 || isCopyrightLine(l)) continue;
     const words = l.lz.replace(/[^A-Z ]/g, "").trim();
     for (const [re, set] of SET_LOGOS) if (re.test(words)) return set;
   }
   if (!pick) return null;
-  if (pick.subSet) return pick.subSet;
   const brandLines = new Set(pick.lines);
   for (const [re, word] of SUBSET_WORDS) {
     if (lines.some((l) => (brandLines.has(l) || l.tokens.length <= 2) && re.test(l.lz))) return `${pick.brand} ${word}`;
@@ -953,25 +1078,53 @@ function onlyValue(values: string[]): string | null {
   return set.size === 1 ? values[0] : null;
 }
 
+type NumberFind = { number: string; sure: boolean };
+
 /**
  * The card number: printed alone in a top corner of the back (two different
  * ones: none), else a "No." or "#" marker (back, then front), else alone in a
  * bottom corner of the back. Numbers on the front's picture (jerseys) are
  * never card numbers, so the front counts only with a marker.
+ *
+ * Sure (12R.5 round 2) when two signs agree: a corner number and a marker
+ * with the same number, markers on both sides (a holder label and the back),
+ * or the number read the same by two reads of its spot. A marker or a top
+ * corner that gives a different number contradicts it: no number.
  */
-function findCardNumber(back: Line[], front: Line[]): string | null {
-  const corners = back.map((l) => numberFromCorner(l, back)).filter((c): c is CornerNumber => c !== null);
-  const top = corners.filter((c) => c.top).map((c) => c.number);
-  if (top.length > 0) return onlyValue(top);
-  for (const l of back) {
+function findCardNumber(back: Line[], front: Line[]): NumberFind | null {
+  const cornerLines = back.map((l) => ({ l, c: numberFromCorner(l, back) })).filter((x): x is { l: Line; c: CornerNumber } => x.c !== null);
+  const markers = (side: Line[]) => side.flatMap((l) => {
     const n = numberFromMarkers(l);
-    if (n && !jerseyNumber(l, back)) return n;
+    return n && !jerseyNumber(l, side) ? [{ l, n }] : [];
+  });
+  const backMarks = markers(back);
+  const frontMarks = markers(front);
+  const top = cornerLines.filter((x) => x.c.top);
+  let number: string | null = null;
+  let from: Line[] = [];
+  if (top.length > 0) {
+    number = onlyValue(top.map((x) => x.c.number));
+    from = top.map((x) => x.l);
+  } else if (backMarks.length > 0) {
+    number = backMarks[0].n;
+    from = [backMarks[0].l];
+  } else if (frontMarks.length > 0) {
+    number = frontMarks[0].n;
+    from = [frontMarks[0].l];
+  } else {
+    const bottom = cornerLines.filter((x) => !x.c.top);
+    number = onlyValue(bottom.map((x) => x.c.number));
+    from = bottom.map((x) => x.l);
   }
-  for (const l of front) {
-    const n = numberFromMarkers(l);
-    if (n && !jerseyNumber(l, front)) return n;
-  }
-  return onlyValue(corners.filter((c) => !c.top).map((c) => c.number));
+  if (!number) return null;
+  const n = number;
+  // Each place that read a number: the back's corners, its first marker, the front's first marker.
+  const reads = [onlyValue(top.map((x) => x.c.number)), backMarks[0]?.n ?? null, frontMarks[0]?.n ?? null].filter((v): v is string => v !== null);
+  if (reads.some((v) => v !== n)) return null;
+  const places = reads.filter((v) => v === n).length;
+  const bottomAgree = top.length === 0 && reads.length > 0 && cornerLines.some((x) => !x.c.top && x.c.number === n);
+  const twice = from.some((l) => l.twice);
+  return { number: n, sure: places >= 2 || bottomAgree || twice };
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,6 +1239,8 @@ type TeamFind = {
   fuzzy: boolean;
   /** The team's city was read too ("SEATTLE MARINERS"). */
   city: boolean;
+  /** The nickname stands on team lines in two places: both sides, or a stat row and another line. */
+  twoPlaces?: boolean;
 };
 
 /**
@@ -1208,7 +1363,7 @@ function teamLine(l: Line, start: number, end: number, group: NickGroup): boolea
     .every((w) => /^'?[\d.,%#'/-]+$/.test(w) || words.has(w));
 }
 
-type TeamScore = { score: number; line: Line };
+type TeamScore = { score: number; line: Line; lines: Line[] };
 type TeamRow = { group: NickGroup; season: number; y: number };
 type TeamTally = { scores: Map<NickGroup, TeamScore>; lastRow: TeamRow | null };
 
@@ -1217,8 +1372,9 @@ function newTally(): TeamTally {
 }
 
 function tallyTeam(tally: TeamTally, group: NickGroup, l: Line) {
-  const cur = tally.scores.get(group) ?? { score: 0, line: l };
+  const cur = tally.scores.get(group) ?? { score: 0, line: l, lines: [] };
   cur.score += 1 + (l.side === "front" ? 1 : 0) + (l.tokens.length <= 4 ? 1 : 0);
+  if (!cur.lines.includes(l)) cur.lines.push(l);
   tally.scores.set(group, cur);
   // Stat table rows ("89 MARINERS"): the latest season's club is the card's team.
   const season = rowSeason(l.tokens[0] ?? "");
@@ -1330,7 +1486,12 @@ function findTeam(
   // not stand against it; a second team on a team line does.
   if (strong.scores.size === 1 && [...close.scores.keys()].every((g) => strong.scores.has(g))) {
     const [group] = [...strong.scores.keys()];
-    return { team: resolveTeam(group, strong.scores.get(group)!.line, lines, year, sportHint, false), hint: null };
+    const found = strong.scores.get(group)!;
+    const team = resolveTeam(group, found.line, lines, year, sportHint, false);
+    const sides = new Set(found.lines.map((l) => l.side));
+    const rows = found.lines.filter((l) => rowSeason(l.tokens[0] ?? "") != null);
+    team.twoPlaces = sides.size > 1 || (rows.length > 0 && rows.length < found.lines.length);
+    return { team, hint: null };
   }
   const fuzzy = exact.scores.size === 0;
   const best = bestOf(fuzzy ? close : exact, lines);
@@ -1366,28 +1527,70 @@ function winner(v: Votes): Sport | null {
   return tie ? null : best;
 }
 
+/** Sport signs of each kind, for certainty: two kinds that agree make the sport sure. */
+type SportKinds = Map<Sport, Set<string>>;
+
+function addKind(k: SportKinds | undefined, s: Sport | null | undefined, kind: string) {
+  if (!k || !s) return;
+  const set = k.get(s) ?? new Set<string>();
+  set.add(kind);
+  k.set(s, set);
+}
+
+/**
+ * Words of leagues, tours and governing bodies (12R.5 round 2: each sport
+ * from its own words, never a default). "FOOTBALL" next to a soccer league
+ * or club is the game the rest of the world calls football.
+ */
+const SOCCER_RE = /\bFIFA\b|\bUEFA\b|\bLA\s*LIGA\b|\bPREMIER\s*LEAGUE\b|\bMLS\b|\bMAJOR\s*LEAGUE\s*SOCCER\b|\bBUNDESLIGA\b|\bSERIE\s*A\b|\bLIGUE\s*1\b|\bSOCCER\b|\bCHAMPIONS\s*LEAGUE\b|\bEREDIVISIE\b|\bCONCACAF\b/;
+/** Soccer clubs named on cards: a known team is a sign of the sport. */
+const SOCCER_CLUBS_RE = /\bREAL\s*MADRID\b|\bBARCELONA\b|\bMANCHESTER\s*(?:UNITED|CITY)\b|\bLIVERPOOL\b|\bCHELSEA\s*FC\b|\bARSENAL\b|\bTOTTENHAM\b|\bJUVENTUS\b|\bAC\s*MILAN\b|\bINTER\s*(?:MILAN|MIAMI)\b|\bBAYERN\b|\bBORUSSIA\b|\bPARIS\s*SAINT\s*-?\s*GERMAIN\b|\bATLETICO\b|\bAJAX\b|\bLA\s*GALAXY\b|\bSOUNDERS\b|\bTORONTO\s*FC\b|\bNAPOLI\b|\bBENFICA\b|\bPORTO\b|\bCELTIC\s*FC\b/;
+
 const LEAGUE_WORDS: [RegExp, Sport][] = [
   [/\bNATIONAL\s*HOCKEY\s*LEAGUE\b|\bNHL\b|\bNHLPA\b|\bHOCKEY\b/, "hockey"],
-  [/\bNATIONAL\s*BASKETBALL\b|\bNBA\b|\bBASKETBALL\b/, "basketball"],
+  [/\bNATIONAL\s*BASKETBALL\b|\bNBA\b|\bWNBA\b|\bBASKETBALL\b/, "basketball"],
   [/\bNATIONAL\s*FOOTBALL\s*LEAGUE\b|\bNFL\b|\bNFLPA\b|\bUSFL\b|\bFOOTBALL\b/, "football"],
-  [/\bMAJOR\s*LEAGUE\b(?!\s*MARKETING)|\bMLB\b|\bMLBPA\b|\bAMERICAN\s*LEAGUE\b|\bNATIONAL\s*LEAGUE\b|\bBASEBALL\b/, "baseball"],
+  [/\bMAJOR\s*LEAGUE\b(?!\s*(?:MARKETING|SOCCER))|\bMLB\b|\bMLBPA\b|\bAMERICAN\s*LEAGUE\b|\bNATIONAL\s*LEAGUE\b|\bBASEBALL\b/, "baseball"],
+  [SOCCER_RE, "soccer"],
+  [/\bPGA\b|\bLPGA\b|\bGOLF\b|\bRYDER\s*CUP\b|\bMASTERS\s*TOURNAMENT\b/, "golf"],
+  [/\bNASCAR\b|\bWINSTON\s*CUP\b|\bNEXTEL\s*CUP\b|\bSPRINT\s*CUP\b|\bINDY\s*CAR\b|\bFORMULA\s*(?:1|ONE)\b|\bRACING\b|\bSPEEDWAY\b/, "racing"],
+  [/\bWWE\b|\bWWF\b|\bWCW\b|\bAEW\b|\bTNA\b|\bWRESTLING\b|\bWRESTLEMANIA\b/, "wrestling"],
+  [/\bBOXING\b|\bWBC\b|\bWBA\b|\bIBF\b|\bWBO\b/, "boxing"],
+  // Mixed martial arts and other single sports without a list of their own.
+  [/\bUFC\b|\bMMA\b/, "other"],
 ];
 
-const STAT_WORDS: Record<"baseball" | "basketball" | "football" | "hockey", string[]> = {
+const STAT_WORDS: Partial<Record<Sport, string[]>> = {
   baseball: ["RBI", "ERA", "AB", "HR", "SB", "IP", "SLG", "OBP", "2B", "3B"],
   basketball: ["FGA", "FTA", "REB", "AST", "STL", "BLK", "FG%", "FT%", "PCT"],
   football: ["YDS", "TD", "TDS", "RUSHING", "RECEIVING", "PASSING", "SACKS", "COMP"],
   hockey: ["PIM", "PPG", "SHG", "GWG", "GAA", "+/-"],
+  soccer: ["APPS", "CAPS", "CLEAN", "SHEETS", "GLS"],
+  golf: ["EVENTS", "CUTS", "BIRDIES", "PUTTS", "STROKE"],
+  racing: ["POLES", "LAPS", "DNF", "TOP-5", "TOP-10"],
 };
 
-function leagueAndStatVotes(lines: Line[], v: Votes) {
+function leagueAndStatVotes(lines: Line[], v: Votes, kinds?: SportKinds) {
   const all = lines.map((l) => l.lz).join("\n");
-  for (const [re, s] of LEAGUE_WORDS) if (re.test(all)) vote(v, s, 2);
+  const soccer = SOCCER_RE.test(all) || SOCCER_CLUBS_RE.test(all);
+  for (const [re, s] of LEAGUE_WORDS) {
+    if (s === "football" && soccer && !/\bNFL|\bNATIONAL\s*FOOTBALL|\bUSFL/.test(all)) continue;
+    if (re.test(all)) {
+      vote(v, s, 2);
+      addKind(kinds, s, "league");
+    }
+  }
+  if (SOCCER_CLUBS_RE.test(all)) {
+    vote(v, "soccer", 2);
+    addKind(kinds, "soccer", "team");
+  }
   const tokens = new Set(lines.flatMap((l) => (l.tokens.length >= 3 ? l.up.split(" ") : [])));
   for (const [s, words] of Object.entries(STAT_WORDS) as [Sport, string[]][]) {
     const found = words.filter((w) => tokens.has(w)).length;
-    if (found >= 2) vote(v, s, 2);
-    else if (found === 1) vote(v, s, 0.5);
+    if (found >= 2) {
+      vote(v, s, 2);
+      addKind(kinds, s, "stats");
+    } else if (found === 1) vote(v, s, 0.5);
   }
 }
 
@@ -1440,6 +1643,10 @@ const POS_WORDS: [RegExp, string, Sport | null][] = [
   [/\bGUARD\b/, "G", "basketball"],
   [/\bFORWARD\b/, "F", "basketball"],
   [/\bCENTER\b/, "C", null],
+  [/\bMIDFIELDER\b/, "MF", "soccer"],
+  [/\bSTRIKER\b/, "ST", "soccer"],
+  [/\bGOALKEEPER\b/, "GK", "soccer"],
+  [/\bDEFENDER\b/, "DF", "soccer"],
 ];
 
 type PosFind = { position: string; sport: Sport | null };
@@ -1522,6 +1729,8 @@ const STOP_WORDS = new Set(
     "TOURNAMENT", "CLASSIC", "INDUCTED", "INDUCTEE", "ENTERPRISES", "MARKETING", "LICENSEE", "COMMITTEE", "OFFICIAL",
     "PRESIDENT", "EDITION", "CERTIFIED", "SERIAL", "NUMBERED", "PANINI", "PRIZM", "SELECT", "IMPEL", "FLAIR", "FINEST",
     "CHROME", "SPORTFLICS", "PLAYOFF", "WILD", "BRANDS", "TRADING",
+    // Product names (12R.5 round 2): never a player's name.
+    "OPTIC", "MOSAIC", "CONTENDERS", "ABSOLUTE", "CHRONICLES", "HERITAGE", "SPX", "METAL", "UNIVERSE", "ICE", "GUNS",
     // Stat headers
     "AVG", "RBI", "ERA", "AB", "HR", "SB", "IP", "BB", "SO", "SLG", "PCT", "REB", "AST", "PTS", "FGA", "FTA", "GP",
     "PIM", "YDS", "TD", "TDS", "ATT", "INT", "REC", "LG", "MIN", "STL", "BLK", "GAA", "PPG",
@@ -1559,19 +1768,33 @@ function looksLikeName(core: NameWord[]): boolean {
   return words.every((w) => !/^[^AEIOUY]{3,}$/.test(w) && !/(.)\1\1/.test(w));
 }
 
-function nameWord(tok: string): NameWord | null {
-  let s = tok.replace(/^[^A-Za-z0-9]+/, "").replace(/[^A-Za-z0-9.']+$/, "");
+/**
+ * One word of a name. Accents never block a read: the word is checked
+ * without them ("\u00c1LVARO" as "ALVARO", same key) and kept as printed.
+ */
+function nameWord(printed: string): NameWord | null {
+  const tok = printed.normalize("NFC");
+  const plainTok = tok.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const accented = plainTok !== tok && plainTok.length === tok.length;
+  const base = accented ? plainTok : tok;
+  const start = base.length - base.replace(/^[^A-Za-z0-9]+/, "").length;
+  let s = base.replace(/^[^A-Za-z0-9]+/, "").replace(/[^A-Za-z0-9.']+$/, "");
   if (!s) return null;
+  let fixed = false;
   const letters = s.replace(/[^A-Za-z]/g, "");
   const ups = letters.replace(/[^A-Z]/g, "").length;
   if (s.length >= 3 && letters.length >= 2 && ups / Math.max(letters.length, 1) >= 0.6 && /[01|5l]/.test(s)) {
     const digits = (s.match(/\d/g) ?? []).length;
-    if (digits <= 2) s = s.replace(/0/g, "O").replace(/[1|l]/g, "I").replace(/5/g, "S");
+    if (digits <= 2) {
+      s = s.replace(/0/g, "O").replace(/[1|l]/g, "I").replace(/5/g, "S");
+      fixed = true;
+    }
   }
   if (/^(?:[A-Za-z]\.){1,3}$/.test(s)) return { word: s.toUpperCase(), key: s.toUpperCase().replace(/\./g, ""), initials: true };
   if (!/^[A-Za-z][A-Za-z'-]*[A-Za-z]\.?$/.test(s)) return null;
-  const word = s.replace(/\.$/, "");
-  return { word, key: word.toUpperCase().replace(/[^A-Z]/g, ""), initials: false };
+  const plain = s.replace(/\.$/, "");
+  const word = accented && !fixed ? tok.slice(start, start + plain.length) : plain;
+  return { word, key: plain.toUpperCase().replace(/[^A-Z]/g, ""), initials: false };
 }
 
 function titleWord(w: string): string {
@@ -1597,9 +1820,17 @@ const MASK_RES: RegExp[] = TEAMS.flatMap((t) =>
   [t.nick, ...t.alts].map((v) => new RegExp(`\\b(?:${phraseRe(t.city)}\\s*)?${phraseRe(v)}\\b`, "g")),
 );
 
+/**
+ * Product names of more than one word ("BLACK DIAMOND", "YOUNG GUNS",
+ * "ALLEN & GINTER") are masked too: their words are also surnames.
+ */
+const PRODUCT_MASK_RES: RegExp[] = BRANDS
+  .filter((d) => d.set && /\\s\*/.test(d.re.source))
+  .map((d) => new RegExp(d.re.source.replace(/^\^/, "\\b").replace(/\$$/, "\\b").replace(/\|\^/g, "|\\b").replace(/\$\|/g, "\\b|"), "g"));
+
 function maskTeams(l: Line): string[] {
   let work = l.lz;
-  for (const re of MASK_RES) work = work.replace(re, (m) => " ".repeat(m.length));
+  for (const re of [...MASK_RES, ...PRODUCT_MASK_RES]) work = work.replace(re, (m) => " ".repeat(m.length));
   let out = "";
   for (let i = 0; i < l.raw.length; i++) out += work[i] === " " ? " " : l.raw[i];
   return out.split(" ").filter(Boolean);
@@ -1709,8 +1940,12 @@ function nameRuns(l: Line): NameRead[] {
     while (core.length > 0 && !core[0].initials && !/[AEIOUY]/.test(core[0].key)) core = core.slice(1);
     // Names are printed with capitals ("BOB MILACKI", "Bob Milacki"); words in
     // lower case are running text ("round secondary phase").
-    const capitals = core.every((w, i) => /^[A-Z]/.test(w.word) || (i > 0 && NAME_PARTICLES.has(w.word)));
-    if (capitals && core.length >= 2 && core.length <= 3 && !core.every((w) => w.initials) && looksLikeName(core)) {
+    // A particle at the end belongs to the next word, never to this name ("SMITH DE": the position DE).
+    while (core.length > 0 && NAME_PARTICLES.has(core[core.length - 1].word.toLowerCase())) core = core.slice(0, -1);
+    const particles = core.filter((w, i) => i > 0 && NAME_PARTICLES.has(w.word.toLowerCase())).length;
+    const capitals = core.every((w, i) => /^\p{Lu}/u.test(w.word) || (i > 0 && NAME_PARTICLES.has(w.word)));
+    // Two or three name words; a fourth only with a particle ("Oscar De La Hoya").
+    if (capitals && core.length >= 2 && core.length <= 3 + Math.min(1, particles) && !core.every((w) => w.initials) && looksLikeName(core)) {
       const plainKey = normalizeName(core.map((w) => w.word).join(" "));
       if (!CITY_KEYS.has(plainKey)) out.push({ words: core.map((w) => titleWord(w.word)), suffix, line: l, header: false, cut });
     }
@@ -1732,8 +1967,10 @@ function nameRuns(l: Line): NameRead[] {
       flush();
       continue;
     }
-    // "de" in lower case after a name word is part of the name, not the position DE.
-    if (STOP_WORDS.has(w.key) && !(run.length > 0 && NAME_PARTICLES.has(w.word))) {
+    // "de" or "DE" between name words is part of the name, not the position DE.
+    const nextWord = nameWord(tokens[ti + 1] ?? "");
+    const particle = run.length > 0 && NAME_PARTICLES.has(w.word.toLowerCase()) && nextWord !== null && /^\p{Lu}/u.test(nextWord.word);
+    if (STOP_WORDS.has(w.key) && !particle) {
       flush();
       continue;
     }
@@ -1880,6 +2117,10 @@ export type PlayerPick = {
   hint: string | null;
   header: PosFind | null;
   nameLines: Set<Line>;
+  /** The first name was put right by the given name check (one letter changed): not sure. */
+  corrected?: boolean;
+  /** The name is backed by a second place on the card (see nameEcho). */
+  echo?: boolean;
 };
 
 /**
@@ -1978,7 +2219,8 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
 
   const first = checkFirstName(chosen.words, [...front, ...back]);
   if (first === null) return { player: null, names: [display(chosen, suffix)], agree: false, keyMatch: null, hint, header, nameLines };
-  if (first !== chosen.words[0]) chosen = { ...chosen, words: [first, ...chosen.words.slice(1)] };
+  const corrected = first !== chosen.words[0];
+  if (corrected) chosen = { ...chosen, words: [first, ...chosen.words.slice(1)] };
   let player = display(chosen, suffix);
   let keyMatch: string | null = null;
   const canonical = KEY_PLAYERS.get(normalizeName(player));
@@ -1991,7 +2233,18 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
     const alt = display(other, suffix);
     if (normalizeName(alt) !== normalizeName(player)) names.push(alt);
   }
-  return { player, names, agree, keyMatch, hint, header, nameLines };
+  // A second sign of the name (12R.5 round 2): the other side names the
+  // same player (agree), or the back's other text uses the name's surname or
+  // first name ("Jones led the Bolles School", "Jim's most productive game").
+  const echo = agree || nameEcho(chosen, back, nameLines);
+  return { player, names, agree, keyMatch, hint, header, nameLines, corrected, echo };
+}
+
+/** The surname, or the first name, of a read name used as a word in other lines of the back. */
+function nameEcho(name: NameRead, back: Line[], nameLines: ReadonlySet<Line>): boolean {
+  const key = (w: string) => normalizeName(w).replace(/[^a-z]/g, "");
+  const words = [name.words[name.words.length - 1], name.words[0]].map(key).filter((w) => w.length >= 3);
+  return back.some((l) => l !== name.line && !nameLines.has(l) && normalizeName(l.raw).split(" ").some((t) => words.includes(t.replace(/s$/, "")) || words.includes(t)));
 }
 
 // ---------------------------------------------------------------------------
@@ -2039,20 +2292,28 @@ function findSlab(lines: Line[]): SlabFind | null {
   return { grader, grade, certNumber };
 }
 
-const LABEL_BRANDS: [RegExp, string][] = [
-  [/^UPPER(?:\s*DECK)?$/, "Upper Deck"], [/^TOPPS$/, "Topps"], [/^FLEER$/, "Fleer"], [/^DONRUSS$/, "Donruss"],
-  [/^BOWMAN$/, "Bowman"], [/^SCORE$/, "Score"], [/^SKYBOX$/, "SkyBox"], [/^HOOPS$/, "NBA Hoops"],
-];
-
-/** Holder labels print "1997 UPPER DECK ..." on one line; OCR often keeps only "1997 UPPER". */
+/**
+ * A holder label (or any line) that prints the year and the maker on one
+ * line: "1997 UPPER DECK", "2003-04 TOPPS CHROME" (season sets by their
+ * first year), "1990 TOPPS #336 KEN GRIFFEY JR.". Any maker or product of
+ * the brand table counts, with its era.
+ */
 function slabLabelYearBrand(lines: Line[]): { year: number; brand: string } | null {
   for (const l of lines) {
     // Copyright lines are read by findYear with their own rules (Leaf, Inc. and Donruss).
     if (isCopyrightLine(l)) continue;
-    const m = /\b(19[5-9]\d|20[0-3]\d)\s+(UPPER(?:\s*DECK)?|TOPPS|FLEER|DONRUSS|BOWMAN|SCORE|SKYBOX|HOOPS)\b/.exec(l.up);
+    const m = /(?:^|\s)((?:19[5-9]\d|20[0-3]\d)(?:-(?:19|20)?\d{2})?)\s+(\S.*)$/.exec(l.up);
     if (!m) continue;
-    const brand = LABEL_BRANDS.find(([re]) => re.test(m[2]))?.[1];
-    if (brand) return { year: Number(m[1]), brand };
+    const year = m[1].includes("-") ? seasonYear(m[1]) : validYear(Number(m[1]));
+    const rest = makeLine(m[2], l.conf, l.box, l.side, l.source);
+    if (year == null || !rest) continue;
+    for (const h of brandHits([rest])) {
+      if (h.def.copyrightOnly || h.def.key === "leafinc" || h.def.key === "udc") continue;
+      const brand = hitNames(h.def, year).brand;
+      if (brand && rest.lz.search(h.def.re) <= 1) return { year, brand };
+    }
+    // Labels cut short often keep only "1997 UPPER".
+    if (/^UPPER\b/.test(rest.lz)) return { year, brand: "Upper Deck" };
   }
   return null;
 }
@@ -2159,6 +2420,7 @@ function emptyCard(): ParsedCard {
     rookieWord: false,
     isAutograph: false,
     isReprint: false,
+    certainty: {},
     evidence: [],
   };
 }
@@ -2179,18 +2441,29 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   const ev = out.evidence;
 
   const hits = brandHits(lines);
-  const slabLabel = slabLabelYearBrand(lines);
-  const yearFind = findCardYear(front, back, lines, new Set(hits.map((h) => h.line)));
+  const slab = findSlab([...front, ...back]);
+  const label = slabLabelYearBrand(lines);
+  // On a graded holder the label's line counts as the label (a strong sign);
+  // on a bare card the same kind of line only fills a year nothing else gave.
+  const slabLabel = slab ? label : null;
+  const seen = { conflict: false };
+  let yearFind = findCardYear(front, back, lines, new Set(hits.map((h) => h.line)), seen);
+  if (seen.conflict) ev.push("The years printed on the card do not agree, so the year is left for you");
+  if (!yearFind && !slab && label && !seen.conflict) yearFind = { year: label.year, how: "brand", signs: 1 };
+  // A holder label prints the card's year plainly: it is the best sign. When
+  // the card's own signs give another year, the label's year is used, unsure.
+  if (yearFind && slabLabel && slabLabel.year !== yearFind.year) {
+    ev.push(`The holder label says ${slabLabel.year}, the card's own print says ${yearFind.year}`);
+    yearFind = null;
+  }
   out.year = yearFind?.year ?? slabLabel?.year ?? null;
   out.yearSigns = yearFind?.signs ?? (slabLabel ? 1 : 0);
+  if (yearFind && slabLabel && yearFind.how !== "front") out.yearSigns = Math.min(3, out.yearSigns + 1);
   out.yearFromStats = yearFind?.how === "stats";
   const pick = pickBrand(hits, out.year);
-  out.brand = pick?.brand ?? slabLabel?.brand ?? null;
-  if (pick) {
-    const mine = hits.filter((h) => pick.lines.includes(h.line));
-    const kinds = new Set(mine.map((h) => (h.logo ? `logo-${h.line.side}` : isCopyrightLine(h.line) ? "copyright" : `text-${h.line.side}`)));
-    out.brandSigns = Math.min(3, kinds.size);
-  } else if (slabLabel) out.brandSigns = 1;
+  out.brand = pick?.brand ?? slabLabel?.brand ?? (yearFind && label && !slab ? label.brand : null);
+  out.brandSigns = pick?.signs ?? (slabLabel ? 1 : 0);
+  if (pick && slabLabel && slabLabel.brand === pick.brand) out.brandSigns = Math.min(3, out.brandSigns + 1);
   if (!yearFind && slabLabel) ev.push(`Read ${slabLabel.year} ${slabLabel.brand} on the holder label`);
 
   if (yearFind?.how === "front") {
@@ -2211,13 +2484,13 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
     ev.push("The copyright line says Leaf, Inc., which made both Donruss and Leaf cards. Check the logo on the front for the brand.");
   }
 
-  out.cardNumber = findCardNumber(back, front);
+  const numberFind = findCardNumber(back, front);
+  out.cardNumber = numberFind?.number ?? null;
   if (out.cardNumber) ev.push(`Read card number ${out.cardNumber}`);
 
   out.setName = findSetName(pick, lines, out.cardNumber);
   if (out.setName && out.setName !== out.brand) ev.push(`Read set: ${out.setName}`);
 
-  const slab = findSlab([...front, ...back]);
   if (slab) {
     out.grader = slab.grader;
     out.grade = slab.grade;
@@ -2251,9 +2524,15 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   // Sport clues other than the team, so they can settle a team name used in two sports.
   // League and sport words in running text ("He played 3 years of football")
   // are about the player's life: they count for little.
+  // Kinds of sign per sport (12R.5 round 2): the sport is never guessed, it
+  // needs a positive sign, and it is sure only when two kinds agree.
+  const kinds: SportKinds = new Map();
   const votes: Votes = new Map();
-  if (pick) vote(votes, pick.sport, pick.sportWeight);
-  leagueAndStatVotes(lines.filter((l) => !isSentence(l)), votes);
+  if (pick) {
+    vote(votes, pick.sport, pick.sportWeight);
+    addKind(kinds, pick.sport, "product");
+  }
+  leagueAndStatVotes(lines.filter((l) => !isSentence(l)), votes, kinds);
   const prose: Votes = new Map();
   leagueAndStatVotes(lines.filter((l) => isSentence(l)), prose);
   for (const [sp, w] of prose) vote(votes, sp, w / 4);
@@ -2266,6 +2545,7 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   if (pos) {
     out.position = pos.position;
     vote(votes, pos.sport, 2);
+    addKind(kinds, pos.sport, "position");
     ev.push(`Read position: ${pos.position}`);
   }
   // An Olympic or other multi-sport card: "Athletics" there is track and field.
@@ -2280,6 +2560,7 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   if (team && supported(team)) {
     out.team = team.team;
     vote(votes, team.sport, 3);
+    addKind(kinds, team.sport, "team");
     ev.push(`Read team: ${team.team}`);
   } else if (team || hint) {
     const h = (team ?? hint)!;
@@ -2294,8 +2575,19 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
       ev.push(`Read team name ${h.team}, but it is used in more than one sport`);
     }
   }
-  out.sport = olympic ? "other" : winner(votes);
+  const top = winner(votes);
+  const others = [...kinds].filter(([sp]) => sp !== top);
+  if (olympic) out.sport = "other";
+  else if (top && others.length > 0) {
+    // Signs of two sports outside running text contradict each other: no sport.
+    out.sport = null;
+    ev.push(`Read signs of more than one sport: ${[top, ...others.map(([sp]) => sp)].join(", ")}`);
+  } else if (top && (kinds.get(top) || out.teamHintSport === top)) out.sport = top;
   if (olympic) ev.push("Olympic card: sport other, no team");
+
+  // A season sport card (basketball, hockey, soccer) with only a copyright
+  // year: the copyright may show either year of the season (\u00a91993 on a
+  // 1993-94 set, \u00a91999 on a 1998-99 one), so the year read stays, unsure.
 
   out.player = players.player;
   out.playerAgree = players.agree;
@@ -2303,7 +2595,33 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   out.firstNameHint = players.hint;
   if (players.keyMatch) ev.push(`Name matches the key card list: ${players.keyMatch}`);
 
+  // Certainty per filled field (12R.5 round 2): sure only when two
+  // independent signs on the card agree, else unsure.
+  const sure: Record<CertainField, boolean> = {
+    player: players.echo === true && !players.corrected,
+    year: out.yearSigns >= 2,
+    brand: out.brandSigns >= 2,
+    cardNumber: numberFind?.sure === true,
+    setName: setSure(pick, out.setName),
+    sport: !olympic && out.sport != null && [...(kinds.get(out.sport) ?? [])].length >= 2 && others.length === 0,
+    team: out.team != null && team != null && (team.city || team.twoPlaces === true),
+  };
+  for (const f of CERTAIN_FIELDS) {
+    if (out[f] != null) out.certainty[f] = sure[f] ? "sure" : "unsure";
+  }
   return out;
+}
+
+
+/**
+ * A set is sure when its product name was read in two places (front and back
+ * logos), or once as a logo with its maker named in another place.
+ */
+function setSure(pick: BrandPick | null, setName: string | null): boolean {
+  if (!pick || !setName || pick.subSet !== setName) return false;
+  const places = new Set(pick.setLines);
+  if (places.size >= 2) return true;
+  return pick.lines.some((l) => !places.has(l) && !isSentence(l));
 }
 
 // ---------------------------------------------------------------------------

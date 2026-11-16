@@ -23,7 +23,11 @@ export type OcrSource = "page" | "band" | "edge" | "corner";
  * as fractions of the picture (the photo, or the photo turned upright when it
  * was read sideways).
  */
-export type OcrLine = { text: string; confidence: number; box: Box; source?: OcrSource };
+export type OcrLine = {
+  text: string; confidence: number; box: Box; source?: OcrSource;
+  /** The same text was read again, alone, by a second read of its spot (a corner re-read): two reads agree. */
+  twice?: boolean;
+};
 export type OcrResult = {
   text: string;
   lines: OcrLine[];
@@ -351,8 +355,14 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
       const read = unpad(linesFrom(await engine.read(zoomed.png)), zoomed);
       crops++;
       for (const g of placed(read.filter((l) => keepCornerLine(l.text, l.box)), corner, "corner")) {
-        // Already read as part of a longer line: nothing new.
-        if (best.some((l) => overlapShare(g.box, l.box) > 0.5 && l.text.replace(/\s+/g, "").includes(g.text.replace(/\s+/g, "")))) continue;
+        // Already read as part of a longer line: nothing new. Read exactly the
+        // same on its own both times: the two reads agree, which is noted.
+        const plain = g.text.replace(/\s+/g, "");
+        const same = best.filter((l) => overlapShare(g.box, l.box) > 0.5 && l.text.replace(/\s+/g, "").includes(plain));
+        if (same.length > 0) {
+          best = best.map((l) => (same.includes(l) && l.text.replace(/\s+/g, "") === plain ? { ...l, twice: true } : l));
+          continue;
+        }
         // The larger read replaces what the first read made of the same spot.
         best = [...best.filter((l) => overlapShare(l.box, g.box) <= 0.5), g];
       }

@@ -109,7 +109,19 @@ export type ReadEvidence = {
   rookieWord?: boolean;
   /** A serial number as the reader saw it. */
   serial?: { text: string; line: string; weak: boolean; why: string[] };
+  /**
+   * Per filled field, how sure the free reader is (12R.5 round 2): "sure"
+   * only when two independent signs on the card agree, else "unsure". Unsure
+   * fields are marked "Check this" for the owner. Left out by readers that
+   * do not say (AI, sample).
+   */
+  certainty?: FieldCertainty;
 };
+
+/** The fields a reader may say it is sure of. */
+export const CERTAIN_FIELDS = ["sport", "year", "brand", "setName", "cardNumber", "player", "team"] as const;
+export type CertainField = (typeof CERTAIN_FIELDS)[number];
+export type FieldCertainty = Partial<Record<CertainField, "sure" | "unsure">>;
 
 export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence };
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;

@@ -297,6 +297,7 @@ describe("parseCardText", () => {
       rookieWord: false,
       isAutograph: false,
       isReprint: false,
+      certainty: {},
       evidence: [],
     };
     expect(parseCardText(null, null)).toEqual(empty);
