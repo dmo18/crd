@@ -4,6 +4,11 @@
 // No headers or cookies are saved. Wait 2 seconds or more between runs.
 import { writeFileSync } from "node:fs";
 
+if (process.env.NODE_ENV === "production") {
+  console.error("catalog-probe is a hand tool for development only. It does not run in production.");
+  process.exit(1);
+}
+
 const [out, method, tool, argsJson] = process.argv.slice(2);
 const params = method === "tools/call" ? { name: tool, arguments: JSON.parse(argsJson ?? "{}") } : {};
 const started = Date.now();

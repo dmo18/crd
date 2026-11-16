@@ -58,6 +58,32 @@ describe("search", () => {
     expect(r?.length).toBeLessThanOrEqual(3);
     expect(r?.every((c) => !c.verified)).toBe(true);
   });
+  it("the recorded empty search is a normal nothing and is stored", async () => {
+    expect(parseSearch(sse("search_empty_eriffey.json"))).toEqual([]);
+    const db = createDb(":memory:");
+    const fetchImpl = vi.fn(async () => new Response(sse("search_empty_eriffey.json"), { status: 200 }));
+    const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await c.search({ text: "1990 Topps Eriffey" }, "now")).toEqual({ ok: true, value: [], fromStore: false });
+    const { outsideCache } = await import("@/db/schema");
+    expect(db.select().from(outsideCache).all()).toHaveLength(1);
+  });
+  it.each(["No results found", "nothing found", "0 cards", "Card not found", "Rate limit exceeded, not found later", ""])(
+    "plain text %j is a failure and is not stored",
+    async (text) => {
+      const db = createDb(":memory:");
+      const fetchImpl = vi.fn(async () => new Response(wrap(text), { status: 200 }));
+      const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
+      expect(await c.search({ text: "1990 Topps" }, "now")).toEqual({ ok: false, reason: "failed" });
+      const { outsideCache } = await import("@/db/schema");
+      expect(db.select().from(outsideCache).all()).toHaveLength(0);
+    },
+  );
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])("limit %s falls back to 20", async (limit) => {
+    const { catalog, fetchImpl } = client(sse("search_1990_topps_griffey.json"));
+    await catalog.search({ text: "1990 Topps", limit }, "now");
+    const init = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect(JSON.parse(String(init.body)).params.arguments.limit).toBe(20);
+  });
   it("too short a text makes no call", async () => {
     const { catalog, fetchImpl } = client("x");
     const r = await catalog.search({ text: " a " }, "now");
@@ -79,6 +105,29 @@ describe("card", () => {
     const r = parseCard(wrap(inner));
     expect(r?.card?.sourceSetId).toBe("9179");
     expect(r?.card?.url).toBe("https://mycardfolio.com");
+  });
+  it("keeps at most 10 players and 200 characters, and 60,000 players parse fast", () => {
+    const f = fixture("card_551033.json").response as { result: { content: { text: string }[] } };
+    const inner = JSON.parse(f.result.content[0].text);
+    inner.card.subjects = Array.from({ length: 60_000 }, (_, i) => ({ subject_name: `PLAYER NUMBER${i} ` + "X".repeat(300) }));
+    inner.card.product = "Topps " + "y".repeat(1000);
+    inner.card.set = "z".repeat(1000);
+    const started = Date.now();
+    const card = parseCard(wrap(inner))?.card;
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(card).toBeTruthy();
+    expect(1 + (card?.otherPlayers.length ?? 0)).toBe(10);
+    for (const t of [card?.player, ...(card?.otherPlayers ?? []), card?.brand, card?.variation, card?.setName]) {
+      expect((t ?? "").length).toBeLessThanOrEqual(200);
+    }
+    expect(card?.variation?.length).toBe(194);
+  });
+  it("rebuilds the card link without user, query or hash", () => {
+    const f = fixture("card_551033.json").response as { result: { content: { text: string }[] } };
+    const inner = JSON.parse(f.result.content[0].text);
+    const page = new URL(inner.card.url).pathname;
+    inner.card.url = `https://me:secret@mycardfolio.com${page}?utm=x#frag`;
+    expect(parseCard(wrap(inner))?.card?.url).toBe("https://mycardfolio.com" + page);
   });
   it("no such card is a normal nothing", async () => {
     const { catalog } = client(wrap("No card found with card_id 1"));
@@ -106,6 +155,35 @@ describe("checklist", () => {
     const rows = [1, 2].map((n) => ({ card_id: String(n), sport: "Baseball", year: "1990", product: "Topps", set: "Base Set", card_number: String(n), subjects: [{ subject_name: "A B" }], url: `https://mycardfolio.com/sports/baseball/1990/topps-1/base-set-5/${n}-a-b-${n}` }));
     expect(parseChecklist(wrap({ set: { set_id: "5" }, total_cards: 2, cards: rows }), "5")?.complete).toBe(true);
     expect(parseChecklist(wrap({ set: { set_id: "5" }, total_cards: 3, cards: rows }), "5")?.complete).toBe(false);
+  });
+  it("an answer for another set is a failure and is not stored", async () => {
+    const f = fixture("checklist_9179_first500.json").response as { result: { content: { text: string }[] } };
+    const inner = JSON.parse(f.result.content[0].text);
+    expect(parseChecklist(wrap(inner), "9180")).toBeNull();
+    const db = createDb(":memory:");
+    const fetchImpl = vi.fn(async () => new Response(wrap(inner), { status: 200 }));
+    const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await c.checklist("9180", "background")).toEqual({ ok: false, reason: "failed" });
+    const { outsideCache } = await import("@/db/schema");
+    expect(db.select().from(outsideCache).all()).toHaveLength(0);
+  });
+  it("500 rows with no total and no note still counts as incomplete", () => {
+    const f = fixture("checklist_9179_first500.json").response as { result: { content: { text: string }[] } };
+    const inner = JSON.parse(f.result.content[0].text);
+    delete inner.note;
+    delete inner.total_cards;
+    expect(parseChecklist(wrap(inner), "9179")?.complete).toBe(false);
+    inner.cards = inner.cards.slice(0, 499);
+    expect(parseChecklist(wrap(inner), "9179")?.complete).toBe(true);
+  });
+  it("takes the tags from the recorded checklist", () => {
+    const r = parseChecklist(sse("checklist_9179_first500.json"), "9179");
+    const byNumber = (n: string) => r?.cards.find((c) => c.cardNumber === n);
+    expect(byNumber("6")).toMatchObject({ player: "Vince Coleman", tags: ["RB"] });
+    expect(byNumber("314")).toMatchObject({ player: "Donald Harris", tags: ["FDP"] });
+    expect(byNumber("444")).toMatchObject({ player: "Kyle Abbott", tags: ["FDP"] });
+    expect(byNumber("396")).toMatchObject({ player: "Bart Giamatti", tags: ["MEM"] });
+    expect(byNumber("249")).toMatchObject({ player: "Mike (Texas) Smith", tags: [] });
   });
   it("a bad set id makes no call", async () => {
     const { catalog, fetchImpl } = client("x");

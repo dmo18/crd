@@ -3,7 +3,7 @@ import type { Db } from "@/db";
 import { outsideCall, type OutsideFailure } from "@/lib/outside/gate";
 import type { CacheKind } from "@/lib/outside/cache";
 import type { Catalog, CatalogCard, CatalogFailure, CatalogResult, Line } from "./types";
-import { cleanCardNumber, cleanName, cleanSetName, cleanSport, cleanYear, isCleanId, isSourceUrl, setIdFromUrl, splitProduct } from "./clean";
+import { MAX_SUBJECTS, cleanCardNumber, cleanName, cleanSetName, cleanSport, cleanYear, isCleanId, setIdFromUrl, sourceUrl, splitProduct } from "./clean";
 
 /**
  * MyCardfolio through the shared gate (every call goes through `outsideCall`).
@@ -15,6 +15,9 @@ import { cleanCardNumber, cleanName, cleanSetName, cleanSport, cleanYear, isClea
 const HOME = "https://mycardfolio.com";
 const MAX_NOISE = 3;
 const CHECKLIST_TIMEOUT_MS = 10_000;
+/** The source sends at most 500 checklist rows; that many means the set may go on. */
+const CHECKLIST_CAP = 500;
+const DEFAULT_LIMIT = 20;
 
 // ---------- reading the answer ----------
 
@@ -94,7 +97,8 @@ export function toCard(rawRow: unknown, setIdHint: string | null = null): Catalo
 
   const names: string[] = [];
   const tags: string[] = [];
-  for (const subj of r.subjects ?? []) {
+  // Only the first few players: a card never has more, and a huge list must stay cheap.
+  for (const subj of (r.subjects ?? []).slice(0, MAX_SUBJECTS)) {
     const o = z.object({ subject_name: z.string().nullish() }).passthrough().safeParse(subj);
     if (!o.success) continue;
     const c = cleanName(o.data.subject_name);
@@ -103,7 +107,7 @@ export function toCard(rawRow: unknown, setIdHint: string | null = null): Catalo
     if (verified) for (const t of c.tags) if (!tags.includes(t)) tags.push(t);
   }
   const { brand, variation } = splitProduct(s(r.product));
-  const url = isSourceUrl(r.url) ? String(r.url) : HOME;
+  const url = sourceUrl(r.url) ?? HOME;
   const fromUrl = verified ? setIdFromUrl(url) : null;
   const hint = verified && setIdHint && /^\d{1,12}$/.test(setIdHint) ? setIdHint : null;
   return {
@@ -138,10 +142,10 @@ export function applyNoiseRule(cards: CatalogCard[], limit: number): CatalogCard
 
 export type SearchParsed = CatalogCard[];
 
-export function parseSearch(body: string, limit = 20): SearchParsed | null {
+export function parseSearch(body: string, limit = DEFAULT_LIMIT): SearchParsed | null {
   const a = readAnswer(body);
-  // A plain sentence is read as "nothing found" only when it says so.
-  if (a.kind === "text") return /^(no |nothing|0 )|not found/i.test(a.text.trim()) ? [] : null;
+  // The site says "nothing found" as JSON with an empty list (recorded in
+  // search_empty_eriffey.json), never as a sentence. So any plain text is a failure.
   if (a.kind !== "json") return null;
   const p = searchSchema.safeParse(a.value);
   if (!p.success) return null;
@@ -165,10 +169,17 @@ export function parseChecklist(body: string, requestedSetId: string): { cards: C
   if (a.kind !== "json") return null;
   const p = checklistSchema.safeParse(a.value);
   if (!p.success) return null;
-  const hint = setIdOf(p.data.set) ?? requestedSetId;
+  const answered = setIdOf(p.data.set);
+  // An answer for another set than the one asked for is not used.
+  if (answered !== null && answered !== requestedSetId) return null;
+  const hint = answered ?? requestedSetId;
   const cards = p.data.cards.map((row) => toCard(row, hint)).filter((c): c is CatalogCard => c !== null && c.verified);
   const total = typeof p.data.total_cards === "number" ? p.data.total_cards : null;
-  const truncated = Boolean(p.data.note) || (total !== null && p.data.cards.length < total) || (total !== null && cards.length < total);
+  const truncated =
+    Boolean(p.data.note) ||
+    p.data.cards.length >= CHECKLIST_CAP ||
+    (total !== null && p.data.cards.length < total) ||
+    (total !== null && cards.length < total);
   return { cards, complete: !truncated };
 }
 
@@ -230,7 +241,8 @@ export function createMyCardfolio(options: ClientOptions = {}): Catalog {
     async search(q, line) {
       const text = String(q.text ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
       if (text.length < 2) return { ok: true, value: [], fromStore: false };
-      const limit = Math.min(50, Math.max(1, Math.trunc(q.limit ?? 20)));
+      const asked = Number(q.limit ?? DEFAULT_LIMIT);
+      const limit = Number.isFinite(asked) ? Math.min(50, Math.max(1, Math.trunc(asked))) : DEFAULT_LIMIT;
       const args: Record<string, string | number> = { query: text, limit };
       if (q.sport) args.sport = q.sport[0].toUpperCase() + q.sport.slice(1);
       if (q.year && Number.isInteger(q.year)) args.year = String(q.year);
