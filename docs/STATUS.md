@@ -53,6 +53,30 @@
   they hold a digit. Tune: flat 0 wrong, bar PASS; phone-style 0 wrong, year
   and brand 6 of 8 (the tiny copyright line is lost in the blurred photo at
   any read size).
+- 12R.5 round 2 (not deployed): every filled field now says "sure" or
+  "unsure" (ReadEvidence.certainty). Sure needs two independent signs on
+  the card (front name and back heading or the back's text using the name;
+  front set year, copyright and stat table; logo and copyright of one maker
+  family; corner number with a marker or read the same twice; two kinds of
+  sport sign; team with its city or in two places). Signs that contradict
+  leave the field blank. A card is filed on its own only when player, year
+  and brand are all sure. Unsure fields are kept in firstSuggestion.unsure
+  (no new column) and shown as "Check this" in Review and on the item page.
+- Rules by principle: one maker and product table (Panini products from
+  2010, Topps and Upper Deck products, era of Donruss, Score, Contenders);
+  sport never guessed (no maker default; soccer, golf, racing, wrestling,
+  boxing words; UFC is other); season years "2003-04"; holder label year
+  and maker for any maker; accents and name particles; product names never
+  a player. Round 1 rules demoted to unsure: logo year, corrected first
+  name, one season row. Dropped from the brief: "copyright minus one" for
+  season sports (it made the owner's 1993-94 Hardaway 1992).
+- Bench bar replaced: sure fields at most 2 in 100 wrong, no filed card
+  wrong, all filled at most 8 in 100 wrong, sure fill player 70, year 60,
+  brand 60, number 50. Result: 0 wrong of all filled fields on owner,
+  tune and holdout cards in both sets (holdout was 12 and 9 in 100 wrong).
+  Bar FAIL on sure fill: year and card number (holdout 29 in 100), brand on
+  the phone tune set. Year is the hard one: without a stat table or a
+  front set year, only the copyright says it, and that is one sign.
 - Known: npm audit shows 11 moderate advisories in dev tools only
   (drizzle-kit's esbuild, eslint's minimatch), same as before this task;
   npm audit --omit=dev is 0.
