@@ -223,6 +223,20 @@ describe("broken answers never throw", () => {
     const r = parseSearch(wrap({ results: [good("1"), { nope: true }, 42, null, { card_id: "../x" }, good("2")] }));
     expect(r?.map((c) => c.sourceId)).toEqual(["1", "2"]);
   });
+  it('"nothing found" only for count 0 with an empty list; all unusable rows fail and are not kept', async () => {
+    expect(parseSearch(wrap({ count: 0, results: [] }))).toEqual([]);
+    expect(parseSearch(wrap({ results: [] }))).toBeNull();
+    expect(parseSearch(wrap({ count: 3, results: [] }))).toBeNull();
+    expect(parseSearch(wrap({ count: null, results: [] }))).toBeNull();
+    const junk = { count: 3, results: [{ nope: true }, 42, { card_id: "../x" }] };
+    expect(parseSearch(wrap(junk))).toBeNull();
+    const db = createDb(":memory:");
+    const fetchImpl = vi.fn(async () => new Response(wrap(junk), { status: 200 }));
+    const c = createMyCardfolio({ db, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(await c.search({ text: "1990 Topps" }, "now")).toEqual({ ok: false, reason: "failed" });
+    const { outsideCache } = await import("@/db/schema");
+    expect(db.select().from(outsideCache).all()).toHaveLength(0);
+  });
   it("a failed call gives the plain reason", async () => {
     const { catalog } = client(() => new Response("x", { status: 429 }));
     expect(await catalog.search({ text: "1990 Topps" }, "now")).toEqual({ ok: false, reason: "paused" });

@@ -76,6 +76,23 @@ describe("cleanCardNumber", () => {
   });
 });
 
+describe("cleanCardNumber with hyphens: what is kept and what is refused", () => {
+  it("documents OR-1 and 1986-87, and refuses broken hyphen shapes", () => {
+    // "or" alone is a misread word, but "OR-1" has the printed shape of a hyphen number: kept as read.
+    expect(cleanCardNumber("or")).toBeNull();
+    expect(cleanCardNumber("OR-1")).toBe("OR-1");
+    expect(cleanCardNumber("or - 1")).toBe("OR-1");
+    // A season read into the number field is kept as a hyphen number, never turned into a year here
+    // (the year field takes "1986" from it); it agrees with no card number, so it never makes a card sure.
+    expect(cleanCardNumber("1986-87")).toBe("1986-87");
+    expect(cleanYear("1986-87")).toBe(1986);
+    // Negative: a hyphen at an end, more than three parts, a part over 6 characters, or no digit.
+    for (const bad of ["-1", "1-", "OR-", "-", "1-2-3-4", "1234567-1", "OR-AB", "A--1", "1_2", "1/2"]) {
+      expect(cleanCardNumber(bad), bad).toBeNull();
+    }
+  });
+});
+
 describe("other cleaning", () => {
   it("year", () => {
     expect(cleanYear("1986-87")).toBe(1986);

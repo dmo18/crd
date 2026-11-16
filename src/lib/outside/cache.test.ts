@@ -31,6 +31,11 @@ describe("stored answers", () => {
     expect(requestKey({ ...mcp({ query: "1990 Topps Griffey", limit: 5 }), path: "/api/other" }, free)).not.toBe(a);
     expect(requestKey({ ...mcp({ query: "1990 Topps Griffey", limit: 5 }), host: "www.wikidata.org" }, free)).not.toBe(a);
     expect(requestKey({ ...mcp({ query: "1990 Topps Griffey", limit: 5 }), method: "PUT" }, free)).not.toBe(a);
+    // The Accept header is part of the key: another answer format is another answer.
+    const sse = requestKey({ ...mcp({ query: "1990 Topps Griffey", limit: 5 }), accept: "application/json, text/event-stream" }, free);
+    expect(sse).not.toBe(a);
+    expect(requestKey({ ...mcp({ query: "1990 Topps Griffey", limit: 5 }), accept: "application/json" }, free)).not.toBe(sse);
+    expect(requestKey({ ...mcp({ query: "1990 Topps Griffey", limit: 5 }), accept: "application/json, text/event-stream" }, free)).toBe(sse);
     // Without naming it, a free-text field is not folded either.
     expect(requestKey(mcp({ query: "1990 TOPPS griffey", limit: 5 }))).not.toBe(requestKey(mcp({ query: "1990 Topps Griffey", limit: 5 })));
     // A field with another name keeps its case, even holding the same words.
@@ -69,6 +74,23 @@ describe("pruning", () => {
     expect(db.select().from(outsideCache).all().map((r) => r.key).sort()).toEqual(["b", "c"]);
   });
 
+  it("goes down to 90% of the cap, not just under it", () => {
+    const db = createDb(":memory:");
+    for (let i = 0; i < 11; i++) putCached(db, { key: `k${String(i).padStart(2, "0")}`, source: "mycardfolio", kind: "card", body: "x".repeat(100), nowMs: T + i });
+    // 1,100 bytes against a cap of 1,000: two oldest go, 900 left.
+    expect(pruneCache(db, T + 20, 1000)).toBe(2);
+    expect(cacheTotalBytes(db)).toBe(900);
+    // At or under the cap nothing goes.
+    expect(pruneCache(db, T + 20, 900)).toBe(0);
+  });
+
+  it("a write returns the change of the stored total", () => {
+    const db = createDb(":memory:");
+    expect(putCached(db, { key: "k", source: "mycardfolio", kind: "card", body: "x".repeat(300), nowMs: T })).toBe(300);
+    expect(putCached(db, { key: "k", source: "mycardfolio", kind: "card", body: "x".repeat(100), nowMs: T })).toBe(-200);
+    expect(cacheTotalBytes(db)).toBe(100);
+  });
+
   it("runs all deletes in one transaction: a failing delete leaves every row in place", () => {
     const db = createDb(":memory:");
     putCached(db, { key: "old", source: "mycardfolio", kind: "search_empty", body: "o", nowMs: T - 2 * DAY });
@@ -79,7 +101,7 @@ describe("pruning", () => {
     // The expired row was deleted in an earlier statement before "b" failed: rolled back with it.
     expect(db.select().from(outsideCache).all().map((r) => r.key).sort()).toEqual(["a", "b", "c", "old"]);
     db.run(sql.raw("DROP TRIGGER keep_b;"));
-    expect(pruneCache(db, T + 10, 400)).toBe(3);
+    expect(pruneCache(db, T + 10, 500)).toBe(3);
     expect(db.select().from(outsideCache).all().map((r) => r.key)).toEqual(["c"]);
   });
 });

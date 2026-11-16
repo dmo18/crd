@@ -120,7 +120,7 @@ function buildRequest(src: SourceConfig, req: OutsideRequest): { url: string; in
     body = JSON.stringify(req.json);
   }
   // The stored-answer key comes from exactly what is sent.
-  const key = requestKey({ method, host, path: req.path, query: req.query, json: req.json }, src.freeTextFields);
+  const key = requestKey({ method, host, path: req.path, query: req.query, json: req.json, accept: headers.Accept }, src.freeTextFields);
   // Redirects are refused and cookies are never sent or kept.
   return { url: url.toString(), init: { method, headers, body, redirect: "manual", credentials: "omit", cache: "no-store" }, key };
 }
@@ -196,6 +196,8 @@ export class Gate {
   private readonly hourStarts = new Map<SourceId, number[]>();
   private readonly failStreak = new Map<SourceId, number>();
   private lastPrune: number | null = null;
+  /** Bytes of all stored answers, kept as a running number: added to on every write, recounted hourly and after a prune. */
+  private storedBytes: number | null = null;
   private cancelPump: (() => void) | null = null;
 
   constructor(deps: GateDeps) {
@@ -466,20 +468,29 @@ export class Gate {
   }
 
   /**
-   * Keeps an answer. Prunes at once when the stored total passes the cap
-   * (checked on every write), and otherwise at most once an hour so expired
-   * answers go too.
+   * Keeps an answer. The stored total is a running number checked on every
+   * write (no sum over the table); past the cap a prune takes it down to 90%
+   * of the cap, so a full store prunes only now and then. Once an hour the
+   * expired answers go and the total is counted again from the table (the
+   * owner's "Clear stored answers" changes it outside the gate).
    */
   private store(key: string, source: SourceId, kind: CacheKind, body: string, nowMs: number): void {
     try {
-      putCached(this.db, { key, source, kind, body, nowMs });
-      const overCap = cacheTotalBytes(this.db) > this.cacheCapBytes;
-      if (overCap || this.lastPrune === null || nowMs - this.lastPrune >= PRUNE_EVERY_MS) {
+      const added = putCached(this.db, { key, source, kind, body, nowMs });
+      if (this.storedBytes === null || this.lastPrune === null || nowMs - this.lastPrune >= PRUNE_EVERY_MS) {
         this.lastPrune = nowMs;
         pruneCache(this.db, nowMs, this.cacheCapBytes);
+        this.storedBytes = cacheTotalBytes(this.db);
+        return;
+      }
+      this.storedBytes += added;
+      if (this.storedBytes > this.cacheCapBytes) {
+        pruneCache(this.db, nowMs, this.cacheCapBytes);
+        this.storedBytes = cacheTotalBytes(this.db);
       }
     } catch {
-      // A store problem must not break the call.
+      // A store problem must not break the call; count again on the next write.
+      this.storedBytes = null;
     }
   }
 }

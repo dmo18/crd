@@ -26,19 +26,23 @@ const RECORDED: Record<string, CatalogCard[]> = {
   "1990 topps 650": searchRec("search_1990_topps_650.json"),
   "1990 topps 792": searchRec("search_1990_topps_792.json"),
   "1990 topps": searchRec("search_1990_topps_sets.json"),
+  "1990 topps 1": searchRec("search_1990_topps_1.json"),
   "1986 fleer michael jordan": searchRec("search_1986_fleer_jordan_noisy.json"),
 };
 
 class FakeCatalog implements Catalog {
   calls: { tool: "search" | "card" | "checklist"; arg: string }[] = [];
+  /** The limit of each search, in order. */
+  limits: (number | undefined)[] = [];
   constructor(
     private readonly opts: { fail?: CatalogFailure; searches?: Record<string, CatalogCard[]>; fromStore?: boolean; everySearch?: (text: string) => CatalogCard[] } = {},
   ) {}
   private answer<T>(value: T): CatalogResult<T> {
     return this.opts.fail ? { ok: false, reason: this.opts.fail } : { ok: true, value, fromStore: Boolean(this.opts.fromStore) };
   }
-  async search(q: { text: string }) {
+  async search(q: { text: string; limit?: number }) {
     this.calls.push({ tool: "search", arg: q.text });
+    this.limits.push(q.limit);
     const key = q.text.toLowerCase();
     return this.answer(this.opts.everySearch?.(key) ?? (this.opts.searches ?? RECORDED)[key] ?? []);
   }
@@ -106,6 +110,45 @@ describe("lookupCard on recorded answers", () => {
     expect(third.sure?.sourceId).toBe("551033");
     expect(third.callsUsed).toBe(0);
     expect(scan.used).toBe(used);
+  });
+
+  it('"1990 Topps Eriffey" alone, on a cold start: "1990 Topps 1" (limit 5) teaches the set id and the checklist finds #336', async () => {
+    const { catalog, scan, o } = setup();
+    const r = await lookupCard(read({ names: ["Eriffey"] }), "background", o);
+    expect(r.sure?.sourceId).toBe("551033");
+    expect(r.sure?.cardNumber).toBe("336");
+    expect(catalog.calls.map((c) => `${c.tool}:${c.arg}`)).toEqual(["search:1990 Topps Eriffey", "search:1990 Topps 1", "checklist:9179"]);
+    expect(catalog.limits).toEqual([10, 5]);
+    expect(r.callsUsed).toBe(3);
+    // Learned for the rest of the scan; the Tiffany card #128 in that answer (set 9181) taught nothing.
+    expect([...scan.setIds]).toEqual([["1990|topps", "9179"]]);
+  });
+
+  it('cold start: "year brand 2" only when "year brand 1" gave no clean Base Set card, and never a third try', async () => {
+    const recorded = searchRec("search_1990_topps_1.json");
+    // Only the Tiffany and listing rows of the recorded answer: no clean Base Set card.
+    const noBase = recorded.filter((c) => c.variation !== null || !c.verified);
+    expect(noBase.length).toBeGreaterThan(0);
+    const { catalog, scan, o } = setup({ searches: { "1990 topps 1": noBase } });
+    const r = await lookupCard(read({ names: ["Eriffey"] }), "background", o);
+    expect(r.sure).toBeNull();
+    expect(catalog.calls.map((c) => `${c.tool}:${c.arg}`)).toEqual(["search:1990 Topps Eriffey", "search:1990 Topps 1", "search:1990 Topps 2"]);
+    expect(catalog.limits).toEqual([10, 5, 5]);
+    expect(scan.setIds.size).toBe(0);
+    // "year brand 2" with a clean Base Set card is enough.
+    const second = setup({ searches: { "1990 topps 2": recorded } });
+    const found = await lookupCard(read({ names: ["Eriffey"] }), "background", second.o);
+    expect(found.sure?.sourceId).toBe("551033");
+    expect(second.catalog.calls.map((c) => c.arg)).toEqual(["1990 Topps Eriffey", "1990 Topps 1", "1990 Topps 2", "9179"]);
+  });
+
+  it("a set id is taken only from the url of a clean Base Set card", async () => {
+    const recorded = searchRec("search_1990_topps_1.json");
+    // A clean card whose url does not name the set it claims: not learned.
+    const forged = recorded.filter((c) => c.verified && !c.variation).map((c) => ({ ...c, url: "https://mycardfolio.com/sports/baseball" }));
+    const { scan, o } = setup({ searches: { "1990 topps 1": forged, "1990 topps 2": forged } });
+    await lookupCard(read({ names: ["Eriffey"] }), "background", o);
+    expect(scan.setIds.size).toBe(0);
   });
 
   it("a card numbered over 500 is found by the number search (the checklist stops at 500)", async () => {

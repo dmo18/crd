@@ -76,7 +76,7 @@ const rowSchema = z
 
 const setSchema = z.object({ set_id: z.union([z.string(), z.number()]).nullish() }).passthrough();
 
-const searchSchema = z.object({ results: z.array(z.unknown()) }).passthrough();
+const searchSchema = z.object({ count: z.number().nullish(), results: z.array(z.unknown()) }).passthrough();
 const cardSchema = z.object({ card: z.unknown(), set: z.unknown().optional() }).passthrough();
 const checklistSchema = z
   .object({ set: z.unknown().optional(), total_cards: z.number().nullish(), note: z.string().nullish(), cards: z.array(z.unknown()) })
@@ -142,14 +142,22 @@ export function applyNoiseRule(cards: CatalogCard[], limit: number): CatalogCard
 
 export type SearchParsed = CatalogCard[];
 
+/**
+ * The cards of a search answer. `[]` ("nothing found", stored for a day) only
+ * when the site says count 0 with an empty list; null (failed, not stored)
+ * for anything else that gives no usable row.
+ */
 export function parseSearch(body: string, limit = DEFAULT_LIMIT): SearchParsed | null {
   const a = readAnswer(body);
-  // The site says "nothing found" as JSON with an empty list (recorded in
-  // search_empty_eriffey.json), never as a sentence. So any plain text is a failure.
+  // The site says "nothing found" as JSON with count 0 and an empty list
+  // (recorded in search_empty_eriffey.json), never as a sentence. So any plain text is a failure.
   if (a.kind !== "json") return null;
   const p = searchSchema.safeParse(a.value);
   if (!p.success) return null;
+  if (p.data.results.length === 0) return p.data.count === 0 ? [] : null;
   const cards = p.data.results.map((row) => toCard(row)).filter((c): c is CatalogCard => c !== null);
+  // Rows that are all unusable: a broken answer, not "nothing found".
+  if (cards.length === 0) return null;
   return applyNoiseRule(cards, limit);
 }
 

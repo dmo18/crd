@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1990 Topps 1",
+  "limit": 5,
+  "sport": "Baseball",
+  "year": "1990"
+ },
+ "elapsed_ms": 2568,
+ "status": 200,
+ "bytes": 3123,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1990 Topps 1\",\n  \"count\": 5,\n  \"results\": [\n    {\n      \"card_id\": \"ebay_04aa751a54b9\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps Series 1\",\n      \"set\": \"Baseball\",\n      \"card_number\": \"T90-57\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Aaron Judge\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC, SP\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-series-1-ebay_946c776123/baseball-ebay_179551b311/t90-57-aaron-judge-ebay_04aa751a54b9\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_04aa751a54b9.jpg\"\n    },\n    {\n      \"card_id\": \"550825\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"128\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"CHECKLIST 1\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/128-checklist-1-550825\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/550825.jpg\"\n    },\n    {\n      \"card_id\": \"551677\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps Tiffany\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"128\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"CHECKLIST 1\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-tiffany-2131/base-set-9181/128-checklist-1-551677\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/551677.jpg\"\n    },\n    {\n      \"card_id\": \"ing_b92c25b91157\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps Gypsy Queen\",\n      \"set\": \"2014 Topps Gypsy Queen\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Ichiro\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Excclusive, RC\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-gypsy-queen-ing_bd7ae0cd8a/2014-topps-gypsy-queen-ing_6cd8bf57c0/1-ichiro-ing_b92c25b91157\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ing_b92c25b91157.jpg\"\n    },\n    {\n      \"card_id\": \"550698\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Nolan Ryan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/1-nolan-ryan-550698\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/550698.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

@@ -2,7 +2,7 @@ import type { Sport } from "@/db/schema";
 import { REVIEW_THRESHOLD } from "@/lib/recognition/types";
 import type { Catalog, CatalogCard, CatalogFailure, Line } from "./types";
 import { createMyCardfolio } from "./mycardfolio";
-import { cleanCardNumber, splitProduct } from "./clean";
+import { cleanCardNumber, setIdFromUrl, splitProduct } from "./clean";
 import { normalizeBrand } from "./normalize";
 import { MAX_CANDIDATES, judge, matchRead, slimRows, type Candidate, type Judgement, type MatchRead, type SlimRow } from "./match";
 
@@ -46,6 +46,13 @@ export const CHECK_CONFIDENCE = 0.7;
 /** Small answers only: a search with limit 50 took 7 s in the probe. */
 const SEARCH_LIMIT = 10;
 const MAX_SETS = 2;
+/**
+ * Cold start (no set id known yet): "year brand 1", then "year brand 2", each
+ * with limit 5, until a clean Base Set card teaches the set id. At most 2
+ * calls, inside the card's budget.
+ */
+const DISCOVERY_NUMBERS = ["1", "2"] as const;
+const DISCOVERY_LIMIT = 5;
 
 /** One per scan (a photo with many cards): the 40 call budget and what was learned on the way. */
 export type ScanBudget = {
@@ -187,19 +194,20 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   const searched = new Map<string, CatalogCard[]>();
   const noise: CatalogCard[] = [];
   /** `forCard`: the words were this card's name or number (a set id search gives no candidates). */
-  async function search(text: string, year: number | null, forCard: boolean): Promise<CatalogCard[]> {
+  async function search(text: string, year: number | null, forCard: boolean, limit = SEARCH_LIMIT): Promise<CatalogCard[]> {
     const key = text.toLowerCase();
     const known = searched.get(key);
     if (known) return known;
-    const q: { text: string; limit: number; sport?: Sport; year?: number } = { text, limit: SEARCH_LIMIT };
+    const q: { text: string; limit: number; sport?: Sport; year?: number } = { text, limit };
     if (r.sport) q.sport = r.sport;
     if (year) q.year = year;
     const cards = (await spend(() => catalog.search(q, line))) ?? [];
     searched.set(key, cards);
     if (forCard) for (const c of cards) if (!c.verified && !noise.some((n) => n.sourceId === c.sourceId)) noise.push(c);
-    // Base set ids come from clean answers (the probe: a broad search gives none).
+    // Base set ids come only from a clean, verified Base Set card, read from its url
+    // (the probe: a broad search gives none; a Tiffany or insert card is another set).
     for (const c of cards) {
-      if (c.verified && c.sourceSetId && c.year && c.brand && !c.variation && !c.setName) {
+      if (c.verified && c.sourceSetId && c.year && c.brand && !c.variation && !c.setName && setIdFromUrl(c.url) === c.sourceSetId) {
         const k = setKey(c.year, c.brand);
         if (!scan.setIds.has(k)) scan.setIds.set(k, c.sourceSetId);
       }
@@ -273,8 +281,9 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   for (const t of targets.slice(0, MAX_SETS)) {
     if (stopped && stopped !== "failed") break;
     let id = knownSetId(t);
-    if (!id) {
-      await search(`${t.year} ${t.brand}`, t.year, false);
+    for (const n of DISCOVERY_NUMBERS) {
+      if (id || (stopped && stopped !== "failed")) break;
+      await search(`${t.year} ${t.brand} ${n}`, t.year, false, DISCOVERY_LIMIT);
       id = knownSetId(t);
     }
     if (!id) continue;

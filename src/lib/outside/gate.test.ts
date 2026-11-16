@@ -470,8 +470,46 @@ describe("stored answers", () => {
     // The third write passed the cap and was pruned on that write, within the same hour.
     const left = db.select().from(outsideCache).all();
     expect(left.reduce((n, r) => n + r.bytes, 0)).toBeLessThanOrEqual(1000);
-    const keyOf = (q: string) => requestKey({ method: "POST", host: "mycardfolio.com", path: "/api/mcp", json: searchFor(q).json }, ["query"]);
+    const keyOf = (q: string) => requestKey({ method: "POST", host: "mycardfolio.com", path: "/api/mcp", json: searchFor(q).json, accept: SEARCH.accept }, ["query"]);
     expect(left.map((r) => r.key).sort()).toEqual([keyOf("b"), keyOf("c")].sort());
+  });
+
+  it("a full store prunes down to 90% of the cap, so it does not prune on every write", async () => {
+    const { gate, clock, db } = setup(okFetch("x".repeat(100)), createDb(":memory:"), new FakeClock(), { cacheCapBytes: 1000 });
+    const rows = () => db.select().from(outsideCache).all().length;
+    const put = async (q: string) => {
+      const p = gate.call("mycardfolio", searchFor(q), keep());
+      await clock.advance(2000);
+      await p;
+      return rows();
+    };
+    for (let i = 0; i < 10; i++) await put(`q${i}`);
+    // Exactly at the cap (10 x 100 bytes): nothing pruned yet.
+    expect(rows()).toBe(10);
+    // Past the cap: down to 900 bytes, then the next write fits again without a prune.
+    const after: number[] = [];
+    for (let i = 10; i < 14; i++) after.push(await put(`q${i}`));
+    expect(after).toEqual([9, 10, 9, 10]);
+  });
+
+  it("the stored total is a running number in the gate, counted again from the table every hour", async () => {
+    const { gate, clock, db } = setup(okFetch("x".repeat(100)), createDb(":memory:"), new FakeClock(), { cacheCapBytes: 1000 });
+    const put = async (q: string) => {
+      const p = gate.call("mycardfolio", searchFor(q), keep());
+      await clock.advance(2000);
+      await p;
+    };
+    await put("a");
+    // Bytes that reach the table outside the gate: the running number does not see them.
+    db.insert(outsideCache).values({ key: "big", source: "mycardfolio", kind: "card", body: "b", fetchedAt: new Date(clock.now() + 1), expiresAt: new Date(clock.now() + 86_400_000 * 30), bytes: 2000 }).run();
+    await put("b");
+    expect(db.select().from(outsideCache).all()).toHaveLength(3);
+    // The hourly count sees them and prunes the oldest down to 900 bytes.
+    await clock.advance(60 * 60 * 1000);
+    await put("c");
+    const left = db.select().from(outsideCache).all();
+    expect(left.reduce((n, r) => n + r.bytes, 0)).toBeLessThanOrEqual(900);
+    expect(left.map((r) => r.key)).not.toContain("big");
   });
 
   it("under the cap, prunes expired answers at most once an hour", async () => {
@@ -577,8 +615,9 @@ describe("one gate per database", () => {
 
 /**
  * Lines that could reach an outside address without the gate: `fetch(`,
- * `.fetch(` (unless to the app's own "/..." address), any `fetchImpl(`,
- * and imports of node:http, node:https or undici.
+ * `.fetch(` (unless to the app's own "/..." address; "//host" and "/\\host"
+ * are another host), any `fetchImpl(`, WebSocket, EventSource, and imports
+ * of node:http, node:https, node:http2, node:net, node:tls, node:dgram or undici.
  */
 function outsideFetchLines(text: string): number[] {
   const found: number[] = [];
@@ -586,10 +625,11 @@ function outsideFetchLines(text: string): number[] {
     if (/^\s*(\*|\/\/)/.test(line)) return;
     let bad = false;
     for (const m of line.matchAll(/\bfetch\(([^)]*)/g)) {
-      if (!/^[`"']\//.test(m[1].trim())) bad = true;
+      if (!/^[`"']\/(?![/\\])/.test(m[1].trim())) bad = true;
     }
     if (/\bfetchImpl\(/.test(line)) bad = true;
-    if (/(\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](node:)?(https?|undici)(\/[^"']*)?["']/.test(line)) bad = true;
+    if (/\b(WebSocket|EventSource)\b/.test(line)) bad = true;
+    if (/(\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](node:)?(https?|http2|net|tls|dgram|undici)(\/[^"']*)?["']/.test(line)) bad = true;
     if (bad) found.push(i + 1);
   });
   return found;
@@ -611,6 +651,18 @@ describe("no other outside fetch in src", () => {
       'import { Agent } from "undici/types";',
       'const h = await import("node:https");',
       'const u = require("undici");',
+      // A "//host" or "/\\host" address is another host, not the app's own.
+      'await fetch("//evil.example/x")',
+      "await deps.fetch(`//${host}/x`)",
+      "await fetch('/\\\\evil.example')",
+      'import net from "node:net";',
+      'import { connect } from "node:tls";',
+      'const s = require("net");',
+      'const t = await import("tls");',
+      'import http2 from "node:http2";',
+      'const ws = new WebSocket("wss://x.example");',
+      'const es = new EventSource("/api/events");',
+      "const W = globalThis.WebSocket;",
     ];
     for (const line of flagged) expect(outsideFetchLines(line), line).toEqual([1]);
     const fine = [
@@ -620,6 +672,8 @@ describe("no other outside fetch in src", () => {
       'import { z } from "zod";',
       "// fetch(url) in a comment",
       "fetchImpl?: typeof fetch;",
+      'import { netTotal } from "@/lib/money";',
+      'import x from "./tls-notes";',
     ];
     for (const line of fine) expect(outsideFetchLines(line), line).toEqual([]);
   });
@@ -648,6 +702,8 @@ describe("no other outside fetch in src", () => {
       for (const n of outsideFetchLines(lines.join("\n"))) {
         // The browser store's pass-through of calls to the app's own server.
         if (rel === "components/items/scan-store.ts" && /\bfetch\(input, init\)/.test(lines[n - 1])) continue;
+        // Only the address check from node:net (no socket): exactly this import, nothing more.
+        if (rel === "lib/auth/rate-limit.ts" && lines[n - 1].trim() === 'import { isIP } from "node:net";') continue;
         offenders.push(`${rel}:${n}`);
       }
     }
