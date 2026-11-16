@@ -286,6 +286,9 @@ export class FreeRecognizer implements Recognizer {
   }
 
   private async findPlayer(parsed: ParsedCard): Promise<{ facts: PlayerFacts; read: string } | null> {
+    // Only the read player, in the forms the card shows: Wikidata never picks
+    // another name for the card.
+    if (!parsed.player) return null;
     for (const name of parsed.playerCandidates.slice(0, MAX_LOOKUPS_PER_CARD)) {
       try {
         const facts = await this.lookup(name, { sport: parsed.sport, year: parsed.year });
@@ -312,7 +315,7 @@ export class FreeRecognizer implements Recognizer {
     where: { sourceIndex: number; box: Box | null },
   ): Promise<ReadCard> {
     const parsed = parseCardText(front, back);
-    const readAnything = parsed.year != null || parsed.brand != null || parsed.cardNumber != null || parsed.playerCandidates.length > 0;
+    const readAnything = parsed.year != null || parsed.brand != null || parsed.cardNumber != null || parsed.player != null;
     if (!readAnything) {
       const notes = back ? UNREAD_NOTE : `${UNREAD_NOTE} ${ADD_BACK_NOTE}`;
       return { item: recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes }), names: [] };
@@ -347,7 +350,7 @@ export class FreeRecognizer implements Recognizer {
       }
     }
     // Values read from the card always win; the list and Wikidata only fill gaps.
-    const readPlayer = found?.read ?? parsed.playerCandidates[0] ?? null;
+    const readPlayer = parsed.player;
     let player = readPlayer;
     if (key) player = key.player;
     else if (facts && readPlayer && normalizeName(facts.name) === normalizeName(readPlayer)) player = facts.name;

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { afterAll, describe, expect, it } from "vitest";
-import { GRIFFEY, readFixture } from "../../../tests/helpers/ocr-fixture";
+import { GRIFFEY, readFixture, readRealCard, REAL_CARDS } from "../../../tests/helpers/ocr-fixture";
 import { REVIEW_THRESHOLD } from "@/lib/recognition/types";
 import { createTextReader, MAX_PASSES, pythonEngine, readerSettings, type OcrResult } from "./ocr";
 import { FreeRecognizer } from "./recognizer";
@@ -79,6 +79,26 @@ describe.skipIf(!reader)("real text reader: the owner's photos", () => {
       expectBoxes(back);
     },
     TIMEOUT,
+  );
+});
+
+describe.skipIf(!reader)("real text reader: the owner's four cards", () => {
+  it(
+    "reads each card in under 40 s, with the corner numbers on the backs (UPDATE_OCR=1 records them)",
+    async () => {
+      for (const id of REAL_CARDS) {
+        const started = Date.now();
+        const { front, back } = await readRealCard(id, reader!);
+        const seconds = (Date.now() - started) / 1000;
+        console.log(`${id}: ${seconds.toFixed(1)} s (front ${front.passes} passes ${front.crops} crops, back ${back.passes} passes ${back.crops} crops)`);
+        expect(seconds).toBeLessThan(40);
+        expect(front.passes).toBeLessThanOrEqual(MAX_PASSES);
+        expect(back.passes).toBeLessThanOrEqual(MAX_PASSES);
+        expectBoxes(front);
+        expectBoxes(back);
+      }
+    },
+    4 * TIMEOUT,
   );
 });
 

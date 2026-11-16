@@ -47,3 +47,32 @@ export async function readFixture(card: CardFixture, reader: TextReader): Promis
 export function recordedOcr(card: CardFixture): RecordedOcr {
   return JSON.parse(fs.readFileSync(card.recording, "utf8")) as RecordedOcr;
 }
+
+const REAL_DIR = path.join(process.cwd(), "tests", "fixtures", "real-cards");
+
+/** The owner's four real cards (answers in tests/fixtures/real-cards/answers.json). */
+export const REAL_CARDS = ["griffey", "hardaway", "milacki", "mills"] as const;
+export type RealCard = (typeof REAL_CARDS)[number];
+
+export function realCardFiles(id: RealCard) {
+  return {
+    front: path.join(REAL_DIR, `${id}-front.avif`),
+    back: path.join(REAL_DIR, `${id}-back.avif`),
+    recording: path.join(REAL_DIR, `${id}.ocr.json`),
+  };
+}
+
+/** Reads a real card's two photos as the recognizer does and, with UPDATE_OCR=1, writes the recording. */
+export async function readRealCard(id: RealCard, reader: TextReader): Promise<RecordedOcr> {
+  const files = realCardFiles(id);
+  const front = await reader.read(fs.readFileSync(files.front));
+  const back = await reader.read(fs.readFileSync(files.back), { back: true });
+  const result = { front, back };
+  if (updatingOcr) fs.writeFileSync(files.recording, `${JSON.stringify(result, null, 1)}\n`);
+  return result;
+}
+
+/** The recorded reader output for one of the owner's real cards. */
+export function recordedRealCard(id: RealCard): RecordedOcr {
+  return JSON.parse(fs.readFileSync(realCardFiles(id).recording, "utf8")) as RecordedOcr;
+}

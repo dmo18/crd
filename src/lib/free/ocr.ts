@@ -296,7 +296,7 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
   let firstOnView = linesFrom(first, 1);
   if (turn || worthCrop) {
     const region = worthCrop ? card! : undefined;
-    const upright = await part(base, { region, turn, edge: LONG_EDGE, maxUp: MAX_UP });
+    const upright = await part(base, { region, turn, edge: LONG_EDGE, maxUp: region ? MAX_UP : 1 });
     const second = linesFrom(await engine.read(upright.png));
     passes++;
     // The new read is kept unless it read clearly less.
@@ -341,10 +341,12 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
       const zoomed = await part(view, { region: corner, edge: CORNER_EDGE, maxUp: CORNER_MAX_UP, pad: true });
       const read = unpad(linesFrom(await engine.read(zoomed.png)), zoomed);
       crops++;
-      const kept = read.filter((l) => keepCornerLine(l.text, l.box, corner));
-      if (kept.length === 0) continue;
-      const got = placed(kept, corner, "corner");
-      best = [...best.filter((l) => !got.some((g) => overlapShare(l.box, g.box) > 0.3 || overlapShare(g.box, l.box) > 0.3)), ...got];
+      for (const g of placed(read.filter((l) => keepCornerLine(l.text, l.box)), corner, "corner")) {
+        // Already read as part of a longer line: nothing new.
+        if (best.some((l) => overlapShare(g.box, l.box) > 0.5 && l.text.replace(/\s+/g, "").includes(g.text.replace(/\s+/g, "")))) continue;
+        // The larger read replaces what the first read made of the same spot.
+        best = [...best.filter((l) => overlapShare(l.box, g.box) <= 0.5), g];
+      }
     }
   }
   return summarize(best, passes, crops);

@@ -12,10 +12,16 @@ import type { OcrLine, OcrResult } from "./ocr";
 
 export type ParsedCard = {
   year: number | null;
+  /** How many independent signs agree with the year (front set year, copyright, stat table). 0 without a year. */
+  yearSigns: number;
   brand: string | null;
   setName: string | null;
   cardNumber: string | null;
-  /** Most likely first, at most 5, "First Last" in title case. */
+  /** The player as read (front first, see choosePlayer), or null. */
+  player: string | null;
+  /** True when the front and the back agree on the player's name. */
+  playerAgree: boolean;
+  /** The player as written on each side that agrees, the chosen form first; at most 5. Empty with no player. */
   playerCandidates: string[];
   /**
    * The first word of a bio sentence that starts with a name ("Ken graduated
@@ -102,6 +108,10 @@ function cleanRaw(s: string): string {
     .replace(/[\u2013\u2014\u2212]/g, "-")
     .replace(/\(\s*[cCeE]\s*\)|[\u00a9\u00ae]/g, " \u00a9 ")
     .replace(/@(?=\s*[0-9OoIlSsg|]{4})/g, " \u00a9 ")
+    // A bullet between words is a word of its own ("ORIOLES\u2022PITCHER",
+    // "Griffey,Jr.\u2022OF"), and so is the word after a comma ("Griffey,Jr.").
+    .replace(/\s*[\u2022\u00b7\u25cf]\s*/g, " \u2022 ")
+    .replace(/,(?=[A-Za-z])/g, ", ")
     .replace(/\s+/g, " ")
     // A small l inside a word in capitals is a capital I misread ("MARlNERS", "GRlFFEY").
     .replace(/\b[A-Zl]{3,}\b/g, (w) => (w.includes("l") && (w.match(/[A-Z]/g)?.length ?? 0) >= 2 ? w.replace(/l/g, "I") : w))
@@ -344,6 +354,138 @@ function findYear(lines: Line[], brandLines: Set<Line>): YearFind | null {
   return best;
 }
 
+/**
+ * Table rows the reader cut into cells ("1991", "Orioles", "4.01", "31"):
+ * cells of one side on one line, joined left to right into one line, so a
+ * stat row reads as a row again. Only short cells (one or two words) are
+ * joined, so a column of running text beside the table stays out.
+ */
+function tableRows(lines: Line[]): Line[] {
+  const cells = lines.filter((l) => l.tokens.length <= 2 && l.box.h > 0);
+  const used = new Set<Line>();
+  const out: Line[] = [];
+  const sorted = [...cells].sort((a, b) => a.box.y - b.box.y);
+  for (const c of sorted) {
+    if (used.has(c)) continue;
+    const mid = c.box.y + c.box.h / 2;
+    const row = cells.filter((o) => !used.has(o) && Math.abs(o.box.y + o.box.h / 2 - mid) < Math.min(o.box.h, c.box.h) * 0.5);
+    if (row.length < 3) continue;
+    for (const o of row) used.add(o);
+    row.sort((a, b) => a.box.x - b.box.x);
+    const box = { x: row[0].box.x, y: Math.min(...row.map((o) => o.box.y)), w: 0, h: Math.max(...row.map((o) => o.box.h)) };
+    box.w = Math.max(...row.map((o) => o.box.x + o.box.w)) - box.x;
+    const line = makeLine(row.map((o) => o.raw).join(" "), Math.min(...row.map((o) => o.conf)), box, c.side, c.source);
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+/** Lines whose middles sit at the same height: one printed row ("DONRUSS" and "1992" read as two boxes). */
+function sameRow(a: Line, b: Line): boolean {
+  return Math.abs(a.box.y + a.box.h / 2 - (b.box.y + b.box.h / 2)) < Math.min(a.box.h, b.box.h) * 0.6;
+}
+
+/** "'93-94", "93-94" (seasons in a row) or "'87": the first year, or null. */
+function seasonYear(t: string): number | null {
+  const s = stripEnds(t.replace(/^'/, "x")).replace(/^x/, "'");
+  let m = /^'?(\d{2})-(\d{2})$/.exec(s);
+  if (m && (Number(m[1]) + 1) % 100 === Number(m[2])) return twoDigit(Number(m[1]));
+  m = /^'(\d{2})$/.exec(s);
+  if (m) return twoDigit(Number(m[1]));
+  return null;
+}
+
+function twoDigit(n: number): number | null {
+  if (n >= 50) return 1900 + n;
+  return n <= 30 ? 2000 + n : null;
+}
+
+/** A line that holds a copyright notice: the mark, the word, or a company word with a maker named. */
+function copyrightNotice(l: Line, branded: boolean): boolean {
+  if (l.raw.includes("\u00a9") || /COPYRIGHT|\bCOPR\b/.test(l.lz)) return true;
+  return branded && /\bINC\b|\bCORP\b|\bLTD\b|\bCOMPANY\b|\bCO\b|\bMARKETING\b/.test(l.lz);
+}
+
+type CardYear = {
+  year: number;
+  how: "front" | "copyright" | "stats" | "brand";
+  /** The copyright year read, when one was. */
+  copyright?: number;
+  lastSeason?: number;
+  /** Independent signs that agree with the year (1 to 3). */
+  signs: number;
+};
+
+/**
+ * The card's year, card first (12R.4):
+ * 1. a set year printed with the maker's name on the front ("DONRUSS 1992",
+ *    "'93-94 FLEER" means 1993) wins;
+ * 2. else the copyright year on the back. With two copyright years ("1988
+ *    USOC", "1991 Impel Marketing") the one on the maker's line, else the
+ *    latest. When the stat table's last season is that same year, the card
+ *    is of the next year (stats through 1991 and copyright 1991: a 1992 set);
+ *    a last season after the copyright year cannot be settled: no year;
+ * 3. else the last stat season plus one, else a year on a line with the maker's name.
+ */
+function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<Line>): CardYear | null {
+  // 1. The front: a row with a maker's name and a year.
+  let frontYear: number | null = null;
+  for (const l of front) {
+    if (!brandLines.has(l) || isCopyrightLine(l)) continue;
+    for (const o of front.filter((x) => x === l || sameRow(x, l))) {
+      for (const t of o.tokens) {
+        const y = (o === l || o.tokens.length <= 2 ? fixedYear(t) : null) ?? seasonYear(t);
+        if (y != null && validYear(y)) {
+          frontYear = y;
+          break;
+        }
+      }
+      if (frontYear != null) break;
+    }
+    if (frontYear != null) break;
+  }
+
+  // 2. Copyright years, the maker's line first.
+  const notices: { year: number; maker: boolean }[] = [];
+  for (const l of all) {
+    const maker = brandLines.has(l);
+    if (!copyrightNotice(l, maker)) continue;
+    for (const t of l.tokens) {
+      const y = fixedYear(t) ?? fixedYear(t.replace(/^(?:COPR|\u00a9)\.?/i, ""));
+      if (y != null) notices.push({ year: y, maker });
+    }
+  }
+  const makerYears = notices.filter((n) => n.maker).map((n) => n.year);
+  const pool = makerYears.length > 0 ? makerYears : notices.map((n) => n.year);
+  const copyright = pool.length > 0 ? Math.max(...pool) : null;
+
+  const stats = yearFromStats([...back, ...tableRows(back), ...front, ...tableRows(front)]);
+  const last = stats?.lastSeason ?? null;
+
+  if (frontYear != null) {
+    let signs = 1;
+    if (copyright != null && (copyright === frontYear || copyright === frontYear - 1)) signs++;
+    if (last != null && last === frontYear - 1) signs++;
+    return { year: frontYear, how: "front", copyright: copyright ?? undefined, lastSeason: last ?? undefined, signs };
+  }
+  if (copyright != null) {
+    if (last == null) return { year: copyright, how: "copyright", copyright, signs: 1 };
+    if (last > copyright) return null;
+    if (last === copyright) return { year: copyright + 1, how: "copyright", copyright, lastSeason: last, signs: 2 };
+    return { year: copyright, how: "copyright", copyright, lastSeason: last, signs: last === copyright - 1 ? 2 : 1 };
+  }
+  if (stats) return { year: stats.year, how: "stats", lastSeason: last ?? undefined, signs: 1 };
+  // A year on a line with the maker's name, anywhere ("1989 UPPER DECK").
+  for (const l of all) {
+    if (!brandLines.has(l)) continue;
+    for (const t of l.tokens) {
+      const y = fixedYear(t) ?? seasonYear(t);
+      if (y != null) return { year: y, how: "brand", signs: 1 };
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Brands
 
@@ -353,6 +495,8 @@ type BrandDef = {
   set?: string;
   re: RegExp;
   copyrightOnly?: boolean;
+  /** A plain word that counts only as logo text: a short line of its own. */
+  logoOnly?: boolean;
   /** A clue that loses to any other brand read on the card. */
   weak?: boolean;
   sport?: Sport;
@@ -364,12 +508,21 @@ const BRANDS: BrandDef[] = [
   { key: "sp", brand: "Upper Deck", set: "SP", re: /\bUPPER\s*DECK\s*SP\b|^SP$/g },
   { key: "stadiumclub", brand: "Topps", set: "Stadium Club", re: /\bSTADIUM\s*CLUB\b/g },
   { key: "ultra", brand: "Fleer", set: "Fleer Ultra", re: /\bULTRA\b/g },
+  { key: "flair", brand: "Fleer", set: "Flair", re: /\bFLAIR\b/g, logoOnly: true },
+  { key: "finest", brand: "Topps", set: "Finest", re: /\bFINEST\b/g, logoOnly: true },
+  { key: "chrome", brand: "Topps", set: "Topps Chrome", re: /\bTOPPS\s*CHROME\b/g },
+  { key: "collchoice", brand: "Upper Deck", set: "Collector's Choice", re: /\bCOLLECTOR'?S\s*CHOICE\b/g },
+  { key: "prizm", brand: "Panini", set: "Prizm", re: /\bPRIZM\b/g },
+  { key: "panini", brand: "Panini", re: /\bPANINI\b/g },
+  // "Score Board, Inc." made memorabilia cards; it is not the Score brand.
+  { key: "scoreboard", brand: "Score Board", re: /\bSCORE\s*BOARD\b(?=\s*,?\s*INC)/g, copyrightOnly: true },
   { key: "topps", brand: "Topps", re: /\bTOPPS\b/g },
   { key: "upperdeck", brand: "Upper Deck", re: /\bUPPER\s*DECK\b/g },
   // "F1EER" is a common misread; the 1 becomes I in the letter version of the line.
   { key: "fleer", brand: "Fleer", re: /\bF[LI]EER\b/g },
   { key: "donruss", brand: "Donruss", re: /\bDONRUS{1,2}\b/g, sport: "baseball", sportWeight: 1 },
-  { key: "score", brand: "Score", re: /\bSCORE\b/g },
+  { key: "score", brand: "Score", re: /\bSCORE\b(?!\s*BOARD)/g },
+  { key: "sportflics", brand: "Sportflics", re: /\bSPORTFLICS\b/g, sport: "baseball", sportWeight: 1 },
   // Score cards were made by Major League Marketing, named in the copyright line.
   { key: "mlm", brand: "Score", re: /\bMAJOR\s*LEAGUE\s*MARKETING\b/g },
   { key: "bowman", brand: "Bowman", re: /\bBOWMAN\b/g },
@@ -385,7 +538,7 @@ const BRANDS: BrandDef[] = [
   { key: "pinnacle", brand: "Pinnacle", re: /\bPINNACLE\b/g },
   { key: "classic", brand: "Classic", re: /\bCLASSIC\b/g, copyrightOnly: true },
   { key: "star", brand: "Star", re: /\bSTAR\s*CO\b|\bSTAR\s*COMPANY\b/g, sport: "basketball", sportWeight: 1 },
-  { key: "starc", brand: "Star", re: /\bSTAR\b/g, copyrightOnly: true, sport: "basketball", sportWeight: 1 },
+  { key: "starc", brand: "Star", re: /\bSTAR\b(?!\s*PICS)/g, copyrightOnly: true, sport: "basketball", sportWeight: 1 },
   { key: "pacific", brand: "Pacific", re: /\bPACIFIC\s*TRADING\b/g },
   { key: "pacificc", brand: "Pacific", re: /\bPACIFIC\b/g, copyrightOnly: true },
   { key: "actionpacked", brand: "Action Packed", re: /\bACTION\s*PACKED\b/g, sport: "football", sportWeight: 1 },
@@ -393,23 +546,42 @@ const BRANDS: BrandDef[] = [
   { key: "kelloggs", brand: "Kellogg's", re: /\bKELLOGG'?S?\b/g, sport: "baseball", sportWeight: 1 },
   { key: "drakes", brand: "Drake's", re: /\bDRAKE'?S\b/g, sport: "baseball", sportWeight: 1 },
   { key: "parkhurst", brand: "Parkhurst", re: /\bPARKHURST\b/g, sport: "hockey", sportWeight: 2 },
+  { key: "itg", brand: "In The Game", re: /\bIN\s*THE\s*GAME\b/g, copyrightOnly: true, sport: "hockey", sportWeight: 1 },
+  // Impel Marketing made the U.S. Olympic and early SkyBox era sets.
+  { key: "impel", brand: "Impel", re: /\bIMPEL\b/g },
+  { key: "playoff", brand: "Playoff", re: /\bPLAYOFF\s*(?:CORP|INC)\b/g, copyrightOnly: true, sport: "football", sportWeight: 1 },
+  { key: "wildcard", brand: "Wild Card", re: /\bWILD\s*CARD\b/g, copyrightOnly: true },
+  { key: "presspass", brand: "Press Pass", re: /\bPRESS\s*PASS\b/g },
+  { key: "frontrow", brand: "Front Row", re: /\bFRONT\s*ROW\b/g, copyrightOnly: true },
+  { key: "starpics", brand: "Star Pics", re: /\bSTAR\s*PICS\b/g },
+  { key: "tristar", brand: "Tristar", re: /\bTRI\s*-?\s*STAR\b/g },
 ];
 
-type BrandHit = { def: BrandDef; line: Line; score: number };
+/**
+ * Set names read as logo text that do not say the maker by themselves
+ * ("SELECT" was a Score set in the 1990s and a Panini set later). Counted
+ * only on a short line of its own, never in running text.
+ */
+const SET_LOGOS: [RegExp, string][] = [[/^SELECT$/, "Select"]];
+
+/** `logo`: read on a short line of its own, not a copyright line: the maker's logo text. */
+type BrandHit = { def: BrandDef; line: Line; score: number; logo: boolean };
 
 function brandHits(lines: Line[]): BrandHit[] {
   const hits: BrandHit[] = [];
   for (const l of lines) {
     const copyright = isCopyrightLine(l);
     const short = l.tokens.length <= 3;
+    const logo = short && !copyright && !isSentence(l);
     const hasYear = l.tokens.some((t) => fixedYear(t) != null);
     for (const def of BRANDS) {
       if (def.copyrightOnly && !copyright) continue;
+      if (def.logoOnly && !logo) continue;
       def.re.lastIndex = 0;
       const count = l.lz.match(def.re)?.length ?? 0;
       for (let i = 0; i < count; i++) {
         const score = def.weak ? 0.5 : 1 + (copyright ? 3 : 0) + (short ? 2 : 0) + (hasYear ? 1 : 0) + (l.side === "back" ? 0.5 : 0);
-        hits.push({ def, line: l, score });
+        hits.push({ def, line: l, score, logo: logo && !def.copyrightOnly });
       }
     }
   }
@@ -434,9 +606,16 @@ function pickBrand(hits: BrandHit[], year: number | null): BrandPick | null {
     }
     scores.set(brand, (scores.get(brand) ?? 0) + h.score);
   }
+  // A logo name beats the copyright owner ("1991 LEAF, INC" with a DONRUSS
+  // logo is Donruss, "PINNACLE BRANDS" with a SCORE logo is Score): when a
+  // logo was read, only brands read as a logo are chosen from, the front's first.
+  const logoBrands = (side: Side) => new Set(hits.filter((h) => h.logo && h.def.key !== "leafinc" && h.line.side === side).map((h) => h.def.brand));
+  const front = logoBrands("front");
+  const allowed = front.size > 0 ? front : logoBrands("back");
   let best: string | null = null;
   let bestScore = 0;
   for (const [b, s] of scores) {
+    if (allowed.size > 0 && !allowed.has(b)) continue;
     if (s > bestScore) {
       best = b;
       bestScore = s;
@@ -467,7 +646,18 @@ const SUBSET_WORDS: [RegExp, string][] = [
   [/\bSTICKERS?\b/, "Stickers"],
 ];
 
+/**
+ * The set, only when read as text: a set logo ("STADIUM CLUB", "ULTRA",
+ * "SELECT"), a subset word by the brand ("TOPPS TRADED"), or a traded or
+ * update card number. Never the brand copied in to fill it: "Fleer" is wrong
+ * for a Fleer Ultra card whose foil logo could not be read.
+ */
 function findSetName(pick: BrandPick | null, lines: Line[], cardNumber: string | null): string | null {
+  for (const l of lines) {
+    if (l.tokens.length > 2 || isCopyrightLine(l)) continue;
+    const words = l.lz.replace(/[^A-Z ]/g, "").trim();
+    for (const [re, set] of SET_LOGOS) if (re.test(words)) return set;
+  }
   if (!pick) return null;
   if (pick.subSet) return pick.subSet;
   const brandLines = new Set(pick.lines);
@@ -478,7 +668,7 @@ function findSetName(pick: BrandPick | null, lines: Line[], cardNumber: string |
     if ((pick.brand === "Topps" || pick.brand === "Score") && /T/.test(cardNumber)) return `${pick.brand} Traded`;
     if (pick.brand === "Fleer" && /^U/.test(cardNumber)) return "Fleer Update";
   }
-  return pick.brand;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -557,25 +747,52 @@ function numberFromMarkers(l: Line): string | null {
   return null;
 }
 
-function numberFromCorner(l: Line): string | null {
+/** Where a lone number counts as printed in a corner: this close to two edges of the card. */
+const CORNER_X = 0.25;
+const CORNER_Y = 0.18;
+
+type CornerNumber = { number: string; top: boolean };
+
+/**
+ * A short number standing alone in a corner of the back ("65", "101", "98T").
+ * Not a stat (another number on the same row beside it), not a decimal, not
+ * a position ("1B"), never a year (four digits).
+ */
+function numberFromCorner(l: Line, side: Line[]): CornerNumber | null {
   const t = l.tokens;
   const traded = t.length === 2 && /^[Tt]$/.test(t[1]);
   if (t.length !== 1 && !traded) return null;
-  const top = l.box.y < 0.2;
-  const corner = l.box.x < 0.3 || l.box.x + l.box.w > 0.7;
-  if (!top || !corner) return null;
-  // A position such as "1B" in the corner is not a number.
-  if (upper(t[0]) in POS_TOKENS) return null;
-  return withTradedSuffix(numberToken(t[0], false), t[1]);
+  const b = l.box;
+  const top = b.y < CORNER_Y;
+  const bottom = b.y + b.h > 1 - CORNER_Y;
+  const corner = b.x < CORNER_X || b.x + b.w > 1 - CORNER_X;
+  if (!(top || bottom) || !corner) return null;
+  if (upper(t[0]) in POS_TOKENS || /[.,]\d/.test(t[0])) return null;
+  const n = withTradedSuffix(numberToken(t[0], false), t[1]);
+  if (!n) return null;
+  // A stat table cell has numbers beside it on its row.
+  const beside = side.some(
+    (o) => o !== l && /\d/.test(o.raw) && !/[A-Za-z]{3}/.test(o.raw) && sameRow(o, l) && Math.abs(o.box.x + o.box.w / 2 - (b.x + b.w / 2)) < 0.25,
+  );
+  return beside ? null : { number: n, top };
 }
 
+/** The one value of a list, or null when it is empty or holds two different values. */
+function onlyValue(values: string[]): string | null {
+  const set = new Set(values);
+  return set.size === 1 ? values[0] : null;
+}
+
+/**
+ * The card number: printed alone in a top corner of the back (two different
+ * ones: none), else a "No." or "#" marker (back, then front), else alone in a
+ * bottom corner of the back. Numbers on the front's picture (jerseys) are
+ * never card numbers, so the front counts only with a marker.
+ */
 function findCardNumber(back: Line[], front: Line[]): string | null {
-  // The number printed alone in a top corner is the most reliable clue, then a
-  // "No." or "#" marker. Bio lines ("the No. 1 pick") are skipped by the marker check.
-  for (const l of back) {
-    const n = numberFromCorner(l);
-    if (n) return n;
-  }
+  const corners = back.map((l) => numberFromCorner(l, back)).filter((c): c is CornerNumber => c !== null);
+  const top = corners.filter((c) => c.top).map((c) => c.number);
+  if (top.length > 0) return onlyValue(top);
   for (const l of back) {
     const n = numberFromMarkers(l);
     if (n) return n;
@@ -584,7 +801,7 @@ function findCardNumber(back: Line[], front: Line[]): string | null {
     const n = numberFromMarkers(l);
     if (n) return n;
   }
-  return null;
+  return onlyValue(corners.filter((c) => !c.top).map((c) => c.number));
 }
 
 // ---------------------------------------------------------------------------
@@ -680,7 +897,16 @@ function excludedNick(key: string, before: string, after: string): boolean {
   return false;
 }
 
-type TeamFind = { team: string; sport: Sport | null; ambiguous: boolean; line: Line; /** Read with one letter wrong or missing. */ fuzzy: boolean };
+type TeamFind = {
+  team: string;
+  sport: Sport | null;
+  ambiguous: boolean;
+  line: Line;
+  /** Read with one letter wrong or missing. */
+  fuzzy: boolean;
+  /** The team's city was read too ("SEATTLE MARINERS"). */
+  city: boolean;
+};
 
 /**
  * Close spellings of team nicknames ("MARMNERS" for Mariners). Since 10.10
@@ -856,17 +1082,19 @@ function resolveTeam(group: NickGroup, line: Line, lines: Line[], year: number |
     const hinted = entries.filter((t) => t.sport === sportHint);
     if (hinted.length > 0) entries = hinted;
   }
-  if (new Set(entries.map((t) => t.sport)).size > 1) return { team: group.display, sport: null, ambiguous: true, line, fuzzy };
+  if (new Set(entries.map((t) => t.sport)).size > 1) return { team: group.display, sport: null, ambiguous: true, line, fuzzy, city: false };
   let pick = entries[entries.length - 1];
   if (year != null) pick = entries.find((t) => year >= t.from && year <= t.to) ?? pick;
-  return { team: `${pick.city} ${pick.nick}`, sport: pick.sport, ambiguous: false, line, fuzzy };
+  return { team: `${pick.city} ${pick.nick}`, sport: pick.sport, ambiguous: false, line, fuzzy, city: withCity.length > 0 };
 }
 
 /**
  * Team reading (10.10). Text alone is a weak clue, so:
- * - `team` (written into the item) only when one nickname was read exactly,
- *   in capitals, on a team line that is not a sentence, and no other team
- *   was read anywhere on the card (exactly in capitals, or a close spelling);
+ * - `team` (a candidate for the item) only when one nickname was read
+ *   exactly, in capitals, on a team line that is not a sentence, and no other
+ *   team on a team line or as a close spelling (12R.4: a team named only in
+ *   loose text, an opponent in the bio, does not count against it). The
+ *   card parser then still asks for a second sign of the team's sport;
  * - otherwise the best reading is only a `hint`: an exact nickname in
  *   capitals elsewhere (not a plain word nickname off a team line, not on a
  *   name line), else a close spelling. The recognizer writes a hint only
@@ -884,7 +1112,6 @@ function findTeam(
   const strong = newTally();
   const exact = newTally();
   const close = newTally();
-  const read = new Set<NickGroup>();
   for (const l of lines) {
     let work = l.lz;
     const sentence = isSentence(l);
@@ -900,7 +1127,6 @@ function findTeam(
         if (!capitalized(l.raw.slice(start, end))) continue;
         const onTeamLine = teamLine(l, start, end, v.group);
         if (!onTeamLine && (PLAIN_NICKS.has(v.group.key) || nameLines.has(l))) continue;
-        read.add(v.group);
         tallyTeam(exact, v.group, l);
         if (onTeamLine && !sentence) tallyTeam(strong, v.group, l);
       }
@@ -913,12 +1139,14 @@ function findTeam(
       if (l.raw.slice(m.index, m.index + m[0].length) !== m[0]) continue;
       const group = fuzzyNick(m[0]);
       if (group) {
-        read.add(group);
         tallyTeam(close, group, l);
       }
     }
   }
-  if (read.size === 1 && strong.scores.size === 1) {
+  // One team on team lines, and no close spelling of another: the card's
+  // team. Other teams named only in loose text (an opponent in the bio) do
+  // not stand against it; a second team on a team line does.
+  if (strong.scores.size === 1 && [...close.scores.keys()].every((g) => strong.scores.has(g))) {
     const [group] = [...strong.scores.keys()];
     return { team: resolveTeam(group, strong.scores.get(group)!.line, lines, year, sportHint, false), hint: null };
   }
@@ -981,6 +1209,19 @@ function leagueAndStatVotes(lines: Line[], v: Votes) {
   }
 }
 
+/**
+ * An Olympic card: the Olympic committee or Olympic cards named outside
+ * running text (a set title, a license line), and no league or stat table of
+ * one sport. A bio that mentions Olympic gold does not make one.
+ */
+function isOlympicCard(lines: Line[]): boolean {
+  const named = lines.some((l) => !isSentence(l) && /\bUSOC\b|\bOLYMPIC\s*(?:CARDS?|COMMITTEE)\b|\bU\.?\s*S\.?\s*OLYMPIC\b/.test(l.lz));
+  if (!named) return false;
+  const votes: Votes = new Map();
+  leagueAndStatVotes(lines, votes);
+  return ![...votes.values()].some((w) => w >= 2);
+}
+
 // ---------------------------------------------------------------------------
 // Positions
 
@@ -1036,24 +1277,26 @@ function posFromToken(tok: string, singleOk: boolean): PosFind | null {
   return null;
 }
 
-function findPosition(lines: Line[]): PosFind | null {
+/** The first position read that fits `sport` (when known): a basketball card has no hockey "LW". */
+function findPosition(lines: Line[], sport: Sport | null = null): PosFind | null {
+  const ok = (p: PosFind | null): p is PosFind => p !== null && (!sport || !p.sport || p.sport === sport);
   for (const l of lines) {
     const t = l.tokens;
     const posIdx = t.findIndex((x) => /^POS(?:ITION)?[.:]?$/i.test(x));
     if (posIdx >= 0) {
       const p = posFromToken(t[posIdx + 1] ?? "", true);
-      if (p) return p;
+      if (ok(p)) return p;
     }
     if (t.length > 6) continue;
     for (let i = 0; i < t.length; i++) {
       const singleOk = t.length <= 4 && i === t.length - 1;
       const p = posFromToken(t[i], singleOk);
-      if (p) return p;
+      if (ok(p)) return p;
     }
   }
   for (const l of lines) {
     if (l.tokens.length > 6) continue;
-    for (const [re, position, sport] of POS_WORDS) if (re.test(l.lz)) return { position, sport };
+    for (const [re, position, posSport] of POS_WORDS) if (re.test(l.lz) && ok({ position, sport: posSport })) return { position, sport: posSport };
   }
   return null;
 }
@@ -1089,6 +1332,14 @@ const STOP_WORDS = new Set(
     "MLBPA", "NFLPA", "NHLPA", "OLYMPIC", "UNIVERSITY", "COLLEGE", "SCHOOL", "HIGH", "ACADEMY",
     // School words, so "Oklahoma State" or "Texas Tech" is not read as a player.
     "STATE", "TECH", "A&M", "INSTITUTE", "SERIES", "WORLD", "HIGHLIGHTS", "HIGHLIGHT", "MVP", "AWARD", "CYCLE",
+    // Section headings and set titles on fronts and backs ("HALL OF FAME",
+    // "RECENT MAJOR LEAGUE PERFORMANCE", "CAREER HIGHLIGHTS", "GOLD MEDAL").
+    "HALL", "FAME", "HALLOF", "RECENT", "PERFORMANCE", "COMPLETE", "MINOR", "PROFILE", "REPORT", "SCOUTING", "BIOGRAPHY",
+    "VITAL", "STATISTICS", "STATS", "HONORS", "ACHIEVEMENTS", "MILESTONES", "MONTHLY", "SCOREBOARD", "GOLD", "SILVER",
+    "BRONZE", "MEDAL", "MEDALS", "MEDALIST", "OLYMPICS", "GAMES", "CHAMPION", "CHAMPIONSHIP", "CHAMPIONSHIPS",
+    "TOURNAMENT", "CLASSIC", "INDUCTED", "INDUCTEE", "ENTERPRISES", "MARKETING", "LICENSEE", "COMMITTEE", "OFFICIAL",
+    "PRESIDENT", "EDITION", "CERTIFIED", "SERIAL", "NUMBERED", "PANINI", "PRIZM", "SELECT", "IMPEL", "FLAIR", "FINEST",
+    "CHROME", "SPORTFLICS", "PLAYOFF", "WILD", "BRANDS", "TRADING",
     // Stat headers
     "AVG", "RBI", "ERA", "AB", "HR", "SB", "IP", "BB", "SO", "SLG", "PCT", "REB", "AST", "PTS", "FGA", "FTA", "GP",
     "PIM", "YDS", "TD", "TDS", "ATT", "INT", "REC", "LG", "MIN", "STL", "BLK", "GAA", "PPG",
@@ -1158,8 +1409,6 @@ function titleWord(w: string): string {
     )
     .join("-");
 }
-
-type Candidate = { name: string; score: number };
 
 /** Removes team names with a city ("Chicago White Sox") so the city is not read as a name. */
 const MASK_RES: RegExp[] = TEAMS.flatMap((t) =>
@@ -1252,113 +1501,261 @@ function headerName(l: Line): { words: NameWord[]; suffix: string | null; pos: P
   return { words, suffix, pos };
 }
 
-/** Band lines are read on their own from a strip: a name in capitals there is a headline. */
-const BAND_NAME_BONUS = 10;
-/** The header pattern is the strongest name clue on a card back, short of the key card list. */
-const HEADER_NAME_BONUS = 15;
+/** A name as read on one line: title cased words and a suffix ("Jr."). */
+type NameRead = { words: string[]; suffix: string | null; line: Line; header: boolean };
 
-function findPlayers(
-  front: Line[],
-  back: Line[],
-): { names: string[]; keyMatch: string | null; hint: string | null; header: PosFind | null; nameLines: Set<Line> } {
-  const found = new Map<string, Candidate>();
-  /** Every line a name candidate was read from, so its words are not also tried as a team. */
-  const nameLines = new Set<Line>();
-  let keyMatch: string | null = null;
-  let hint: string | null = null;
+/** Lines with labels ("BORN:", "HOME:") hold places and dates, not the name. */
+function labelLine(l: Line): boolean {
+  return l.tokens.some((t) => /[A-Za-z]:$/.test(t));
+}
+
+/** Names of 2 or 3 words on one line (not a sentence), each with the suffix written after it. */
+function nameRuns(l: Line): NameRead[] {
+  const out: NameRead[] = [];
+  const tokens = maskTeams(l);
+  let run: NameWord[] = [];
+  let suffix: string | null = null;
+  const flush = () => {
+    // Drop vowel-less OCR scraps at either end ("ALEX RODRIGUEZ GML").
+    let core = run;
+    while (core.length > 0 && !core[core.length - 1].initials && !/[AEIOUY]/.test(core[core.length - 1].key)) core = core.slice(0, -1);
+    while (core.length > 0 && !core[0].initials && !/[AEIOUY]/.test(core[0].key)) core = core.slice(1);
+    // Names are printed with capitals ("BOB MILACKI", "Bob Milacki"); words in
+    // lower case are running text ("round secondary phase").
+    const capitals = core.every((w, i) => /^[A-Z]/.test(w.word) || (i > 0 && NAME_PARTICLES.has(w.word)));
+    if (capitals && core.length >= 2 && core.length <= 3 && !core.every((w) => w.initials) && looksLikeName(core)) {
+      const plainKey = normalizeName(core.map((w) => w.word).join(" "));
+      if (!CITY_KEYS.has(plainKey)) out.push({ words: core.map((w) => titleWord(w.word)), suffix, line: l, header: false });
+    }
+    run = [];
+    suffix = null;
+  };
+  for (let ti = 0; ti < tokens.length; ti++) {
+    const tok = tokens[ti];
+    const w = nameWord(tok);
+    if (!w) {
+      flush();
+      continue;
+    }
+    if (w.key in SUFFIXES && !w.initials) {
+      if (run.length >= 2) suffix = SUFFIXES[w.key];
+      flush();
+      continue;
+    }
+    // "de" in lower case after a name word is part of the name, not the position DE.
+    if (STOP_WORDS.has(w.key) && !(run.length > 0 && NAME_PARTICLES.has(w.word))) {
+      flush();
+      continue;
+    }
+    run.push(w);
+    // A comma ends a name unless a suffix follows ("Griffey, Jr.").
+    if (/,$/.test(tok)) {
+      const next = tokens[ti + 1];
+      const nw = next ? nameWord(next) : null;
+      if (!nw || !(nw.key in SUFFIXES)) flush();
+    }
+  }
+  flush();
+  return out;
+}
+
+/** The back's heading: in the top part of the card, in type at least as tall as the back's usual line. */
+const HEADING_TOP = 0.3;
+/** A heading this much taller than the usual line is large type: it stands against a different front name. */
+const HEADING_LARGE = 1.25;
+
+function middle(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Names in the back's heading: the top part of the card, in large type, not a
+ * sentence; or the name header pattern ("Ken Griffey, Jr. * OF"). A name
+ * printed in two lines ("ROBERT" over "MILACKI") is joined.
+ */
+function backHeadings(back: Line[]): { names: NameRead[]; header: PosFind | null } {
+  const usual = middle(back.filter((l) => l.raw.replace(/[^A-Za-z0-9]/g, "").length >= 3).map((l) => l.box.h));
+  const top = back.filter((l) => l.box.y + l.box.h / 2 < HEADING_TOP && !runningText(l) && !labelLine(l) && l.tokens.length <= 7);
+  const large = (l: Line) => usual > 0 && l.box.h >= usual;
+  const names: NameRead[] = [];
   let header: PosFind | null = null;
-  for (const l of [...front, ...back]) {
+  for (const l of top) {
+    const head = headerName(l);
+    if (head) {
+      header = header ?? head.pos;
+      names.push({ words: head.words.map((w) => titleWord(w.word)), suffix: head.suffix, line: l, header: true });
+      continue;
+    }
+    if (large(l)) names.push(...nameRuns(l));
+  }
+  // One name word a line, stacked: joined top to bottom when the lines touch and share a column.
+  const singles = top
+    .filter((l) => large(l) && l.tokens.length === 1)
+    .map((l) => ({ l, w: nameWord(l.tokens[0]) }))
+    .filter((x): x is { l: Line; w: NameWord } => x.w !== null && !x.w.initials && !STOP_WORDS.has(x.w.key) && /[AEIOUY]/.test(x.w.key))
+    .sort((a, b) => a.l.box.y - b.l.box.y);
+  for (let i = 0; i + 1 < singles.length; i++) {
+    const a = singles[i].l.box;
+    const b = singles[i + 1].l.box;
+    const gap = b.y - (a.y + a.h);
+    const overlapX = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+    if (gap < Math.max(a.h, b.h) && overlapX > 0.5 * Math.min(a.w, b.w) && Math.max(a.h, b.h) < 1.6 * Math.min(a.h, b.h)) {
+      const words = [singles[i].w, singles[i + 1].w];
+      if (looksLikeName(words)) names.push({ words: words.map((w) => titleWord(w.word)), suffix: null, line: singles[i].l, header: false });
+      i++;
+    }
+  }
+  names.sort((x, y) => y.line.box.h - x.line.box.h);
+  return { names, header };
+}
+
+function surnameKey(n: NameRead): string {
+  return normalizeName(n.words[n.words.length - 1]).replace(/[^a-z]/g, "");
+}
+
+/** Same surname, or one letter apart in a surname of 5 or more letters (a misread letter). */
+function sameSurname(a: NameRead, b: NameRead): boolean {
+  const x = surnameKey(a);
+  const y = surnameKey(b);
+  if (x === y) return x.length > 0;
+  if (Math.min(x.length, y.length) < 5 || Math.abs(x.length - y.length) > 1) return false;
+  return editDistance(x, y) <= 1;
+}
+
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function display(n: NameRead, suffix: string | null = n.suffix): string {
+  return [...n.words, ...(suffix ? [suffix] : [])].join(" ");
+}
+
+export type PlayerPick = {
+  /** The player's name, or null when no trustworthy name was read. */
+  player: string | null;
+  /** The name as written on each side that agrees (same person), the chosen form first. */
+  names: string[];
+  /** True when front and back agree on the name. */
+  agree: boolean;
+  keyMatch: string | null;
+  hint: string | null;
+  header: PosFind | null;
+  nameLines: Set<Line>;
+};
+
+/**
+ * The player's name (12R.4). Taken from the front: the largest name-like
+ * text (box height). The back counts only with its heading (top of the card,
+ * large type) or name header, never running text, stat headers or section
+ * headings. When the two agree (the same surname: BOB MILACKI and ROBERT
+ * MILACKI) the front's form is used, with a suffix (Jr., Sr., II, III) when
+ * either side shows it with the name. A front name printed without its space
+ * ("BOBMILACKI") is split at the back heading's surname. With no front name
+ * the back heading is used. No trustworthy name: none.
+ */
+function choosePlayer(front: Line[], back: Line[]): PlayerPick {
+  const nameLines = new Set<Line>();
+  let hint: string | null = null;
+  const frontReads: NameRead[] = [];
+  const glued: Line[] = [];
+  for (const l of front) {
     // A name is never taken from a sentence; its first word may be a first name hint.
     if (isSentence(l)) {
       hint = hint ?? firstNameOf(l);
       continue;
     }
     const head = headerName(l);
-    if (head) {
-      nameLines.add(l);
-      header = header ?? head.pos;
-      let name = [...head.words.map((w) => titleWord(w.word)), ...(head.suffix ? [head.suffix] : [])].join(" ");
-      const nk = normalizeName(name);
-      let score = 1 + HEADER_NAME_BONUS + Math.min(Math.max(l.conf, 0), 1);
-      const canonical = KEY_PLAYERS.get(nk);
-      if (canonical) {
-        score += 20;
-        name = canonical;
-        keyMatch = keyMatch ?? canonical;
-      }
-      const prev = found.get(nk);
-      if (!prev || prev.score < score) found.set(nk, { name, score });
-    }
-    // Long lines are sentences, except a slab label that packs everything on one line.
+    if (head) frontReads.push({ words: head.words.map((w) => titleWord(w.word)), suffix: head.suffix, line: l, header: true });
+    // Long lines are not names, except a slab label that packs everything on one line.
     if (l.tokens.length > 8 && !GRADE_RE.test(l.up) && !/#\s*\d/.test(l.raw)) continue;
-    // Lines with labels ("BORN:", "HOME:") hold places and dates, not the name.
-    if (l.tokens.some((t) => /[A-Za-z]:$/.test(t))) continue;
-    const tokens = maskTeams(l);
-    const lineWords = l.tokens.length;
-    let run: NameWord[] = [];
-    let suffix: string | null = null;
-    const flush = () => {
-      // Drop vowel-less OCR scraps at either end ("ALEX RODRIGUEZ GML").
-      let core = run;
-      while (core.length > 0 && !core[core.length - 1].initials && !/[AEIOUY]/.test(core[core.length - 1].key)) core = core.slice(0, -1);
-      while (core.length > 0 && !core[0].initials && !/[AEIOUY]/.test(core[0].key)) core = core.slice(1);
-      if (core.length >= 2 && core.length <= 3 && !core.every((w) => w.initials) && looksLikeName(core)) {
-        const plainKey = normalizeName(core.map((w) => w.word).join(" "));
-        if (!CITY_KEYS.has(plainKey)) {
-          nameLines.add(l);
-          const words = core.map((w) => titleWord(w.word));
-          if (suffix) words.push(suffix);
-          let name = words.join(" ");
-          const nk = normalizeName(name);
-          const canonical = KEY_PLAYERS.get(nk);
-          let score = 1 + Math.min(Math.max(l.conf, 0), 1);
-          if (l.side === "front") score += 2 + (l.box.y < 0.35 ? 1 : 0);
-          else if (l.box.y < 0.3) score += 1;
-          score += Math.min(Math.max(l.box.h, 0), 0.2) * 10;
-          if (core.length + (suffix ? 1 : 0) === lineWords) score += 1;
-          if (l.source === "band" && core.every((w) => w.word === w.word.toUpperCase())) score += BAND_NAME_BONUS;
-          if (canonical) {
-            score += 20;
-            name = canonical;
-            keyMatch = keyMatch ?? canonical;
-          }
-          const prev = found.get(nk);
-          if (!prev || prev.score < score) found.set(nk, { name, score });
+    if (labelLine(l)) continue;
+    frontReads.push(...nameRuns(l));
+    const only = l.tokens.length === 1 ? l.tokens[0].replace(/[^A-Za-z]/g, "") : "";
+    if (only.length >= 7 && only === only.toUpperCase() && !STOP_WORDS.has(only)) glued.push(l);
+  }
+  for (const l of back) if (isSentence(l)) hint = hint ?? firstNameOf(l);
+  const { names: heads, header } = backHeadings(back);
+  // Largest first; a name filling its line before one inside a longer line.
+  const fill = (n: NameRead) => (n.words.length + (n.suffix ? 1 : 0)) / Math.max(1, n.line.tokens.filter((t) => /[A-Za-z0-9]/.test(t)).length);
+  frontReads.sort((a, b) => b.line.box.h - a.line.box.h || fill(b) - fill(a));
+  for (const n of [...frontReads, ...heads]) nameLines.add(n.line);
+
+  let chosen: NameRead | null = null;
+  let other: NameRead | null = null;
+  let suffix: string | null = null;
+  let agree = false;
+  for (const f of frontReads) {
+    const h = heads.find((b) => sameSurname(b, f));
+    if (h) {
+      // The front's form of the name; a surname spelled two ways is taken from the clearer read.
+      chosen = surnameKey(f) === surnameKey(h) || f.line.conf >= h.line.conf ? f : { ...f, words: [...f.words.slice(0, -1), h.words[h.words.length - 1]] };
+      other = h;
+      agree = true;
+      suffix = f.suffix ?? h.suffix;
+      break;
+    }
+  }
+  if (!chosen) {
+    // "BOBMILACKI": the front name without its space, split at the back's surname.
+    for (const g of glued) {
+      const key = g.tokens[0].replace(/[^A-Za-z]/g, "").toUpperCase();
+      for (const h of heads) {
+        const sur = h.words[h.words.length - 1].toUpperCase().replace(/[^A-Z]/g, "");
+        const first = key.slice(0, key.length - sur.length);
+        if (sur.length >= 3 && key.endsWith(sur) && first.length >= 2 && /[AEIOUY]/.test(first) && !STOP_WORDS.has(first)) {
+          chosen = { words: [titleWord(first), titleWord(sur)], suffix: null, line: g, header: false };
+          other = h;
+          agree = true;
+          suffix = h.suffix;
+          nameLines.add(g);
+          break;
         }
       }
-      run = [];
-      suffix = null;
-    };
-    for (let ti = 0; ti < tokens.length; ti++) {
-      const tok = tokens[ti];
-      const w = nameWord(tok);
-      if (!w) {
-        flush();
-        continue;
-      }
-      if (w.key in SUFFIXES && !w.initials) {
-        if (run.length >= 2) suffix = SUFFIXES[w.key];
-        flush();
-        continue;
-      }
-      // "de" in lower case after a name word is part of the name, not the position DE.
-      if (STOP_WORDS.has(w.key) && !(run.length > 0 && NAME_PARTICLES.has(w.word))) {
-        flush();
-        continue;
-      }
-      // A run longer than 3 words is likely a sentence; flush() drops it.
-      run.push(w);
-      // A comma ends a name unless a suffix follows ("Griffey, Jr.").
-      if (/,$/.test(tok)) {
-        const next = tokens[ti + 1];
-        const nw = next ? nameWord(next) : null;
-        if (!nw || !(nw.key in SUFFIXES)) flush();
-      }
+      if (chosen) break;
     }
-    flush();
   }
-  const names = [...found.values()].sort((a, b) => b.score - a.score).map((c) => c.name);
-  return { names: names.slice(0, 5), keyMatch, hint, header, nameLines };
+  if (!chosen && frontReads.length > 0) {
+    // Front and back name different people: a name header with a position
+    // ("CAL RIPKEN, JR. SS") on the back beats the front; a large heading
+    // that is not the front's name leaves the name unsettled.
+    const lead = heads[0];
+    const usual = middle(back.filter((l) => l.raw.replace(/[^A-Za-z0-9]/g, "").length >= 3).map((l) => l.box.h));
+    if (lead?.header) {
+      chosen = lead;
+    } else if (lead && lead.line.box.h >= HEADING_LARGE * usual) {
+      return { player: null, names: [], agree: false, keyMatch: null, hint, header, nameLines };
+    } else {
+      chosen = frontReads[0];
+    }
+    suffix = chosen.suffix;
+  }
+  if (!chosen && heads.length > 0) {
+    chosen = heads[0];
+    suffix = chosen.suffix;
+  }
+  if (!chosen) return { player: null, names: [], agree: false, keyMatch: null, hint, header, nameLines };
+
+  let player = display(chosen, suffix);
+  let keyMatch: string | null = null;
+  const canonical = KEY_PLAYERS.get(normalizeName(player));
+  if (canonical) {
+    player = canonical;
+    keyMatch = canonical;
+  }
+  const names = [player];
+  if (other) {
+    const alt = display(other, suffix);
+    if (normalizeName(alt) !== normalizeName(player)) names.push(alt);
+  }
+  return { player, names, agree, keyMatch, hint, header, nameLines };
 }
 
 // ---------------------------------------------------------------------------
@@ -1424,6 +1821,13 @@ function slabLabelYearBrand(lines: Line[]): { year: number; brand: string } | nu
   return null;
 }
 
+const MONTH_RE = /\b(?:JAN|FEB|MAR|APR|MAY|JUNE?|JULY?|AUG|SEPT?|OCT|NOV|DEC)[A-Z]*\.?(?=\s|$)/;
+
+/** Running text: a sentence, or two or more words in lower case ("pitchers to no-hit"). */
+function runningText(l: Line): boolean {
+  return isSentence(l) || l.tokens.filter((t) => /^[a-z][a-z'-]+[.,;:!?]*$/.test(t)).length >= 2;
+}
+
 /** What the reader took for a serial number. Only ever a suggestion: the owner answers it. */
 export type SerialRead = {
   /** "045/100", as read. */
@@ -1456,6 +1860,11 @@ export function findSerialRead(lines: Line[], opts: { cardNumber?: string | null
   for (const l of lines) {
     if (/\bBORN\b/.test(l.lz) || /\d+\/\d+\/\d+/.test(l.raw)) continue;
     if (NUMBER_ONLY_LINE.test(l.raw) || isStatRow(l)) continue;
+    // A print run number is stamped on its own ("12/99", "No. 045/100",
+    // "SERIAL 12/99"). In running text "14/91" is a date ("no-hit A's 7/
+    // 14/91"), so lines of running text and long lines never give one.
+    const serialWords = /\bSERIAL\b|\bNUMBERED\b|\bPRINT\s*RUN\b|\bLIMITED\b|\bEDITION\b/.test(l.lz);
+    if (!serialWords && (runningText(l) || l.tokens.length > 4 || MONTH_RE.test(l.lz))) continue;
     const re = /(^|[^\w/])([0-9OolISB]{1,4})\s*\/\s*([0-9OolISB]{2,4})(?![\w/])/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(l.raw)) !== null) {
@@ -1491,9 +1900,12 @@ function readsRookieWord(lines: Line[]): boolean {
 function emptyCard(): ParsedCard {
   return {
     year: null,
+    yearSigns: 0,
     brand: null,
     setName: null,
     cardNumber: null,
+    player: null,
+    playerAgree: false,
     playerCandidates: [],
     firstNameHint: null,
     team: null,
@@ -1530,13 +1942,18 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
 
   const hits = brandHits(lines);
   const slabLabel = slabLabelYearBrand(lines);
-  const yearFind = findYear(lines, new Set(hits.map((h) => h.line)));
+  const yearFind = findCardYear(front, back, lines, new Set(hits.map((h) => h.line)));
   out.year = yearFind?.year ?? slabLabel?.year ?? null;
+  out.yearSigns = yearFind?.signs ?? (slabLabel ? 1 : 0);
   const pick = pickBrand(hits, out.year);
   out.brand = pick?.brand ?? slabLabel?.brand ?? null;
   if (!yearFind && slabLabel) ev.push(`Read ${slabLabel.year} ${slabLabel.brand} on the holder label`);
 
-  if (yearFind?.how === "copyright") {
+  if (yearFind?.how === "front") {
+    ev.push(`Read year ${yearFind.year} next to the brand name on the front`);
+  } else if (yearFind?.how === "copyright" && yearFind.year !== yearFind.copyright) {
+    ev.push(`Read copyright line: ${yearFind.copyright}${out.brand ? ` ${out.brand}` : ""}, and a stat table ending with ${yearFind.lastSeason}, so the card is from ${yearFind.year}`);
+  } else if (yearFind?.how === "copyright") {
     ev.push(out.brand ? `Read copyright line: ${yearFind.year} ${out.brand}` : `Read copyright line: ${yearFind.year}`);
   } else if (yearFind?.how === "brand") {
     ev.push(`Read year ${yearFind.year} next to the brand name`);
@@ -1569,9 +1986,14 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   out.rookieWord = readsRookieWord(lines);
 
   const allUp = lines.map((l) => l.up).join(" ");
+  // Autograph words count outside running text only: "Signed by Orioles",
+  // "signed as a free agent" and "his signature pitch" are about the player's
+  // career. "SIGNED" alone is never one; "HAND SIGNED" and "AUTOGRAPH" are.
+  const labelUp = lines.filter((l) => !runningText(l)).map((l) => l.up).join(" ");
   // "AUT" is the short form on Beckett and PSA/DNA authentication labels.
-  const labelAut = /\bAUT\b/.test(allUp) && /\bBECKETT|\bPSA\b|\bBAS\b|\bJSA\b/.test(allUp);
-  if (labelAut || /\bAUTO(?:GRAPH(?:ED|S)?)?\b|\bSIGNATURES?\b|\bSIGNED\b|\bPSA\s*\/?\s*DNA\b|\bAUTHENTIC\s+AUTOGRAPH/.test(allUp)) {
+  const labelAut = /\bAUT\b/.test(labelUp) && /\bBECKETT|\bPSA\b|\bBAS\b|\bJSA\b/.test(labelUp);
+  const words = /\bAUTO(?:GRAPH(?:ED|S)?)?\b|\bSIGNATURES?\b|\bHAND\s*-?\s*SIGNED\b|\bPSA\s*\/?\s*DNA\b|\bAUTHENTIC\s+AUTOGRAPH/.test(labelUp);
+  if (labelAut || words) {
     out.isAutograph = true;
     ev.push("Autograph wording read on the card or label");
   }
@@ -1581,34 +2003,56 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   }
 
   // Sport clues other than the team, so they can settle a team name used in two sports.
+  // League and sport words in running text ("He played 3 years of football")
+  // are about the player's life: they count for little.
   const votes: Votes = new Map();
   if (pick) vote(votes, pick.sport, pick.sportWeight);
-  leagueAndStatVotes(lines, votes);
-  const players = findPlayers(front, back);
-  // The position in a name header ("Ken Griffey, Jr. * OF") beats one read elsewhere.
-  const pos = players.header ?? findPosition([...front, ...back]);
+  leagueAndStatVotes(lines.filter((l) => !isSentence(l)), votes);
+  const prose: Votes = new Map();
+  leagueAndStatVotes(lines.filter((l) => isSentence(l)), prose);
+  for (const [sp, w] of prose) vote(votes, sp, w / 4);
+  const players = choosePlayer(front, back);
+  // Positions must fit the sport the other clues point to. The position in a
+  // name header ("Ken Griffey, Jr. * OF") beats one read elsewhere.
+  const before = winner(new Map([...votes].filter(([, w]) => w >= 1)));
+  const header = players.header && (!before || !players.header.sport || players.header.sport === before) ? players.header : null;
+  const pos = header ?? findPosition([...front, ...back], before);
   if (pos) {
     out.position = pos.position;
     vote(votes, pos.sport, 2);
     ev.push(`Read position: ${pos.position}`);
   }
-  const { team, hint } = findTeam([...front, ...back], out.year, winner(votes), players.nameLines, pos);
-  if (team) {
+  // An Olympic or other multi-sport card: "Athletics" there is track and field.
+  const olympic = isOlympicCard(lines);
+  const backRows = tableRows(back);
+  const { team, hint } = olympic
+    ? { team: null, hint: null }
+    : findTeam([...front, ...back, ...backRows], out.year, winner(votes), players.nameLines, pos);
+  // A nickname alone is not enough: the team's city, or a second sign of its
+  // sport (league words, stat headers, a position, the maker) must be read too.
+  const supported = (t: TeamFind) => !t.ambiguous && t.sport !== null && (t.city || (votes.get(t.sport) ?? 0) > 0);
+  if (team && supported(team)) {
     out.team = team.team;
-    if (team.ambiguous) ev.push(`Read team name ${team.team}, but it is used in more than one sport`);
-    else {
-      vote(votes, team.sport, 3);
-      ev.push(`Read team: ${team.team}`);
+    vote(votes, team.sport, 3);
+    ev.push(`Read team: ${team.team}`);
+  } else if (team || hint) {
+    const h = (team ?? hint)!;
+    // "COWBOYS" with the baseball position SS: signs that disagree, no hint.
+    if (!h.ambiguous && h.sport && !(pos?.sport && pos.sport !== h.sport)) {
+      out.teamHint = h.team;
+      out.teamHintSport = h.sport;
+      // A hint says half as much about the sport as a team read for sure.
+      vote(votes, h.sport, 3 * FUZZY_WEIGHT);
+      ev.push(`Maybe team ${h.team} (not sure, check it)`);
+    } else if (h.ambiguous) {
+      ev.push(`Read team name ${h.team}, but it is used in more than one sport`);
     }
-  } else if (hint) {
-    out.teamHint = hint.team;
-    out.teamHintSport = hint.sport;
-    // A hint says half as much about the sport as a team read for sure.
-    vote(votes, hint.sport, 3 * FUZZY_WEIGHT);
-    ev.push(`Maybe team ${hint.team} (not sure, check it)`);
   }
-  out.sport = winner(votes);
+  out.sport = olympic ? "other" : winner(votes);
+  if (olympic) ev.push("Olympic card: sport other, no team");
 
+  out.player = players.player;
+  out.playerAgree = players.agree;
   out.playerCandidates = players.names;
   out.firstNameHint = players.hint;
   if (players.keyMatch) ev.push(`Name matches the key card list: ${players.keyMatch}`);
@@ -1691,7 +2135,8 @@ function parseProductInner(lines: Line[]): ParsedProduct {
   const pick = pickBrand(hits, out.year);
   if (pick) {
     out.brand = pick.brand;
-    out.setName = findSetName(pick, lines, null);
+    // A product label names its line ("1990 TOPPS BASEBALL"): the brand is the set unless a set was read.
+    out.setName = findSetName(pick, lines, null) ?? pick.brand;
     ev.push(`Read brand: ${pick.brand}`);
   }
 

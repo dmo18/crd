@@ -185,12 +185,13 @@ export function grow(b: Box, margin: number): Box {
 /**
  * Where to crop: the card found on the table, grown so no read text is cut
  * off (the finder may miss a glared edge), with a small margin. With no card
- * found, the text read so far stands in for it.
+ * found there is no crop: cut to the text alone, a lone name line would sit
+ * at the top of the picture, and where text sits on the card is a clue.
  */
 export function cropBox(card: Box | null, textBoxes: Box[]): Box | null {
+  if (!card) return null;
   const text = unionBox(textBoxes);
-  const base = card && text ? unionBox([card, text]) : card ?? text;
-  return base ? grow(base, CARD_MARGIN) : null;
+  return grow(text ? unionBox([card, text])! : card, CARD_MARGIN);
 }
 
 /** Where a box of a cropped part sits in the whole picture. */
@@ -249,20 +250,14 @@ export const CORNER_MAX_CHARS = 6;
 
 /**
  * True when a line read in a corner part may be kept: short, and not touching
- * the part's inner edges (a line running out of the part was cut).
+ * any edge of the part. A line running out of the part was cut, and one at
+ * the photo's own edge may be cut too (a card number half out of the photo).
  */
-export function keepCornerLine(text: string, box: Box, corner: Box): boolean {
+export function keepCornerLine(text: string, box: Box): boolean {
   const plain = text.replace(/\s+/g, "");
   if (plain.length === 0 || plain.length > CORNER_MAX_CHARS) return false;
   const edge = 0.02;
-  const left = corner.x > 0;
-  const top = corner.y > 0;
-  // Inner edges: the right edge of a left corner, the left edge of a right corner, and so on.
-  if (!left && box.x + box.w > 1 - edge) return false;
-  if (left && box.x < edge) return false;
-  if (!top && box.y + box.h > 1 - edge) return false;
-  if (top && box.y < edge) return false;
-  return true;
+  return box.x >= edge && box.y >= edge && box.x + box.w <= 1 - edge && box.y + box.h <= 1 - edge;
 }
 
 // ---------------------------------------------------------------------------

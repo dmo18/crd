@@ -21,8 +21,10 @@ import type { PlayerFacts } from "./wikidata";
  * is not read from these photos (script logo, tiny copyright print), so the
  * brand is Topps or empty.
  *
- * The team is read only as "89 MARMNERS", a close spelling, so it is a hint;
- * the player's team list on Wikidata confirms it.
+ * Recorded again in 12R.3 with the RapidOCR reader (the old recording was
+ * tesseract text): it reads "89 MARINERS" exactly in the stat table with
+ * baseball stat headers, so the team is read from the card. Before, the
+ * reader saw only "89 MARMNERS", a hint that Wikidata had to confirm.
  */
 
 /** Words from the bio, the stat table and misread scraps that must never end up in a name. */
@@ -80,9 +82,9 @@ describe("1990 Topps Ken Griffey Jr., recorded text, catalog and facts, end to e
 
   it("reads sport, year, number, brand and no sentence words", () => checkStableFields(item));
   it("reads the full name Ken Griffey Jr.", () => expect(item.player).toBe("Ken Griffey Jr."));
-  it("has the team Mariners, confirmed by the player's team list", () => {
-    expect(item.team ?? "").toContain("Mariners");
-    expect(item.notes).toMatch(/Team confirmed on Wikidata: Seattle Mariners/);
+  it("has the team Mariners, read from the card", () => {
+    expect(item.team).toBe("Seattle Mariners");
+    expect(item.notes).toMatch(/Read team: Seattle Mariners/);
     expect(lookups).toEqual(["Ken Griffey Jr."]);
   });
   it("puts 1990 Topps #336 Ken Griffey Jr. first in the catalog suggestions, without filling it", () => {
@@ -107,9 +109,8 @@ describe("1990 Topps Ken Griffey Jr., recorded text, catalog off", () => {
     checkStableFields(item);
     expect(item.player ?? "").toMatch(/Griffey/);
     expect(item.catalog).toBeUndefined();
-    // Without facts the close spelling is not confirmed: no team, a hint in the notes.
-    expect(item.team).toBeNull();
-    expect(item.notes).toMatch(/Maybe team Seattle Mariners/);
+    // Read exactly on a stat row with baseball stat headers: written without facts.
+    expect(item.team).toBe("Seattle Mariners");
   });
 });
 
@@ -150,9 +151,9 @@ describe("1990 Topps Ken Griffey Jr., parsing the recorded text", () => {
 
   it("keeps Ken from the bio only as a first name hint", () => expect(parsed.firstNameHint).toBe("Ken"));
 
-  it("reads year, sport and position, and the team only as a hint", () => {
-    expect(parsed.team).toBeNull();
-    expect(parsed.teamHint).toBe("Seattle Mariners");
+  it("reads year, sport, position and team", () => {
+    expect(parsed.team).toBe("Seattle Mariners");
+    expect(parsed.teamHint).toBeNull();
     expect(parsed.year).toBe(1990);
     expect(parsed.sport).toBe("baseball");
     expect(parsed.position).toBe("OF");

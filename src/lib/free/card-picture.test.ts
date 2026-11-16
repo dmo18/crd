@@ -46,6 +46,8 @@ describe("cropBox", () => {
     expect(crop.y + crop.h).toBeGreaterThanOrEqual(0.9);
     expect(crop.y).toBeLessThan(0.3);
     expect(cropBox(null, [])).toBeNull();
+    // No card found: no crop, so boxes keep their place on the photo.
+    expect(cropBox(null, [{ x: 0.2, y: 0.85, w: 0.5, h: 0.05 }])).toBeNull();
   });
 });
 
@@ -72,12 +74,11 @@ describe("corner reads", () => {
   it("has four corners", () => {
     expect(cornerBoxes()).toHaveLength(4);
   });
-  it("keeps a short number inside a corner part, not a line cut at the inner edge or a long text", () => {
-    const [topLeft, topRight] = cornerBoxes();
-    expect(keepCornerLine("65", { x: 0.2, y: 0.3, w: 0.2, h: 0.3 }, topLeft)).toBe(true);
-    expect(keepCornerLine("65", { x: 0.85, y: 0.3, w: 0.15, h: 0.3 }, topLeft)).toBe(false);
-    expect(keepCornerLine("101", { x: 0.0, y: 0.3, w: 0.2, h: 0.3 }, topRight)).toBe(false);
-    expect(keepCornerLine("CAREER HIGHLIGHTS", { x: 0.2, y: 0.3, w: 0.5, h: 0.3 }, topLeft)).toBe(false);
+  it("keeps a short number inside a corner part, not a line cut at an edge or a long text", () => {
+    expect(keepCornerLine("65", { x: 0.2, y: 0.3, w: 0.2, h: 0.3 })).toBe(true);
+    expect(keepCornerLine("65", { x: 0.85, y: 0.3, w: 0.15, h: 0.3 })).toBe(false);
+    expect(keepCornerLine("336", { x: 0.3, y: 0.0, w: 0.2, h: 0.2 })).toBe(false);
+    expect(keepCornerLine("CAREER HIGHLIGHTS", { x: 0.2, y: 0.3, w: 0.5, h: 0.3 })).toBe(false);
   });
 });
 
