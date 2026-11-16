@@ -42,6 +42,20 @@ Checked today, on 2026-11-16, from this server:
 6. Order approved: Part A, Part B, short Part C, then Milestones 10 to 16.
    Run cap: 75 tasks or 12M delegated tokens, then stop and ask.
 
+## Part C status (2026-11-16, night)
+
+Part C (9.10, 9.11) is built on branch `work/m9c` but NOT live. It failed
+review twice: the team rules from text alone keep producing wrong teams
+(second review: a lowercase bio word like "twins" beats a misread front
+team; plain words like STARS, BEARS, MAGIC become teams; four digit split
+stat rows lose the year). Per the run rules it stopped after two failures.
+Decision (builder): do not ship it alone. Milestone 10 task 8 takes the
+branch, keeps the good parts (extra reading passes, sentence rule, name
+particles, header years, the Griffey fixture) and makes team and brand come
+from the catalog card, with text team matching only as a weak hint that
+the catalog must confirm. The second review's list (H1, M1 to M4, L1, L2)
+becomes that task's test list.
+
 ## 1. The 29 kept features against today's app
 
 "Today's app" means branch `work/m9-owner-top3` with Part A done.
