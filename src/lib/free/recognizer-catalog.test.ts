@@ -12,7 +12,7 @@ import type { OcrResult, TextReader } from "./ocr";
  */
 const lookupCard = vi.fn<(...args: unknown[]) => Promise<LookupResult>>();
 vi.mock("@/lib/catalog/lookup", async (orig) => ({ ...(await orig<typeof import("@/lib/catalog/lookup")>()), lookupCard: (...a: unknown[]) => lookupCard(...a) }));
-const { FreeRecognizer } = await import("./recognizer");
+const { FreeRecognizer, catalogPart, AUTO_FILL_SURE } = await import("./recognizer");
 
 function reader(text: string): TextReader {
   return {
@@ -59,13 +59,21 @@ describe("FreeRecognizer catalog step", () => {
     expect((read as { names: string[] }).names[0]).toBe("Ken Griffey Jr.");
     expect(line).toBe("background");
     expect(without(item)).toEqual(without(plain));
-    expect(item.catalog).toEqual({ status: "sure", card, confidence: 0.75 });
+    // Owner safety rule: a sure answer is only the top suggestion.
+    expect(item.catalog).toEqual({ status: "candidates", candidates: [card] });
   });
 
-  it("a sure card without a read number gets the check confidence", async () => {
-    lookupCard.mockResolvedValue(result({ sure: card, sureBy: "name", candidates: [card] }));
+  it("with automatic filling switched on (off in the app), a sure answer becomes a sure card", () => {
+    const r = result({ sure: card, sureBy: "number", candidates: [card] });
+    expect(AUTO_FILL_SURE).toBe(false);
+    expect(catalogPart(r, 0.7, true)).toEqual({ status: "sure", card, confidence: 0.75 });
+    expect(catalogPart(r, 0.7)).toEqual({ status: "candidates", candidates: [card] });
+  });
+
+  it("a sure answer by number is still only a suggestion", async () => {
+    lookupCard.mockResolvedValue(result({ sure: card, sureBy: "number", candidates: [card] }));
     const item = await run({ catalog: new FakeCatalog() });
-    expect(item.catalog).toMatchObject({ status: "sure", confidence: 0.7 });
+    expect(item.catalog).toMatchObject({ status: "candidates" });
   });
 
   it("candidates only: kept as they came, the reading stands", async () => {

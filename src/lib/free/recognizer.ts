@@ -103,9 +103,21 @@ function stoppable(inner: Catalog): Catalog & { stop(): void } {
   };
 }
 
+/**
+ * Owner safety rule (PLAN, 10.6 after the fifth review): no catalog card is
+ * ever filled without the owner's tap. A "sure" answer from the look up only
+ * moves that card to the top of the suggestions. Switch on again only with
+ * a new review of the sure rule.
+ */
+export const AUTO_FILL_SURE = false;
+
 /** The look up's answer as the catalog part of a recognized card. */
-export function catalogPart(result: LookupResult, readingConfidence: number): RecognizedCatalog {
-  if (result.sure) return { status: "sure", card: result.sure, confidence: lookupConfidence(result, readingConfidence) };
+export function catalogPart(result: LookupResult, readingConfidence: number, autoFill = AUTO_FILL_SURE): RecognizedCatalog {
+  if (result.sure && autoFill) return { status: "sure", card: result.sure, confidence: lookupConfidence(result, readingConfidence) };
+  if (result.sure) {
+    const sure = result.sure;
+    return { status: "candidates", candidates: [sure, ...result.candidates.filter((c) => c.sourceId !== sure.sourceId)] };
+  }
   if (result.candidates.length > 0) return { status: "candidates", candidates: result.candidates };
   if (result.stopped) return { status: "not_checked", reason: result.stopped };
   return { status: "none" };

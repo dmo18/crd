@@ -1557,6 +1557,17 @@ set id for the same key in any later answer marks the conflict for the
 rest of the scan. If any later review still finds a wrong-sure path, the
 fallback is: no catalog card is ever filled without the owner's tap.
 
+**10.6 fifth review outcome (2026-11-16, main session): automatic filling OFF**
+The final review still found a wrong-sure path (a read product line such as
+"Topps Chrome" or "Topps Gold" is reduced to the brand "Topps", so the base
+card #336 is filled for a parallel). As settled in the fourth decision, the
+fallback applies: `AUTO_FILL_SURE = false` in src/lib/free/recognizer.ts.
+A sure answer only moves that card to the top of the suggestions; nothing
+is filled without the owner's tap. To switch it on again later: fix the
+read-variation case (any read brand with a product variation, or more
+than one raw brand before dedupe, means no sure; the Jeff Robinson #42
+cut-checklist case too) and pass a new independent review.
+
 **10.7 Search cards screen and "Add to my collection"** (Sonnet)
 - Files: `src/app/(app)/search/page.tsx`, `src/components/catalog/*`,
   `src/lib/catalog/actions.ts` (+ test), `src/app/(app)/more/page.tsx`,

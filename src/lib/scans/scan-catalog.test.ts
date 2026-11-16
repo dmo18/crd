@@ -45,24 +45,22 @@ const reading = (row: Item) => ({
 });
 
 describe("a scan with the catalog (fake, recorded answers, no network)", () => {
-  it("a sure card is kept, linked and filed as sure; read fields keep their reading marks", async () => {
+  it("a sure answer is only the top suggestion: nothing is linked or filled without the owner's tap", async () => {
     const catalog = new FakeCatalog();
     const item = await scanWith(WITH_NUMBER, catalog);
     expect(catalog.lines.every((l) => l === "background")).toBe(true);
-    const card = db.select().from(catalogCards).get()!;
-    expect(card).toMatchObject({ year: 1990, brand: "Topps", cardNumber: "336", player: "Ken Griffey Jr." });
-    expect(db.select().from(catalogSources).get()).toMatchObject({ sourceId: "551033", catalogCardId: card.id });
-    expect(item.catalogCardId).toBe(card.id);
-    expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
-    expect(item.status).toBe("confirmed");
-    expect(item.catalogCandidates).toBeNull();
-    // Everything was read already: nothing is overwritten, every mark stays `reading`.
-    expect(item).toMatchObject({ player: "Ken Griffey Jr.", cardNumber: "336", team: "Seattle Mariners", setName: "Topps" });
+    expect(db.select().from(catalogCards).all()).toHaveLength(0);
+    expect(db.select().from(catalogSources).all()).toHaveLength(0);
+    expect(item.catalogCardId).toBeNull();
+    const stored = parseCatalog(item.catalogCandidates)!;
+    expect(stored.status).toBe("candidates");
+    expect(stored.items[0]).toMatchObject({ sourceId: "551033", cardNumber: "336" });
+    // The reading stands as read, with its own marks and confidence.
+    expect(item).toMatchObject({ player: "Ken Griffey Jr.", cardNumber: "336" });
     expect(Object.values(marks(item)).every((m) => m === "reading")).toBe(true);
-    // What the scanner first read is the reading, with the reading's own confidence.
     const first = JSON.parse(item.firstSuggestion!);
-    expect(first.fields).toMatchObject({ cardNumber: "336", player: "Ken Griffey Jr." });
     expect(first.confidence).toBe(0.7);
+    void REVIEW_THRESHOLD;
   });
 
   it("without a sure card the ranked candidates are kept for Review; a pick links, fills the empty number and confirms", async () => {
