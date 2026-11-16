@@ -1,4 +1,5 @@
 // Reading test bench. Run: npm run bench:reading [-- --out result.json]
+// Options (src/lib/free/bench/args.ts): --split tune, --card <id>, --show-text.
 // Reads real card photos with the free reader and scores each field.
 // Fixtures: tests/fixtures/real-cards. More cards: set READING_BENCH_DIR to a
 // folder with answers.json (same format) and the photo files.
@@ -9,7 +10,8 @@ import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
 import { FreeRecognizer } from "../src/lib/free/recognizer";
-import { closeTextReader } from "../src/lib/free/ocr";
+import { closeTextReader, getTextReader, type OcrResult, type TextReader } from "../src/lib/free/ocr";
+import { parseBenchArgs, showsCards, wanted } from "../src/lib/free/bench/args";
 import {
   FIELDS, checkBar, markCard, summarize,
   type Answer, type CardMarks, type Field, type ReadValues,
@@ -69,8 +71,10 @@ type CardResult = { id: string; split: string; read: ReadValues; marks: CardMark
 function section(name: string, results: CardResult[]) {
   const summary = summarize(results.map((r) => r.marks));
   const bar = checkBar(summary);
-  const lines: string[] = [`== ${name} (${results.length} cards)`, `${"".padEnd(14)}${FIELDS.map((f) => LETTER[f]).join("")}`];
-  for (const r of results) {
+  const lines: string[] = [`== ${name} (${results.length} cards)`];
+  // Held back cards are the honest exam: only their totals are printed.
+  if (showsCards(name)) lines.push(`${"".padEnd(14)}${FIELDS.map((f) => LETTER[f]).join("")}`);
+  for (const r of showsCards(name) ? results : []) {
     lines.push(`${r.id.slice(0, 13).padEnd(14)}${FIELDS.map((f) => MARK[r.marks[f]]).join("")}`);
     for (const f of FIELDS) if (r.marks[f] === "wrong") lines.push(`  wrong ${f}: ${String(r.read[f])}`);
   }
@@ -83,23 +87,49 @@ function section(name: string, results: CardResult[]) {
   return { text: lines.join("\n"), summary, bar };
 }
 
+function showText(side: string, r: OcrResult | null) {
+  console.log(`  -- ${side}${r ? ` (passes ${r.passes ?? "?"}, crops ${r.crops ?? 0})` : ": no read"}`);
+  for (const l of r?.lines ?? []) {
+    const b = l.box;
+    const at = [b.x, b.y, b.w, b.h].map((v) => v.toFixed(2)).join(" ");
+    console.log(`  ${at}  ${l.confidence.toFixed(2)} ${(l.source ?? "page").padEnd(6)} ${l.text}`);
+  }
+}
+
 async function main() {
-  const outIdx = process.argv.indexOf("--out");
-  const outPath = outIdx >= 0 ? process.argv[outIdx + 1] : undefined;
-  if (outIdx >= 0 && !outPath) throw new Error("--out needs a file path");
+  const args = parseBenchArgs(process.argv.slice(2));
+  const outPath = args.out;
 
   const dirs = [path.resolve("tests/fixtures/real-cards")];
   if (process.env.READING_BENCH_DIR) dirs.push(path.resolve(process.env.READING_BENCH_DIR));
-  const cards = (await Promise.all(dirs.map(loadDir))).flat();
+  const cards = (await Promise.all(dirs.map(loadDir))).flat().filter((c) => wanted(args, c));
+  if (args.showText && cards.some((c) => !showsCards(c.split))) throw new Error("--show-text is not allowed on held back cards");
 
   // No catalog, and the player lookup is a stub: nothing leaves this machine.
-  const recognizer: Recognizer = new FreeRecognizer({ lookup: async () => null });
+  const reads: (OcrResult | null)[] = [];
+  const base = getTextReader();
+  const reader: TextReader = {
+    read: async (image, options) => {
+      const r = await base.read(image, options).catch(() => null);
+      reads.push(r);
+      if (!r) throw new Error("no read");
+      return r;
+    },
+  };
+  const recognizer: Recognizer = new FreeRecognizer({ reader, lookup: async () => null });
   const results: CardResult[] = [];
   for (const c of cards) {
+    reads.length = 0;
+    const started = Date.now();
     const photos = [await toPhoto(path.join(c.dir, c.front), "front")];
     if (c.back) photos.push(await toPhoto(path.join(c.dir, c.back), "back"));
     const items = await recognizer.recognize({ mode: "single", photos });
     const read = readValues(items.find((i) => i.kind === "card") ?? items[0]);
+    if (args.showText) {
+      console.log(`## ${c.id} (${((Date.now() - started) / 1000).toFixed(1)} s)`);
+      reads.forEach((r, i) => showText(i === 0 ? "front" : "back", r));
+      console.log(`  read: ${JSON.stringify(read)}`);
+    }
     results.push({ id: c.id, split: c.split, read, marks: markCard(read, c.answer) });
   }
   await closeTextReader();
@@ -112,7 +142,7 @@ async function main() {
   if (outPath) {
     const json = {
       networkCalls,
-      cards: results,
+      cards: results.filter((r) => showsCards(r.split)),
       splits: parts.map((p) => ({ name: p.name, summary: p.summary, bar: p.bar })),
     };
     await writeFile(outPath, JSON.stringify(json, null, 2) + "\n");
