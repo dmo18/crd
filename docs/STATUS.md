@@ -1,5 +1,14 @@
 # Status
 
+## Milestone 10: the card catalog (in progress, branch work/m10)
+- 10.6 matching (`src/lib/catalog/match.ts`, `lookup.ts`): timing on this
+  server (median of 7 runs): turning the 500 row checklist 9179 into slim
+  rows once 1.3 ms; judging it with 5 spellings 4.7 ms; 800 names with 5
+  spellings 8.3 ms (limit 50 ms).
+- Known gap: a misread name with no number and no earlier clean hit of the
+  same year and brand finds no base set id (the broad "year brand" search
+  gives only noise, see CATALOG-TRIAL.md), so no checklist is fetched.
+
 ## Milestone 9: the owner's top three (2026-11-16)
 - Part A live (f1258f6): take, save, move on for every scan mode; uploads
   live in a provider in the app layout and survive page changes; safe

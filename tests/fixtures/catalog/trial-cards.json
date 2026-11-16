@@ -1,0 +1,253 @@
+{
+ "note": "The 31 cards of the catalog trial (docs/CATALOG-TRIAL.md) with a damaged spelling each: first name dropped, one letter of the surname changed, as in the trial queries.",
+ "cards": [
+  {
+   "sport": "baseball",
+   "year": 1980,
+   "brand": "Topps",
+   "player": "Rickey Henderson",
+   "cardNumber": "482",
+   "damaged": "Henterson"
+  },
+  {
+   "sport": "baseball",
+   "year": 1982,
+   "brand": "Topps",
+   "player": "Cal Ripken Jr.",
+   "cardNumber": "21",
+   "damaged": "Ripkin"
+  },
+  {
+   "sport": "baseball",
+   "year": 1983,
+   "brand": "Fleer",
+   "player": "Tony Gwynn",
+   "cardNumber": "360",
+   "damaged": "Gwyhn"
+  },
+  {
+   "sport": "baseball",
+   "year": 1984,
+   "brand": "Donruss",
+   "player": "Don Mattingly",
+   "cardNumber": "248",
+   "damaged": "Mattinglv"
+  },
+  {
+   "sport": "baseball",
+   "year": 1985,
+   "brand": "Topps",
+   "player": "Kirby Puckett",
+   "cardNumber": "536",
+   "damaged": "Puckctt"
+  },
+  {
+   "sport": "baseball",
+   "year": 1986,
+   "brand": "Donruss",
+   "player": "Jose Canseco",
+   "cardNumber": "39",
+   "damaged": "Canscco"
+  },
+  {
+   "sport": "baseball",
+   "year": 1987,
+   "brand": "Topps",
+   "player": "Barry Bonds",
+   "cardNumber": "320",
+   "damaged": "8onds"
+  },
+  {
+   "sport": "baseball",
+   "year": 1987,
+   "brand": "Donruss",
+   "player": "Greg Maddux",
+   "cardNumber": "36",
+   "damaged": "Madbux"
+  },
+  {
+   "sport": "baseball",
+   "year": 1989,
+   "brand": "Upper Deck",
+   "player": "Ken Griffey Jr.",
+   "cardNumber": "1",
+   "damaged": "Griffcy"
+  },
+  {
+   "sport": "baseball",
+   "year": 1989,
+   "brand": "Upper Deck",
+   "player": "Dale Murphy",
+   "cardNumber": "357",
+   "damaged": "Murpby"
+  },
+  {
+   "sport": "baseball",
+   "year": 1989,
+   "brand": "Fleer",
+   "player": "Bill Ripken",
+   "cardNumber": "616",
+   "damaged": "Rlpken"
+  },
+  {
+   "sport": "baseball",
+   "year": 1990,
+   "brand": "Topps",
+   "player": "Frank Thomas",
+   "cardNumber": "414",
+   "damaged": "Thornas"
+  },
+  {
+   "sport": "baseball",
+   "year": 1993,
+   "brand": "Topps",
+   "player": "Derek Jeter",
+   "cardNumber": "98",
+   "damaged": "Jetcr"
+  },
+  {
+   "sport": "baseball",
+   "year": 1992,
+   "brand": "Bowman",
+   "player": "Mariano Rivera",
+   "cardNumber": "302",
+   "damaged": "Rivcra"
+  },
+  {
+   "sport": "baseball",
+   "year": 1986,
+   "brand": "Topps",
+   "player": "Barry Bonds",
+   "cardNumber": "11T",
+   "damaged": "Bomds"
+  },
+  {
+   "sport": "basketball",
+   "year": 1984,
+   "brand": "Star",
+   "player": "Michael Jordan",
+   "cardNumber": "101",
+   "damaged": "Jordon"
+  },
+  {
+   "sport": "basketball",
+   "year": 1986,
+   "brand": "Fleer",
+   "player": "Michael Jordan",
+   "cardNumber": "57",
+   "damaged": "Iordan"
+  },
+  {
+   "sport": "basketball",
+   "year": 1986,
+   "brand": "Fleer",
+   "player": "Charles Barkley",
+   "cardNumber": "7",
+   "damaged": "Barkiey"
+  },
+  {
+   "sport": "basketball",
+   "year": 1988,
+   "brand": "Fleer",
+   "player": "Scottie Pippen",
+   "cardNumber": "20",
+   "damaged": "Pipppen"
+  },
+  {
+   "sport": "basketball",
+   "year": 1992,
+   "brand": "Upper Deck",
+   "player": "Shaquille O'Neal",
+   "cardNumber": "1",
+   "damaged": "ONeai"
+  },
+  {
+   "sport": "basketball",
+   "year": 1989,
+   "brand": "NBA Hoops",
+   "player": "David Robinson",
+   "cardNumber": "138",
+   "damaged": "Robinsom"
+  },
+  {
+   "sport": "football",
+   "year": 1984,
+   "brand": "Topps",
+   "player": "Dan Marino",
+   "cardNumber": "123",
+   "damaged": "Narino"
+  },
+  {
+   "sport": "football",
+   "year": 1986,
+   "brand": "Topps",
+   "player": "Jerry Rice",
+   "cardNumber": "161",
+   "damaged": "Rlce"
+  },
+  {
+   "sport": "football",
+   "year": 1989,
+   "brand": "Score",
+   "player": "Barry Sanders",
+   "cardNumber": "257",
+   "damaged": "Sandcrs"
+  },
+  {
+   "sport": "football",
+   "year": 1990,
+   "brand": "Topps",
+   "player": "Emmitt Smith",
+   "cardNumber": "27T",
+   "damaged": "Smlth"
+  },
+  {
+   "sport": "football",
+   "year": 1991,
+   "brand": "Topps",
+   "player": "Brett Favre",
+   "cardNumber": "94",
+   "damaged": "Favrc"
+  },
+  {
+   "sport": "hockey",
+   "year": 1980,
+   "brand": "O-Pee-Chee",
+   "player": "Wayne Gretzky",
+   "cardNumber": "250",
+   "damaged": "Gretzkv"
+  },
+  {
+   "sport": "hockey",
+   "year": 1985,
+   "brand": "O-Pee-Chee",
+   "player": "Mario Lemieux",
+   "cardNumber": "9",
+   "damaged": "Lemleux"
+  },
+  {
+   "sport": "hockey",
+   "year": 1986,
+   "brand": "O-Pee-Chee",
+   "player": "Patrick Roy",
+   "cardNumber": "53",
+   "damaged": "Rov"
+  },
+  {
+   "sport": "hockey",
+   "year": 1990,
+   "brand": "Upper Deck",
+   "player": "Jaromir Jagr",
+   "cardNumber": "356",
+   "damaged": "Jaqr"
+  },
+  {
+   "sport": "baseball",
+   "year": 1990,
+   "brand": "Topps",
+   "player": "Ken Griffey Jr.",
+   "cardNumber": "336",
+   "damaged": "Eriffey"
+  }
+ ]
+}
