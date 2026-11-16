@@ -4,7 +4,9 @@ import { createScanBudget, lookupCard, lookupConfidence, type LookupResult } fro
 import type { Catalog } from "@/lib/catalog/types";
 import { checkPhotoCount } from "@/lib/recognition/limits";
 import {
+  CERTAIN_FIELDS,
   recognizedItemSchema,
+  type FieldCertainty,
   type Box,
   type RecognitionPhoto,
   type RecognitionRequest,
@@ -440,6 +442,22 @@ export class FreeRecognizer implements Recognizer {
       if (!(item.year != null && item.brand && item.cardNumber)) confidence = Math.min(confidence, CHECK_CONFIDENCE);
       if (match) confidence = Math.min(confidence, CHECK_CONFIDENCE);
     }
+    // Certainty per field: the parser's, except where the key card list put
+    // in a value the card did not show (then it is not the card's own sign).
+    const certainty: FieldCertainty = {};
+    for (const f of CERTAIN_FIELDS) {
+      const value = item[f];
+      if (value == null || value === "") continue;
+      const read = parsed[f];
+      certainty[f] = (read != null && String(read) === String(value)) || (f === "player" && readPlayer != null && normalizeName(String(value)) === normalizeName(readPlayer))
+        ? (parsed.certainty[f] ?? "unsure")
+        : "unsure";
+    }
+    // Only a card whose player, year and brand are all sure may be filed
+    // without the owner (12R.5 round 2): anything else waits in Review.
+    if (!(certainty.player === "sure" && certainty.year === "sure" && certainty.brand === "sure")) {
+      confidence = Math.min(confidence, CHECK_CONFIDENCE);
+    }
     if (textConfidence < 0.5) confidence = Math.min(confidence, 0.6);
     // A reprint is never the valuable original: always let the owner check it.
     if (parsed.isReprint) {
@@ -451,6 +469,7 @@ export class FreeRecognizer implements Recognizer {
     const names: string[] = [];
     for (const n of [player, ...parsed.playerCandidates]) if (n && !names.includes(n)) names.push(n);
     const evidence: ReadEvidence = {};
+    if (Object.keys(certainty).length > 0) evidence.certainty = certainty;
     // The key list hit is passed on explicitly; the item layer never guesses it from the reader's name.
     if (key) evidence.keyCard = { isRookie: key.isRookie };
     if (parsed.isReprint) evidence.reprint = true;

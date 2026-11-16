@@ -31,9 +31,23 @@ describe("FreeRecognizer with fake parts", () => {
     });
     const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
     expect(item).toMatchObject({ kind: "card", year: 1990, brand: "Topps", cardNumber: "414", player: "Frank Thomas", isRookie: true });
-    expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
+    // Year and brand were each read in one place only (the copyright line):
+    // a key card hit alone no longer files the card (12R.5 round 2).
+    expect(item.confidence).toBeLessThan(REVIEW_THRESHOLD);
+    expect(item.evidence?.certainty).toMatchObject({ year: "unsure", brand: "unsure" });
     expect(item.estimate).toBeNull();
     expect(lookups).toBe(0);
+  });
+
+  it("files a key card on its own only when player, year and brand are each read in two places", async () => {
+    const r = new FreeRecognizer({
+      reader: reader({ 1: "1990 TOPPS\nFRANK THOMAS\nWHITE SOX", 2: "FRANK THOMAS\nNO. 414\nFIRST BASE\n\u00a9 1990 THE TOPPS COMPANY, INC." }),
+      lookup: async () => null,
+    });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
+    expect(item).toMatchObject({ year: 1990, brand: "Topps", cardNumber: "414", player: "Frank Thomas", isRookie: true });
+    expect(item.evidence?.certainty).toMatchObject({ year: "sure", brand: "sure", player: "sure" });
+    expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
   });
 
   it("confirms an unlisted player on Wikidata and notes Hall of Fame and possible rookie", async () => {

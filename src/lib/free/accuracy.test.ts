@@ -273,7 +273,9 @@ const CASES: Case[] = [
     check: (i) => expect(i.confidence).toBeLessThan(REVIEW_THRESHOLD),
   },
   {
-    name: "year, brand, number and a Wikidata player passes review but stays at 0.8 or less",
+    // 12R.5 round 2: year and brand read only in the copyright line, and the
+    // name on one side only, are each one sign: the card waits for the owner.
+    name: "year, brand, number and a Wikidata player each read once wait for review",
     back: [
       ["130", 0.04, 0.88, 0.07, 0.04, 0.85],
       ["DWIGHT GOODEN", 0.1, 0.25, 0.5, 0.04, 0.8],
@@ -281,6 +283,26 @@ const CASES: Case[] = [
     ],
     facts: gooden,
     check: (i) => {
+      expect(i.confidence).toBeLessThan(REVIEW_THRESHOLD);
+      expect(i.evidence?.certainty).toMatchObject({ year: "unsure", brand: "unsure", player: "unsure" });
+    },
+  },
+  {
+    name: "the same card with the name and the maker on both sides and stats agreeing passes review but stays at 0.8 or less",
+    front: [
+      ["TOPPS", 0.05, 0.1, 0.2, 0.04, 0.85],
+      ["DWIGHT GOODEN", 0.9, 0.25, 0.5, 0.05, 0.85],
+    ],
+    back: [
+      ["130", 0.04, 0.88, 0.07, 0.04, 0.85],
+      ["DWIGHT GOODEN", 0.1, 0.25, 0.5, 0.04, 0.8],
+      ["85 METS 24 4 1.53", 0.6, 0.1, 0.6, 0.02, 0.8],
+      ["86 METS 17 6 2.84", 0.63, 0.1, 0.6, 0.02, 0.8],
+      ["© 1987 TOPPS CHEWING GUM, INC.", 0.95, 0.1, 0.8, 0.02, 0.7],
+    ],
+    facts: gooden,
+    check: (i) => {
+      expect(i.evidence?.certainty).toMatchObject({ year: "sure", brand: "sure", player: "sure" });
       expect(i.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
       expect(i.confidence).toBeLessThanOrEqual(0.8);
     },
