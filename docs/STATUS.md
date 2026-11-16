@@ -381,6 +381,15 @@
   on 4 GB.
 - A restored original is turned into AVIF again by the archiver within
   minutes, so restore is exact only until then.
+- Duplicates (11.6, builder choices inside the settled design, all on the
+  safe side: unclear pairs are a "maybe", which never combines): a pair with
+  equal version names where one is confirmed and the other never asked is a
+  "maybe"; a serial copy on one side only is a "maybe"; two different print
+  runs (/100 and /50) are not duplicates.
+- Combining moves the other record's photos (and kept originals) to the
+  kept record and takes them off the old scan. When that scan still has a
+  whole-sheet photo, the scan stays (with no cards) so the sheet is kept. A
+  kept record can then hold two fronts; the page shows both.
 - No paid price feed yet. The `PriceSource` interface is where one plugs in.
 
 ## Open security findings

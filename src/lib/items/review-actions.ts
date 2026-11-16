@@ -9,8 +9,8 @@ import { auditThisRequest, requestContext } from "@/lib/audit/request";
 import { itemLabel } from "@/lib/audit/subjects";
 import { MAX_STORED_CANDIDATES } from "@/lib/catalog/candidates";
 import { dismissCandidates, lookUpAgain, NOT_ON_LIST, pickCandidate, takeCatalogValues } from "@/lib/catalog/pick";
-import { mergeInto } from "./duplicates";
-import { deleteFailedScans, deletePhotoFiles } from "./remove";
+import { keepApart, mergeInto } from "./duplicates";
+import { deleteFailedScans } from "./remove";
 import { confirmItem, deleteItem } from "./update";
 
 const idSchema = z.coerce.number().int().positive().max(2_000_000_000);
@@ -33,12 +33,28 @@ export async function mergeDuplicateAction(formData: FormData): Promise<void> {
   const target = idSchema.safeParse(formData.get("targetId"));
   if (!source.success || !target.success) return;
   const label = `${itemLabel(source.data)} into ${itemLabel(target.data)}`;
+  // The server decides again whether these two may be combined; the form only names them.
   const result = mergeInto(source.data, target.data);
   refresh();
   if (!result.ok) redirect(`/review?merge=${result.problem}`);
-  await auditThisRequest("items_merged", "ok", label);
-  await deletePhotoFiles(result.files);
+  const photos = result.movedPhotos === 0 ? "" : `, ${result.movedPhotos} ${result.movedPhotos === 1 ? "photo" : "photos"} moved`;
+  await auditThisRequest("items_merged", "ok", `${label}${photos}`);
+  revalidatePath(`/items/${result.targetId}`);
   redirect(`/items/${result.targetId}`);
+}
+
+/** "Keep both as they are": the pair is remembered on both records and not asked about again. */
+export async function keepApartAction(formData: FormData): Promise<void> {
+  await requireOwner();
+  const item = idSchema.safeParse(formData.get("itemId"));
+  const other = idSchema.safeParse(formData.get("otherId"));
+  if (!item.success || !other.success) return;
+  const label = `${itemLabel(item.data)} and ${itemLabel(other.data)}`;
+  const result = keepApart(item.data, other.data);
+  refresh();
+  revalidatePath(`/items/${item.data}`);
+  revalidatePath(`/items/${other.data}`);
+  if (result.ok) await auditThisRequest("duplicate_kept_apart", "ok", label);
 }
 
 export async function confirmFromReviewAction(formData: FormData): Promise<void> {

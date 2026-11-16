@@ -11,7 +11,6 @@ import { photoEditSchema, runOneAtATime } from "@/lib/images/edit";
 import { readStored, saveUpload, uploadsDir } from "@/lib/images/store";
 import { purgeItems, softDeleteItems } from "./bin";
 import { mergeInto } from "./duplicates";
-import { deletePhotoFiles } from "./remove";
 import { addPhoto, editPhoto, replacePhoto, restorePhoto } from "./photos";
 
 let db: Db;
@@ -172,18 +171,24 @@ describe("the original", () => {
     expect(await exists(r.file)).toBe(false);
   }, 120_000);
 
-  it("goes with the photo: a merge removes the other record's originals", async () => {
+  it("moves with the photo: a merge moves the other record's photo and its original, byte for byte", async () => {
     const same = { kind: "card", title: "Griffey", player: "Ken Griffey Jr.", year: 1989, brand: "Upper Deck", cardNumber: "1", status: "confirmed" } as const;
     const keep = db.insert(items).values(same).returning({ id: items.id }).get().id;
     const gone = db.insert(items).values({ ...same, status: "needs_review" }).returning({ id: items.id }).get().id;
     const id = await photoFor(gone, { archived: true });
     await editPhoto({ itemId: gone, imageId: id, edit: turn() }, db);
     const r = row(id);
+    const before = { file: await readStored(r.file), original: await readStored(r.originalFile!) };
     const merged = mergeInto(gone, keep, db);
-    expect(merged.ok && merged.files).toContain(r.originalFile);
-    if (merged.ok) await deletePhotoFiles(merged.files);
-    expect(await exists(r.originalFile!)).toBe(false);
-    expect(await exists(r.file)).toBe(false);
+    expect(merged).toEqual({ ok: true, targetId: keep, movedPhotos: 1 });
+    // Same row, same files, same original, now on the kept record.
+    expect(row(id)).toMatchObject({ itemId: keep, file: r.file, thumbFile: r.thumbFile, originalFile: r.originalFile });
+    expect(Buffer.compare(await readStored(r.file), before.file)).toBe(0);
+    expect(Buffer.compare(await readStored(r.originalFile!), before.original)).toBe(0);
+    expect(await exists(r.thumbFile)).toBe(true);
+    // The original still works on its new record.
+    expect(await restorePhoto({ itemId: keep, imageId: id }, db)).toMatchObject({ ok: true });
+    expect(Buffer.compare(await readStored(row(id).file), before.original)).toBe(0);
   }, 120_000);
 
   it("is not an orphan while its row lives and is removed once the row is gone", async () => {

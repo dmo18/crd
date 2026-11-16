@@ -4,6 +4,8 @@
  */
 
 function stripAccents(s: string): string {
+  // Plain ASCII has no accents: skip the costly normalize (same result).
+  if (/^[\x00-\x7f]*$/.test(s)) return s;
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 

@@ -132,7 +132,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
         </p>
       </header>
 
-      <DuplicateNotice itemId={item.id} />
+      <DuplicateNotice itemId={item.id} title={item.title} quantity={item.quantity} db={db} />
 
       {item.status === "needs_review" ? (
         <div className="flex flex-col gap-3">
@@ -203,7 +203,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       <CatalogBlock item={item} />
 
-      <section className="flex flex-col gap-3">
+      <section id="edit" className="flex scroll-mt-4 flex-col gap-3">
         <h2 className="text-lg font-semibold">Edit details</h2>
         <ItemForm item={item} locations={db.select({ id: locations.id, name: locations.name }).from(locations).orderBy(locations.name).all()} />
       </section>

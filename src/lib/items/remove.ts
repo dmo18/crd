@@ -11,6 +11,8 @@ function photoFiles(rows: { file: string; original: string | null }[]): string[]
 /**
  * Removes an item's database rows for good. Only purge (bin.ts) and merging
  * duplicates call this; the Delete buttons move items to Recently deleted.
+ * A merge moves the item's photos to the kept record first (and keeps a
+ * scan that still has photos), so for a merge this returns no files.
  * Reads the item whether or not it is in the bin. Call inside a transaction. When it was the
  * last item left from its scan (for example the last card cut out of a
  * multi-card photo), the scan's own photos and the scan itself go too.

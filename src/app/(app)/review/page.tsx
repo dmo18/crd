@@ -4,12 +4,12 @@ import { DeleteFailedScans } from "@/components/items/DeleteFailedScans";
 import { CatalogCandidates } from "@/components/items/CatalogCandidates";
 import { ItemRow } from "@/components/items/ItemRow";
 import { ReviewRowActions } from "@/components/items/ReviewRowActions";
-import { Button, Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
 import { requireOwner } from "@/lib/auth/guard";
 import { scans } from "@/db/schema";
-import { findDuplicates, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount, reviewItems } from "@/lib/items/duplicates";
-import { mergeDuplicateAction } from "@/lib/items/review-actions";
+import { findDuplicateMatches, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount, reviewItems } from "@/lib/items/duplicates";
+import { DuplicateNotice } from "@/components/items/DuplicateNotice";
 import { summarize } from "@/lib/scans/view";
 import { NOT_CHECKED_LINES } from "@/lib/catalog/candidates";
 import { reviewCatalogView } from "@/lib/catalog/pick";
@@ -63,22 +63,13 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
       ) : (
         <ul className="flex flex-col gap-4">
           {summaries.map((item) => {
-            const dup = findDuplicates(item.id, db)[0];
+            const dup = findDuplicateMatches(item.id, db)[0] ?? null;
             const cat = catalogViews.get(item.id) ?? null;
             return (
               <li key={item.id}>
                 <Card className="flex flex-col gap-3 p-3">
                   <ItemRow item={item} />
-                  {dup ? (
-                    <form action={mergeDuplicateAction} className="flex flex-col gap-2">
-                      <input type="hidden" name="sourceId" value={item.id} />
-                      <input type="hidden" name="targetId" value={dup.id} />
-                      <p className="text-sm">You already have this card (quantity {dup.quantity}).</p>
-                      <Button type="submit" variant="secondary" aria-label={`Add ${item.title} to the one you already have`}>
-                        Add to existing
-                      </Button>
-                    </form>
-                  ) : null}
+                  {dup ? <DuplicateNotice itemId={item.id} title={item.title} quantity={item.quantity} match={dup} /> : null}
                   {cat ? (
                     <CatalogCandidates
                       id={item.id} title={item.title} view={cat}

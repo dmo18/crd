@@ -92,16 +92,27 @@ describe("deleting an item forever (purge)", () => {
 });
 
 describe("merge of the last card of a scan", () => {
-  it("also removes the scan's source photo", async () => {
-    const { itemIds } = await multiScan();
+  it("moves the card's own photo and keeps the scan with its whole-sheet photo", async () => {
+    const { scanId, itemIds, files } = await multiScan();
     db.update(items).set({ status: "needs_review" }).where(eq(items.id, itemIds[1]!)).run();
     // Make the second card a duplicate of an older confirmed one from somewhere else.
     const target = db.insert(items).values({ kind: "card", title: "T", status: "confirmed", year: 1989, brand: "Upper Deck", cardNumber: "2", player: "Ken Griffey Jr." }).returning().get();
     await forever(itemIds[0]!);
+    const crop = db.select().from(images).where(eq(images.itemId, itemIds[1]!)).get()!;
+    const left = db.select().from(images).all();
     const r = mergeInto(itemIds[1]!, target.id, db);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.files.length).toBeGreaterThanOrEqual(2);
-    expect(db.select().from(scans).all()).toHaveLength(0);
+    expect(r).toEqual({ ok: true, targetId: target.id, movedPhotos: 1 });
+    // No photo row and no file is gone: the crop is on the kept record, the sheet stays with its scan.
+    expect(db.select().from(images).all()).toHaveLength(left.length);
+    expect(db.select().from(images).where(eq(images.id, crop.id)).get()).toMatchObject({ itemId: target.id, scanId: null, file: crop.file });
+    expect(db.select().from(images).where(eq(images.role, "source")).get()).toMatchObject({ scanId, itemId: null });
+    expect(db.select().from(scans).all()).toHaveLength(1);
+    for (const f of left.flatMap((x) => [x.file, x.thumbFile])) expect(await exists(f), f).toBe(true);
+    expect(files.length).toBeGreaterThan(0);
+    // Deleting the kept record later takes its photos, but not the scan's sheet.
+    await forever(target.id);
+    expect(await exists(crop.file)).toBe(false);
+    expect(db.select().from(images).where(eq(images.role, "source")).all()).toHaveLength(1);
   });
 });
 
