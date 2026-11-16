@@ -7,6 +7,7 @@ import {
   type BulkOpAction, type Item, type ItemStatus,
 } from "@/db/schema";
 import { formatCents } from "@/lib/money";
+import { markOwnerChanges } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
 import { CONDITION_LABELS, RARITY_LABELS, SPORT_LABELS } from "./labels";
 import { liveItem } from "./live";
@@ -219,6 +220,9 @@ function withTitle(row: Item, patch: Columns, change: Omit<Change, "patch" | "ol
   const title = buildTitle(merged);
   const fullPatch: Columns = { ...patch };
   if (title !== row.title) fullPatch.title = title;
+  // A field the owner changes is theirs from now on. Undo puts the old marks back with the old values.
+  const fieldSources = markOwnerChanges(row, patch);
+  if (fieldSources !== undefined) fullPatch.fieldSources = fieldSources;
   const old: Columns = {};
   for (const key of Object.keys(fullPatch) as (keyof Item)[]) old[key] = row[key];
   return { ...change, patch: fullPatch, old };

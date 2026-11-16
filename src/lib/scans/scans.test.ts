@@ -77,6 +77,22 @@ describe("processScan", () => {
     expect(db.select().from(valuations).get()).toMatchObject({ itemId: item.id, valueCents: 6000 });
   });
 
+  it("keeps what the scanner first read and marks its fields as reading", async () => {
+    const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    const at = new Date("2026-11-16T12:00:00Z");
+    await processScan(scanId, { db, recognizer: fake([{ ...griffey, confidence: 0.5, team: null }]), now: () => at });
+    const item = db.select().from(items).where(eq(items.scanId, scanId)).get()!;
+    expect(JSON.parse(item.fieldSources!)).toEqual({
+      sport: "reading", year: "reading", brand: "reading", setName: "reading", cardNumber: "reading", player: "reading",
+    });
+    expect(JSON.parse(item.firstSuggestion!)).toEqual({
+      v: 1, confidence: 0.5, reader: "fake-model", at: at.getTime(),
+      fields: { sport: "baseball", year: 1989, brand: "Upper Deck", setName: "Upper Deck", cardNumber: "1", player: "Ken Griffey Jr." },
+    });
+    expect(item.catalogCardId).toBeNull();
+    expect(item.catalogCandidates).toBeNull();
+  });
+
   it("sends unsure results to review", async () => {
     const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
     await processScan(scanId, { db, recognizer: fake([{ ...griffey, confidence: 0.5 }]) });

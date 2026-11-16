@@ -94,7 +94,7 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     const at = now();
     db.transaction((tx) => {
       recognized.forEach((r: RecognizedItem, i: number) => {
-        const row = itemFromRecognition(r, { scanId, locationId: scan.locationId, valueSource, now: at });
+        const row = itemFromRecognition(r, { scanId, locationId: scan.locationId, valueSource, now: at, recognizer: recognizer.name });
         const item = tx.insert(items).values(row).returning({ id: items.id }).get();
         if (row.estValueCents != null) {
           tx.insert(valuations).values({

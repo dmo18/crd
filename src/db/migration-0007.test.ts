@@ -46,12 +46,13 @@ describe("migration 0007", () => {
     const before = old.prepare("select * from items order by id").all();
     old.close();
 
-    // The app's normal start: opens the file and applies what is missing (0007).
+    // The app's normal start: opens the file and applies what is missing (0007 and later).
     const db = createDb(file);
     const raw = (db as unknown as { $client: Database.Database }).$client;
     const after = raw.prepare("select * from items order by id").all() as Record<string, unknown>[];
     expect(after).toHaveLength(2);
-    after.forEach((row, i) => expect(row).toEqual({ ...(before[i] as object), deleted_at: null }));
+    // Later migrations add their own columns (see migration-0008.test.ts); every 0006 value must still be there.
+    after.forEach((row, i) => expect(row).toMatchObject({ ...(before[i] as object), deleted_at: null }));
     expect(raw.prepare("select count(*) as n from images").get()).toEqual({ n: 1 });
     expect(raw.prepare("select count(*) as n from valuations").get()).toEqual({ n: 1 });
     expect(raw.prepare("select count(*) as n from scans").get()).toEqual({ n: 1 });

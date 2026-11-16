@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 /** Shared value lists. Import these instead of retyping the strings. */
 export const ITEM_KINDS = ["card", "sealed", "bulk"] as const;
@@ -21,6 +21,8 @@ export const AUDIT_EVENTS = [
   "signed_out", "signed_out_others", "export_csv", "item_deleted", "failed_scans_deleted", "items_merged",
   "location_deleted", "backup_note", "item_restored",
   "bulk_edit", "bulk_delete", "bulk_restore", "bulk_purge", "bulk_undo",
+  "connection_key_saved", "connection_key_removed", "connection_tested", "connection_switched", "catalog_answers_cleared",
+  "catalog_card_added", "catalog_card_linked", "catalog_card_unlinked",
 ] as const;
 /** Sign-in and account events. The rest are changes to the collection. */
 export const SECURITY_AUDIT_EVENTS = [
@@ -30,6 +32,15 @@ export const SECURITY_AUDIT_EVENTS = [
 export const AUDIT_OUTCOMES = ["ok", "failed", "blocked"] as const;
 /** The kinds of change a bulk operation can make (Manage records). */
 export const BULK_OP_ACTIONS = ["set", "replace", "move", "status", "delete"] as const;
+
+/** Card catalogs a confirmed card can come from. */
+export const CATALOG_SOURCES = ["mycardfolio"] as const;
+/** The item fields a catalog card can fill. Their origin is tracked in `fieldSources`. */
+export const CATALOG_FIELDS = ["sport", "year", "brand", "setName", "cardNumber", "player", "team", "variation"] as const;
+/** Where the value of one field came from. */
+export const FIELD_SOURCES = ["catalog", "owner", "reading", "key_list", "wikidata"] as const;
+/** Kinds of stored outside answers. Each kind has its own keeping time (src/lib/outside). */
+export const OUTSIDE_CACHE_KINDS = ["search", "search_empty", "card", "checklist"] as const;
 
 export type ItemKind = (typeof ITEM_KINDS)[number];
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
@@ -46,6 +57,10 @@ export type AttemptKind = (typeof ATTEMPT_KINDS)[number];
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 export type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
 export type BulkOpAction = (typeof BULK_OP_ACTIONS)[number];
+export type CatalogSource = (typeof CATALOG_SOURCES)[number];
+export type CatalogField = (typeof CATALOG_FIELDS)[number];
+export type FieldSource = (typeof FIELD_SOURCES)[number];
+export type OutsideCacheKind = (typeof OUTSIDE_CACHE_KINDS)[number];
 
 const now = sql`(unixepoch() * 1000)`;
 const bool = (name: string) => integer(name, { mode: "boolean" }).notNull().default(false);
@@ -162,6 +177,16 @@ export const items = sqliteTable("items", {
   /** The owner's own figure. When set it wins over the estimate. */
   manualValueCents: integer("manual_value_cents"),
 
+  // Catalog (all null on items from before the catalog)
+  /** The confirmed catalog card this item is, when linked. */
+  catalogCardId: integer("catalog_card_id").references((): AnySQLiteColumn => catalogCards.id, { onDelete: "set null" }),
+  /** JSON, written once when a scan makes the item and never changed: what the scanner first read. See src/lib/catalog/sources.ts. */
+  firstSuggestion: text("first_suggestion"),
+  /** JSON: for each filled catalog field where its value came from. Null or a missing field means the owner. */
+  fieldSources: text("field_sources"),
+  /** JSON: at most 5 slim candidates from the last catalog look up, with the time. */
+  catalogCandidates: text("catalog_candidates"),
+
   createdAt: ts("created_at").notNull().default(now),
   updatedAt: ts("updated_at").notNull().default(now),
   /**
@@ -177,6 +202,7 @@ export const items = sqliteTable("items", {
   index("items_scan_idx").on(t.scanId),
   index("items_location_idx").on(t.locationId),
   index("items_deleted_idx").on(t.deletedAt),
+  index("items_catalog_card_idx").on(t.catalogCardId),
 ]);
 
 /**
@@ -324,7 +350,111 @@ export const playerFacts = sqliteTable("player_facts", {
   fetchedAt: ts("fetched_at").notNull(),
 });
 
+/**
+ * One row per card the owner confirmed (picked in Review, added from Search,
+ * or linked later). Never a row for a card the owner only looked at.
+ */
+export const catalogCards = sqliteTable("catalog_cards", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  /** Built only by canonicalKey() in src/lib/catalog/key.ts. */
+  canonicalKey: text("canonical_key").notNull().unique(),
+  sport: text("sport", { enum: SPORTS }).notNull(),
+  year: integer("year").notNull(),
+  brand: text("brand").notNull(),
+  setName: text("set_name"),
+  /** As printed, e.g. "11T". */
+  cardNumber: text("card_number"),
+  player: text("player").notNull(),
+  team: text("team"),
+  variation: text("variation"),
+  /** True when it came from a clean catalog entry, false for an unverified listing. */
+  verified: bool("verified"),
+  /** JSON: for each filled field where its value came from. */
+  fieldSources: text("field_sources"),
+  createdAt: ts("created_at").notNull().default(now),
+  updatedAt: ts("updated_at").notNull().default(now),
+});
+
+/** Where a catalog card was found, so the source can be cited. One card may have several rows. */
+export const catalogSources = sqliteTable("catalog_sources", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  catalogCardId: integer("catalog_card_id").notNull().references(() => catalogCards.id, { onDelete: "cascade" }),
+  source: text("source", { enum: CATALOG_SOURCES }).notNull(),
+  /** The card's id at the source, e.g. "551033". */
+  sourceId: text("source_id").notNull(),
+  /** The card's page at the source. */
+  url: text("url"),
+  sourceSetId: text("source_set_id"),
+  fetchedAt: ts("fetched_at").notNull(),
+}, (t) => [
+  uniqueIndex("catalog_sources_source_id_uq").on(t.source, t.sourceId),
+  index("catalog_sources_card_idx").on(t.catalogCardId),
+]);
+
+/** Counters for calls that leave the server: one row per source and UTC day. */
+export const outsideUsage = sqliteTable("outside_usage", {
+  source: text("source").notNull(),
+  /** UTC day, e.g. "2026-11-16". */
+  day: text("day").notNull(),
+  calls: integer("calls").notNull().default(0),
+  /** Answers taken from the store instead of a call. */
+  storeHits: integer("store_hits").notNull().default(0),
+  errors: integer("errors").notNull().default(0),
+  /** Times the source asked us to slow down. */
+  slowDowns: integer("slow_downs").notNull().default(0),
+  /** Calls not made because a cap was reached. */
+  skipped: integer("skipped").notNull().default(0),
+  waitMs: integer("wait_ms").notNull().default(0),
+}, (t) => [primaryKey({ columns: [t.source, t.day] })]);
+
+/** The state of one outside source. A missing row means switched on and never used. */
+export const outsideState = sqliteTable("outside_state", {
+  source: text("source").primaryKey(),
+  /** Switched on or off by the owner. */
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  pausedUntil: ts("paused_until"),
+  lastOkAt: ts("last_ok_at"),
+  /** A few plain words. Never a URL with a key, never an answer body. */
+  lastError: text("last_error"),
+  updatedAt: ts("updated_at").notNull().default(now),
+});
+
+/** Outside answers kept for a bounded time to spare the source repeat calls. */
+export const outsideCache = sqliteTable("outside_cache", {
+  /** SHA-256 of source, tool and normalized arguments. */
+  key: text("key").primaryKey(),
+  source: text("source").notNull(),
+  kind: text("kind", { enum: OUTSIDE_CACHE_KINDS }).notNull(),
+  body: text("body").notNull(),
+  fetchedAt: ts("fetched_at").notNull(),
+  expiresAt: ts("expires_at").notNull(),
+  /** Size of the body in bytes. */
+  bytes: integer("bytes").notNull(),
+}, (t) => [
+  index("outside_cache_source_idx").on(t.source),
+  index("outside_cache_expires_idx").on(t.expiresAt),
+  index("outside_cache_fetched_idx").on(t.fetchedAt),
+]);
+
+/** Keys for outside sources, encrypted (src/lib/outside/keys.ts). Never the key itself. */
+export const connectionKeys = sqliteTable("connection_keys", {
+  source: text("source").primaryKey(),
+  /** Base64 text. */
+  ciphertext: text("ciphertext").notNull(),
+  iv: text("iv").notNull(),
+  authTag: text("auth_tag").notNull(),
+  /** The last 4 characters of the key, shown as "ends in ...4f2a". */
+  last4: text("last4").notNull(),
+  savedAt: ts("saved_at").notNull(),
+  lastTestAt: ts("last_test_at"),
+  /** A few plain words on how the last test went. */
+  lastTestResult: text("last_test_result"),
+});
+
 export type Item = typeof items.$inferSelect;
+export type CatalogCardRow = typeof catalogCards.$inferSelect;
+export type NewCatalogCardRow = typeof catalogCards.$inferInsert;
+export type CatalogSourceRow = typeof catalogSources.$inferSelect;
 export type NewItem = typeof items.$inferInsert;
 export type Scan = typeof scans.$inferSelect;
 export type ImageRow = typeof images.$inferSelect;

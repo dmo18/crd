@@ -11,6 +11,7 @@ const row = (over: Partial<Item> = {}): Item => ({
   containerType: null, description: null, pullList: null, quantity: 1, locationId: null, notes: null, confidence: null,
   aiNotes: null, estLowCents: null, estHighCents: null, estValueCents: null, valueSource: null, valueBasis: null,
   valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(), deletedAt: null,
+  catalogCardId: null, firstSuggestion: null, fieldSources: null, catalogCandidates: null,
   ...over,
 });
 
@@ -22,6 +23,16 @@ const parse = (csv: string) => {
 const none = new Map<number, string>();
 
 describe("itemsToCsv", () => {
+  it("leaves the catalog columns out", () => {
+    const plain = itemsToCsv([row({ player: "Ken Griffey Jr." })], none);
+    const linked = itemsToCsv([row({
+      player: "Ken Griffey Jr.", catalogCardId: 77123, firstSuggestion: "{\"v\":1,\"secretmark\":1}",
+      fieldSources: "{\"player\":\"reading\"}", catalogCandidates: "{\"candidatemark\":1}",
+    })], none);
+    expect(linked).toBe(plain);
+    expect(parse(linked)[0]).not.toMatch(/catalog|suggestion|source[s ]|candidate/i);
+  });
+
   it("empty collection gives only the header, with BOM and CRLF", () => {
     const csv = itemsToCsv([], none);
     expect(csv.startsWith("﻿")).toBe(true);

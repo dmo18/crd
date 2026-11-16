@@ -1,5 +1,6 @@
 import type { NewItem, ValueSource } from "@/db/schema";
 import { REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
+import { buildFirstSuggestion, sourcesFor } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
 
 /** The single figure used for totals: the middle of the estimated range. */
@@ -8,29 +9,38 @@ export function midpointCents(low: number | null, high: number | null): number |
   return low ?? high ?? null;
 }
 
-/** Turns one recognized item into a database row (not yet saved). */
+/**
+ * Turns one recognized item into a database row (not yet saved). The fields
+ * the scanner filled are marked `reading`, and what it read is kept once in
+ * `firstSuggestion`, which no later change touches.
+ */
 export function itemFromRecognition(
   r: RecognizedItem,
-  ctx: { scanId: number; locationId: number | null; valueSource: ValueSource; now: Date },
+  ctx: { scanId: number; locationId: number | null; valueSource: ValueSource; now: Date; recognizer?: string | null },
 ): NewItem {
   const low = r.estimate?.lowCents ?? null;
   const high = r.estimate?.highCents ?? null;
   const value = midpointCents(low, high);
   const isCard = r.kind === "card";
-  return {
-    kind: r.kind,
-    status: r.confidence >= REVIEW_THRESHOLD ? "confirmed" : "needs_review",
-    scanId: ctx.scanId,
-    title: buildTitle(r),
+  const read = {
     sport: r.sport,
     year: r.year,
-    yearEnd: r.kind === "bulk" ? r.yearEnd : null,
     brand: r.brand,
     setName: r.setName,
     cardNumber: isCard ? r.cardNumber : null,
     player: isCard ? r.player : null,
     team: isCard ? r.team : null,
     variation: r.variation,
+  };
+  return {
+    kind: r.kind,
+    status: r.confidence >= REVIEW_THRESHOLD ? "confirmed" : "needs_review",
+    scanId: ctx.scanId,
+    title: buildTitle(r),
+    ...read,
+    yearEnd: r.kind === "bulk" ? r.yearEnd : null,
+    fieldSources: sourcesFor(read, "reading"),
+    firstSuggestion: buildFirstSuggestion(read, { confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now }),
     isRookie: isCard && r.isRookie,
     isError: isCard && r.isError,
     isParallel: isCard && r.isParallel,

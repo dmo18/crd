@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { CONDITIONS, items, locations, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS, valuations, type Item } from "@/db/schema";
+import { markOwnerChanges } from "@/lib/catalog/sources";
 import { MAX_QUANTITY } from "@/lib/items/duplicates";
 import { softDeleteItems } from "@/lib/items/bin";
 import { liveItem } from "@/lib/items/live";
@@ -114,6 +115,9 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
   for (const key of editableFields(existing.kind)) {
     (patch as Record<string, unknown>)[key] = (rest as Record<string, unknown>)[key];
   }
+  // Every catalog field the owner changed is theirs from now on. `firstSuggestion` is never part of a patch.
+  const fieldSources = markOwnerChanges(existing, patch);
+  if (fieldSources !== undefined) patch.fieldSources = fieldSources;
   const merged = { ...existing, ...patch };
   const now = new Date();
   db.transaction((tx) => {

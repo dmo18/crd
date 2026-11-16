@@ -50,6 +50,22 @@ export function describeAudit(row: { event: AuditEvent; ip: string; detail: stri
       return d ? `Deleted forever: ${d}` : "Deleted items forever";
     case "bulk_undo":
       return d ? `Undid a change to many items: ${d}` : "Undid a change to many items";
+    case "connection_key_saved":
+      return d ? `Saved a key for a connection: ${d}` : "Saved a key for a connection";
+    case "connection_key_removed":
+      return d ? `Removed the key of a connection: ${d}` : "Removed the key of a connection";
+    case "connection_tested":
+      return d ? `Tested a connection: ${d}` : "Tested a connection";
+    case "connection_switched":
+      return d ? `Switched a connection on or off: ${d}` : "Switched a connection on or off";
+    case "catalog_answers_cleared":
+      return d ? `Cleared stored catalog answers: ${d}` : "Cleared stored catalog answers";
+    case "catalog_card_added":
+      return d ? `Added a card from the catalog: ${d}` : "Added a card from the catalog";
+    case "catalog_card_linked":
+      return d ? `Linked an item to a catalog card: ${d}` : "Linked an item to a catalog card";
+    case "catalog_card_unlinked":
+      return d ? `Unlinked an item from its catalog card: ${d}` : "Unlinked an item from its catalog card";
     case "backup_note":
       return d ? `Backup: ${d}` : "Backup note";
   }
