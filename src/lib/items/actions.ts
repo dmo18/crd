@@ -20,6 +20,9 @@ const TEXT_FIELDS = [
   "sealState", "estCount", "containerType", "description", "quantity", "notes", "manualValue", "locationId",
 ] as const;
 
+/** The two serial boxes and the four way rookie answer, sent only by the form that has them. */
+const NEW_FIELDS = ["serialCopy", "serialEdition", "rookieState"] as const;
+
 function str(v: FormDataEntryValue | null): string {
   return typeof v === "string" ? v : "";
 }
@@ -37,6 +40,7 @@ export async function saveItemAction(_prev: SaveState, formData: FormData): Prom
   const input: Record<string, unknown> = {};
   for (const key of TEXT_FIELDS) input[key] = str(formData.get(key));
   for (const key of FLAGS) input[key] = formData.get(key) === "on";
+  for (const key of NEW_FIELDS) if (formData.has(key)) input[key] = str(formData.get(key));
   const result = updateItem(id.data, input);
   if (!result.ok) return { status: "error", errors: result.errors };
   revalidateItem(id.data);
@@ -49,6 +53,7 @@ export async function createItemAction(_prev: SaveState, formData: FormData): Pr
   const input: Record<string, unknown> = {};
   for (const key of TEXT_FIELDS) input[key] = str(formData.get(key));
   for (const key of FLAGS) input[key] = formData.get(key) === "on";
+  for (const key of NEW_FIELDS) if (formData.has(key)) input[key] = str(formData.get(key));
   const result = createItem(str(formData.get("kind")), input);
   if (!result.ok) return { status: "error", errors: result.errors };
   revalidateItem(result.id);

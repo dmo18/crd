@@ -150,6 +150,18 @@ describe("SampleRecognizer", () => {
   });
 });
 
+describe("SampleRecognizer rookie evidence", () => {
+  it("passes its own key list answer explicitly, so a rookie card is a key list hit and others are not", async () => {
+    const items = await run("multi", [photo("evidence-seed", "source")]);
+    for (const item of items) {
+      if (item.kind !== "card") continue;
+      expect(item.evidence?.keyCard === undefined).toBe(!item.isRookie);
+      expect(item.evidence?.serial).toBeUndefined();
+    }
+    expect(items.some((i) => i.evidence?.keyCard)).toBe(true);
+  });
+});
+
 describe("getRecognizer", () => {
   it("returns the sample recognizer under test settings", () => {
     const r = getRecognizer();

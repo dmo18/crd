@@ -112,9 +112,11 @@ type ExtrasResult = { ok: true; patch: Partial<Item> } | { ok: false; errors: Re
  *   source `owner` and through withRookie(), so `isRookie` never disagrees.
  */
 export function ownerSerialAndRookie(
-  existing: Pick<Item, "isRookie" | "rookieState" | "rookieSource" | "rookieNote"> | null,
+  existing: Pick<Item, "isRookie" | "rookieState" | "rookieSource" | "rookieNote" | "serialNumber"> | null,
   data: { serialNumber: string | null; isRookie: boolean },
   input: Record<string, unknown>,
+  /** True when the caller sent the one serial text box at all (even empty). */
+  serialTextSent = true,
 ): ExtrasResult {
   const extras = ownerExtrasSchema.safeParse({ serialCopy: input.serialCopy, serialEdition: input.serialEdition, rookieState: input.rookieState });
   if (!extras.success) return { ok: false, errors: { form: "Some fields could not be read. Try again." } };
@@ -128,6 +130,14 @@ export function ownerSerialAndRookie(
       return { ok: false, errors: { [String(issue?.path[0] ?? "serialEdition")]: issue?.message ?? "Check the serial number." } };
     }
     patch = serialColumns(parts.data);
+    if (parts.data === null && data.serialNumber !== null) {
+      // The two boxes are empty but the one text box was filled: it splits, or it is kept whole ("1 of 1 promo").
+      const split = splitSerial(data.serialNumber);
+      patch = split ? serialColumns(split) : { serialNumber: data.serialNumber, serialCopy: null, serialEdition: null };
+    } else if (parts.data === null && !serialTextSent && existing?.serialNumber && !splitSerial(existing.serialNumber)) {
+      // Empty boxes never wipe an old whole text that does not split. Only the text box (or a form without boxes) can change it.
+      patch = {};
+    }
   } else {
     const parts = splitSerial(data.serialNumber);
     patch = parts ? serialColumns(parts) : { serialNumber: data.serialNumber, serialCopy: null, serialEdition: null };
@@ -171,10 +181,11 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
     (patch as Record<string, unknown>)[key] = (rest as Record<string, unknown>)[key];
   }
   if (existing.kind === "card") {
-    const extras = ownerSerialAndRookie(existing, rest, raw);
+    const extras = ownerSerialAndRookie(existing, rest, raw, typeof (input as Record<string, unknown> | null)?.serialNumber === "string");
     if (!extras.ok) return extras;
     // The rookie mark changes only through withRookie(); the plain flag from the form never goes in alone.
     delete patch.isRookie;
+    delete patch.serialNumber;
     Object.assign(patch, extras.patch);
   }
   // Every catalog field the owner changed is theirs from now on. `firstSuggestion` is never part of a patch.

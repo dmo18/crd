@@ -95,3 +95,69 @@ export function serialColumns(parts: SerialParts | null): { serialCopy: string |
   if (!parts) return { serialCopy: null, serialEdition: null, serialNumber: null };
   return { serialCopy: parts.copy, serialEdition: parts.edition, serialNumber: formatSerial(parts.copy, parts.edition) };
 }
+
+// ---------------------------------------------------------------------------
+// What the scanner read: only ever a suggestion (`items.serialSuggested`)
+
+/** What `items.serialSuggested` holds: the read, the line it stood in, and whether it is weak. */
+export type SerialSuggestion = { copy: string | null; edition: string; line: string; weak: boolean; why: string[] };
+
+const suggestionSchema = z.object({
+  copy: z.string().regex(DIGITS).nullable().catch(null),
+  edition: z.string().regex(DIGITS),
+  line: z.string().max(80).catch(""),
+  weak: z.boolean().catch(true),
+  why: z.array(z.string().max(120)).max(5).catch([]),
+});
+
+export const BEFORE_1990 = "Cards before 1990 were almost never numbered";
+
+/**
+ * The suggestion to store for a scan, or null for none. `read` is what the
+ * reader saw (free reader) or only the text the paid reader answered. The
+ * text must split cleanly and obey the serial rules, else nothing is stored.
+ * A read from a card before 1990 is always weak.
+ */
+export function suggestionFromRead(
+  read: { text: string; line?: string; weak?: boolean; why?: string[] } | null | undefined,
+  year: number | null | undefined,
+): SerialSuggestion | null {
+  if (!read) return null;
+  const why = [...(read.why ?? [])];
+  let weak = read.weak ?? false;
+  let parts: SerialParts | null = null;
+  const r = parseSerial(read.text);
+  if (r.ok && r.parts) parts = r.parts;
+  else {
+    // A copy above the edition is refused by parseSerial but is still worth showing as a weak read.
+    const m = SERIAL_TEXT.exec(read.text.trim());
+    if (!m || !m[1] || !DIGITS.test(m[2])) return null;
+    if (Number(m[1]) !== 0 && Number(m[2]) >= 1 && Number(m[1]) > Number(m[2])) {
+      parts = { copy: m[1], edition: String(Number(m[2])) };
+      weak = true;
+      if (!why.some((w) => w.includes("higher"))) why.push("the copy number is higher than the print run");
+    } else return null;
+  }
+  if (!parts) return null;
+  if (year != null && year < 1990) {
+    weak = true;
+    if (!why.includes(BEFORE_1990)) why.push(BEFORE_1990);
+  }
+  return { copy: parts.copy, edition: parts.edition, line: (read.line ?? read.text).slice(0, 80), weak, why };
+}
+
+/** Reads the stored suggestion back. Null when there is none or it cannot be read. */
+export function parseSuggestion(raw: string | null | undefined): SerialSuggestion | null {
+  if (!raw) return null;
+  try {
+    const r = suggestionSchema.safeParse(JSON.parse(raw));
+    return r.success ? r.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the screen says: "045/100". */
+export function suggestionText(s: Pick<SerialSuggestion, "copy" | "edition">): string {
+  return formatSerial(s.copy, s.edition) ?? "";
+}

@@ -244,7 +244,10 @@ function cardItem(card: CatalogCard, rand: SeededRandom, sourceIndex: number, bo
       basis: `${SAMPLE_BASIS} Rough raw value for this card in ${cond.condition.replace("_", " ")} condition.`,
     },
   };
-  return recognizedItemSchema.parse(input);
+  const item: RecognizedItem = recognizedItemSchema.parse(input);
+  // The sample list is a hand written key card list: its rookie answer is passed on as a key list hit.
+  if (card.isRookie) item.evidence = { keyCard: { isRookie: true } };
+  return item;
 }
 
 /** Lays out n boxes as a tidy grid with small gaps. */

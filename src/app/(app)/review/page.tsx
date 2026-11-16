@@ -13,6 +13,10 @@ import { mergeDuplicateAction } from "@/lib/items/review-actions";
 import { summarize } from "@/lib/scans/view";
 import { NOT_CHECKED_LINES } from "@/lib/catalog/candidates";
 import { reviewCatalogView } from "@/lib/catalog/pick";
+import { SerialAsk } from "@/components/items/SerialAsk";
+import { RookieAsk } from "@/components/items/RookieAsk";
+import { rookieAsk } from "@/lib/items/rookie";
+import { parseSuggestion } from "@/lib/items/serial";
 
 export const metadata = { title: "Review" };
 
@@ -36,6 +40,7 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
   const rows = reviewItems(LIMIT, db);
   const summaries = summarize(rows, db);
   const now = new Date();
+  const rowById = new Map(rows.map((r) => [r.id, r]));
   const catalogViews = new Map(rows.map((r) => [r.id, reviewCatalogView(r, db, now)]));
 
   return (
@@ -80,6 +85,17 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
                       notCheckedLine={cat.reason ? NOT_CHECKED_LINES[cat.reason] : null}
                     />
                   ) : null}
+                  {(() => {
+                    const full = rowById.get(item.id);
+                    const serial = full ? parseSuggestion(full.serialSuggested) : null;
+                    const rookie = full ? rookieAsk(full) : null;
+                    return (
+                      <>
+                        {serial ? <SerialAsk itemId={item.id} title={item.title} view={serial} /> : null}
+                        {rookie ? <RookieAsk itemId={item.id} title={item.title} view={rookie} /> : null}
+                      </>
+                    );
+                  })()}
                   <ReviewRowActions id={item.id} title={item.title} />
                 </Card>
               </li>

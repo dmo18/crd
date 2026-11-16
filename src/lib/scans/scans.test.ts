@@ -70,7 +70,7 @@ describe("processScan", () => {
     expect(scan).toMatchObject({ status: "done", itemCount: 1, recognizer: "fake-model", error: null });
     const item = db.select().from(items).get()!;
     expect(item).toMatchObject({
-      kind: "card", status: "confirmed", title: "1989 Upper Deck #1 Ken Griffey Jr.", isRookie: true, locationId: loc.id,
+      kind: "card", status: "confirmed", title: "1989 Upper Deck #1 Ken Griffey Jr.", isRookie: false, rookieState: null, rookieSource: "reading", locationId: loc.id,
       estLowCents: 4000, estHighCents: 8000, estValueCents: 6000, valueSource: "ai_estimate",
     });
     expect(db.select().from(images).all().every((i) => i.itemId === item.id)).toBe(true);

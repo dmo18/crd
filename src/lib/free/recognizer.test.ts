@@ -148,6 +148,28 @@ describe("FreeRecognizer with fake parts", () => {
   });
 });
 
+describe("FreeRecognizer passes what it saw as evidence, not as fields", () => {
+  const run = async (text: string) => {
+    const r = new FreeRecognizer({ reader: reader({ 5: text }), lookup: async () => null });
+    return (await r.recognize({ mode: "single", photos: [photo(5)] }))[0];
+  };
+  it("a key list hit is passed explicitly, and a card off the list has none", async () => {
+    const hit = await run("NO. 414\nFRANK THOMAS\nFIRST BASE\n© 1990 THE TOPPS COMPANY, INC.");
+    expect(hit.evidence?.keyCard).toEqual({ isRookie: true });
+    const off = await run("NO. 99\nSOME PLAYER\n© 1990 SCORE");
+    expect(off.evidence?.keyCard).toBeUndefined();
+  });
+  it("a read serial number travels as evidence with its line; the item field stays empty", async () => {
+    const item = await run("NO. 414\nFRANK THOMAS\n045/100\n© 1995 THE TOPPS COMPANY, INC.");
+    expect(item.serialNumber).toBeNull();
+    expect(item.evidence?.serial).toMatchObject({ text: "045/100", line: "045/100", weak: false });
+  });
+  it("the word ROOKIE and REPRINT travel as evidence", async () => {
+    const item = await run("NO. 414\nFRANK THOMAS\nROOKIE\nREPRINT\n© 1990 THE TOPPS COMPANY, INC.");
+    expect(item.evidence).toMatchObject({ rookieWord: true, reprint: true });
+  });
+});
+
 describe("FreeRecognizer end to end with the real text reader", () => {
   afterAll(() => closeTextReader());
   it("reads a printed card back and identifies it", async () => {

@@ -39,6 +39,10 @@ export type ParsedCard = {
   certNumber: string | null;
   /** "045/100" style. */
   serialNumber: string | null;
+  /** The same read with its line and whether it is weak (only a suggestion). */
+  serialRead: SerialRead | null;
+  /** The word ROOKIE or RC was read on the card. */
+  rookieWord: boolean;
   /** Autograph wording read (AUTO, SIGNATURES, PSA/DNA, CERTIFIED AUTOGRAPH). */
   isAutograph: boolean;
   /** The card says REPRINT: it is not the original card. */
@@ -1420,18 +1424,65 @@ function slabLabelYearBrand(lines: Line[]): { year: number; brand: string } | nu
   return null;
 }
 
-function findSerial(lines: Line[]): string | null {
+/** What the reader took for a serial number. Only ever a suggestion: the owner answers it. */
+export type SerialRead = {
+  /** "045/100", as read. */
+  text: string;
+  copy: string;
+  edition: string;
+  /** The line of text it stood in. */
+  line: string;
+  /** True when it is a weaker guess: no "Yes" button, only "Fix it" and "No". */
+  weak: boolean;
+  /** Plain reasons for a weak read. */
+  why: string[];
+};
+
+/** Set sizes seen on checklist and set count lines. "1 of 792" is a set count, not a serial number. */
+const KNOWN_SET_SIZES = new Set([100, 110, 132, 198, 200, 220, 264, 300, 330, 350, 396, 400, 440, 500, 528, 550, 600, 660, 700, 726, 792, 800, 825]);
+const SERIAL_LOOK_ALIKE: Record<string, string> = { O: "0", o: "0", l: "1", I: "1", S: "5", B: "8" };
+/** The card number line: "No. 45" or "#45" with one number only. */
+const NUMBER_ONLY_LINE = /^\s*(?:NO\.?|#)\s*\d{1,4}\s*$/i;
+
+/**
+ * Looks for a print run mark like "045/100". Dropped, never guessed: a card
+ * number line ("No. 45", "#45"), a read that equals the card number, a date
+ * ("5/12/68"), a set count on a CARD or CHECKLIST line, a stat row, and a
+ * line with BORN. A read is weak when a digit came from a look alike letter,
+ * when the copy is above the edition, or when the card is from before 1990.
+ */
+export function findSerialRead(lines: Line[], opts: { cardNumber?: string | null; year?: number | null } = {}): SerialRead | null {
+  const cardNumber = opts.cardNumber?.replace(/\s+/g, "") ?? null;
   for (const l of lines) {
     if (/\bBORN\b/.test(l.lz) || /\d+\/\d+\/\d+/.test(l.raw)) continue;
-    const re = /(^|[^\d/])(\d{1,4})\s*\/\s*(\d{2,4})(?![\d/])/g;
+    if (NUMBER_ONLY_LINE.test(l.raw) || isStatRow(l)) continue;
+    const re = /(^|[^\w/])([0-9OolISB]{1,4})\s*\/\s*([0-9OolISB]{2,4})(?![\w/])/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(l.raw)) !== null) {
-      const a = Number(m[2]);
-      const b = Number(m[3]);
-      if (a >= 1 && b >= 10 && a <= b) return `${m[2]}/${m[3]}`;
+      if (!/\d/.test(m[2] + m[3])) continue;
+      const alike = /[OolISB]/.test(m[2] + m[3]);
+      const fix = (t: string) => t.replace(/[OolISB]/g, (c) => SERIAL_LOOK_ALIKE[c]);
+      const copy = fix(m[2]);
+      const edition = fix(m[3]);
+      const a = Number(copy);
+      const b = Number(edition);
+      if (a < 1 || b < 10) continue;
+      const text = `${copy}/${edition}`;
+      if (cardNumber && cardNumber === text) continue;
+      if (/\bCARDS?\b|\bCHECKLIST\b/.test(l.up) && (KNOWN_SET_SIZES.has(b) || /\bCHECKLIST\b/.test(l.up))) continue;
+      const why: string[] = [];
+      if (alike) why.push("a letter that looks like a digit was read as a digit");
+      if (a > b) why.push("the copy number is higher than the print run");
+      if (opts.year != null && opts.year < 1990) why.push("Cards before 1990 were almost never numbered");
+      return { text, copy, edition, line: l.raw.trim().slice(0, 80), weak: why.length > 0, why };
     }
   }
   return null;
+}
+
+/** The card says ROOKIE or RC. Only a hint: it may be a Rated Rookie or an All-Star Rookie cup. */
+function readsRookieWord(lines: Line[]): boolean {
+  return lines.some((l) => /\bROOKIES?\b|\bRC\b/.test(l.up));
 }
 
 // ---------------------------------------------------------------------------
@@ -1454,6 +1505,8 @@ function emptyCard(): ParsedCard {
     grade: null,
     certNumber: null,
     serialNumber: null,
+    serialRead: null,
+    rookieWord: false,
     isAutograph: false,
     isReprint: false,
     evidence: [],
@@ -1510,8 +1563,10 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
     ev.push(`Read graded holder label${what ? `: ${what}` : ""}${slab.certNumber ? `, cert ${slab.certNumber}` : ""}`);
   }
 
-  out.serialNumber = findSerial(lines);
-  if (out.serialNumber) ev.push(`Read serial number ${out.serialNumber}`);
+  out.serialRead = findSerialRead(lines, { cardNumber: out.cardNumber, year: out.year });
+  out.serialNumber = out.serialRead?.text ?? null;
+  if (out.serialRead) ev.push(`Read ${out.serialRead.text}, maybe a serial number (the owner is asked)`);
+  out.rookieWord = readsRookieWord(lines);
 
   const allUp = lines.map((l) => l.up).join(" ");
   // "AUT" is the short form on Beckett and PSA/DNA authentication labels.

@@ -285,6 +285,8 @@ describe("parseCardText", () => {
       grade: null,
       certNumber: null,
       serialNumber: null,
+      serialRead: null,
+      rookieWord: false,
       isAutograph: false,
       isReprint: false,
       evidence: [],

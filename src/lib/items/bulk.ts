@@ -254,6 +254,8 @@ function planChanges(tx: Tx, rows: Item[], action: BulkAction, ctx: Ctx): Change
           const target = checked.value ? "yes" : "no";
           const shown = readRookie(row).state;
           if (shown === target) continue;
+          // "No" on a card with no rookie mark has nothing to change, so it is not counted or written.
+          if (target === "no" && shown === null) continue;
           out.push(withTitle(row, withRookie(target, "owner"), {
             id: row.id, title: row.title, before: shown ? ROOKIE_STATE_LABELS[shown] : EMPTY, after: ROOKIE_STATE_LABELS[target],
           }));
@@ -498,6 +500,8 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
       // Deleted since, or edited since: leave it as the owner left it.
       if (row.deletedAt != null || row.updatedAt.getTime() > at) { skipped += 1; continue; }
       const old = fromJson(oldJson) as Columns;
+      // A change stored before Milestone 11 saved only `isRookie`: those items had no rookie state then, so the new columns go back to empty with it.
+      if ("isRookie" in old && !("rookieState" in old)) Object.assign(old, { rookieState: null, rookieSource: null, rookieNote: null });
       if (typeof old.locationId === "number" && !locationIds.has(old.locationId)) { skipped += 1; continue; }
       tx.update(items).set(old as Partial<Item>).where(eq(items.id, id)).run();
       if ("manualValueCents" in old && old.manualValueCents != null && old.manualValueCents !== row.manualValueCents) {

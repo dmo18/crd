@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { items, type Item, type NewItem } from "@/db/schema";
-import { recognizedItemSchema } from "@/lib/recognition/types";
+import { recognizedItemSchema, type ReadEvidence } from "@/lib/recognition/types";
 import { applyBulk, previewBulk, undoBulk } from "./bulk";
 import { createItem } from "./create";
 import { itemFromRecognition } from "./from-recognition";
@@ -84,15 +84,17 @@ describe("state and isRookie never disagree after any write path", () => {
     const all = [old, plain, listed, disputed, sealed];
     const before = all.map(get);
     const preview = previewBulk({ ids: all }, { type: "set", field: "isRookie", value: false, onlyEmpty: false }, db);
-    expect(preview).toMatchObject({ count: 3 });
-    expect("samples" in preview && preview.samples.map((s) => [s.before, s.after])).toEqual([["Yes", "No"], ["(empty)", "No"], ["Disputed", "No"]]);
+    // "No" on a card with no rookie mark has nothing to change: it is neither counted nor written.
+    expect(preview).toMatchObject({ count: 2 });
+    expect("samples" in preview && preview.samples.map((s) => [s.before, s.after])).toEqual([["Yes", "No"], ["Disputed", "No"]]);
     const r = applyBulk({ ids: all }, { type: "set", field: "isRookie", value: false, onlyEmpty: false }, db, new Date(5000));
-    expect(r).toMatchObject({ changed: 3 });
-    for (const id of [old, plain, disputed]) expect(get(id)).toMatchObject({ isRookie: false, rookieState: "no", rookieSource: "owner", rookieNote: null });
+    expect(r).toMatchObject({ changed: 2 });
+    for (const id of [old, disputed]) expect(get(id)).toMatchObject({ isRookie: false, rookieState: "no", rookieSource: "owner", rookieNote: null });
+    expect(get(plain)).toMatchObject({ isRookie: false, rookieState: null, rookieSource: null });
     expect(get(listed)).toMatchObject({ rookieState: "no", rookieSource: "key_list", rookieNote: "Not his first card" });
     expect(get(sealed)).toMatchObject({ rookieState: null, isRookie: false });
     for (const id of all) expect(inStep(get(id))).toBe(true);
-    expect(undoBulk((r as { opId: number }).opId, db, new Date(6000))).toMatchObject({ restored: 3 });
+    expect(undoBulk((r as { opId: number }).opId, db, new Date(6000))).toMatchObject({ restored: 2 });
     const noTime = (r: Item) => ({ ...r, updatedAt: null });
     expect(all.map(get).map(noTime)).toEqual(before.map(noTime));
 
@@ -115,24 +117,32 @@ describe("state and isRookie never disagree after any write path", () => {
     expect(db.select().from(items).all().every((row) => row.rookieState === "yes" && row.isRookie)).toBe(true);
   });
 
-  it("a scan: a key list hit writes state and source; nothing else writes a state", () => {
-    const read = (over: Record<string, unknown>) => recognizedItemSchema.parse({ kind: "card", confidence: 0.9, player: "Ken Griffey Jr.", ...over });
-    const ctx = (recognizer: string) => ({ scanId: 1, locationId: null, valueSource: "ai_estimate" as const, now: new Date(1000), recognizer });
-    expect(itemFromRecognition(read({ isRookie: true, rarityNotes: "The best known rookie card of the era." }), ctx("free")))
-      .toMatchObject({ isRookie: true, rookieState: "yes", rookieSource: "key_list", rookieNote: "The best known rookie card of the era." });
-    expect(itemFromRecognition(read({ isRookie: true }), ctx("sample"))).toMatchObject({ isRookie: true, rookieState: "yes", rookieSource: "key_list", rookieNote: null });
-    // Not on the list (or listed as not a rookie): nothing recorded, as before.
-    expect(itemFromRecognition(read({ isRookie: false }), ctx("free"))).toMatchObject({ isRookie: false, rookieState: null, rookieSource: null });
-    // The paid AI's yes is kept as today, without a recorded source.
-    expect(itemFromRecognition(read({ isRookie: true }), ctx("claude-sonnet"))).toMatchObject({ isRookie: true, rookieState: null, rookieSource: null });
+  it("a scan: a key list hit (passed explicitly) writes state, source and the fixed note; nothing else writes a state", () => {
+    const read = (over: Record<string, unknown>, evidence?: ReadEvidence) => ({ ...recognizedItemSchema.parse({ kind: "card", confidence: 0.9, player: "Ken Griffey Jr.", ...over }), ...(evidence ? { evidence } : {}) });
+    const ctx = { scanId: 1, locationId: null, valueSource: "ai_estimate" as const, now: new Date(1000) };
+    const hit = { keyCard: { isRookie: true } };
+    // The reader's name no longer decides anything: only the explicit hit does.
+    for (const recognizer of ["free", "sample", "claude-sonnet", null]) {
+      expect(itemFromRecognition(read({ isRookie: true }, hit), { ...ctx, recognizer }), String(recognizer))
+        .toMatchObject({ isRookie: true, rookieState: "yes", rookieSource: "key_list", rookieNote: "On the built-in key card list" });
+    }
+    expect(itemFromRecognition(read({}, { keyCard: { isRookie: false } }), ctx)).toMatchObject({ isRookie: false, rookieState: "no", rookieSource: "key_list", rookieNote: "On the built-in key card list" });
+    // A card marked as a reprint is "not sure", never "yes".
+    expect(itemFromRecognition(read({ isRookie: true }, { keyCard: { isRookie: true }, reprint: true }), ctx)).toMatchObject({ isRookie: false, rookieState: "unknown", rookieSource: "key_list" });
+    // No hit: nothing is written as a state. The paid AI's yes and a read word wait as a question.
+    expect(itemFromRecognition(read({ isRookie: false }), { ...ctx, recognizer: "free" })).toMatchObject({ isRookie: false, rookieState: null, rookieSource: null, rookieNote: null });
+    expect(itemFromRecognition(read({ isRookie: true }), { ...ctx, recognizer: "claude-sonnet" })).toMatchObject({ isRookie: false, rookieState: null, rookieSource: "reading" });
+    expect(itemFromRecognition(read({}, { rookieWord: true }), ctx)).toMatchObject({ isRookie: false, rookieState: null, rookieSource: "reading" });
     // Sealed and bulk never carry the mark.
-    expect(itemFromRecognition(recognizedItemSchema.parse({ kind: "sealed", confidence: 0.9, isRookie: true }), ctx("free"))).toMatchObject({ isRookie: false, rookieState: null });
-    // A scan writes nothing else new.
-    const row = itemFromRecognition(read({ isRookie: true, serialNumber: "045/100" }), ctx("free"));
-    expect(row.serialNumber).toBe("045/100");
-    for (const k of ["serialCopy", "serialEdition", "serialSuggested", "versionState", "versionSource", "versionOptions", "keptApartFrom"] as const) expect(row[k], k).toBeUndefined();
+    expect(itemFromRecognition(recognizedItemSchema.parse({ kind: "sealed", confidence: 0.9, isRookie: true }), ctx)).toMatchObject({ isRookie: false, rookieState: null, rookieSource: null });
+    // A scan never writes the serial number or its parts, or anything else of this milestone.
+    const row = itemFromRecognition(read({ isRookie: true, serialNumber: "045/100" }, hit), ctx);
+    expect(row.serialNumber).toBeNull();
+    expect(row.serialCopy).toBeNull();
+    expect(row.serialEdition).toBeNull();
+    for (const k of ["versionState", "versionSource", "versionOptions", "keptApartFrom"] as const) expect(row[k], k).toBeUndefined();
     const id = db.insert(items).values({ ...row, scanId: null }).returning({ id: items.id }).get().id;
-    expect(get(id)).toMatchObject({ rookieState: "yes", isRookie: true, serialCopy: null, versionState: null });
+    expect(get(id)).toMatchObject({ rookieState: "yes", isRookie: true, serialNumber: null, serialCopy: null, versionState: null });
     expect(inStep(get(id))).toBe(true);
   });
 });

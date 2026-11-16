@@ -8,6 +8,7 @@ import {
   type Box,
   type RecognitionPhoto,
   type RecognitionRequest,
+  type ReadEvidence,
   type RecognizedItem,
   type RecognizedCatalog,
   type RecognizedItemInput,
@@ -366,7 +367,8 @@ export class FreeRecognizer implements Recognizer {
       variation: null,
       isRookie: key?.isRookie ?? false,
       isError: false,
-      serialNumber: parsed.serialNumber,
+      // A read serial number is only a suggestion: it travels in `evidence`, never as a field.
+      serialNumber: null,
       isAutograph: parsed.isAutograph,
       grader: parsed.grader,
       grade: parsed.grade,
@@ -439,7 +441,18 @@ export class FreeRecognizer implements Recognizer {
     item.confidence = Math.min(0.95, confidence);
     const names: string[] = [];
     for (const n of [player, ...parsed.playerCandidates]) if (n && !names.includes(n)) names.push(n);
-    return { item: recognizedItemSchema.parse(item), names: names.slice(0, 5) };
+    const evidence: ReadEvidence = {};
+    // The key list hit is passed on explicitly; the item layer never guesses it from the reader's name.
+    if (key) evidence.keyCard = { isRookie: key.isRookie };
+    if (parsed.isReprint) evidence.reprint = true;
+    if (parsed.rookieWord) evidence.rookieWord = true;
+    if (parsed.serialRead) {
+      const { text, line, weak, why } = parsed.serialRead;
+      evidence.serial = { text, line, weak, why };
+    }
+    const done: RecognizedItem = recognizedItemSchema.parse(item);
+    if (Object.keys(evidence).length > 0) done.evidence = evidence;
+    return { item: done, names: names.slice(0, 5) };
   }
 
   private async product(photos: RecognitionPhoto[], kind: "sealed" | "bulk"): Promise<RecognizedItem> {

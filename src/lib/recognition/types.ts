@@ -94,7 +94,24 @@ export type RecognizedCatalog =
   | { status: "none" }
   | { status: "not_checked"; reason: NotCheckedReason };
 
-export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog };
+/**
+ * What the reader saw that the owner is asked about. Like `catalog`, never part
+ * of the zod schema: the server adds it after the reading, so an AI answer can
+ * never bring one in. Nothing here is written to the item as a fact: a scan
+ * writes only a key list hit for the rookie mark, and never a serial number.
+ */
+export type ReadEvidence = {
+  /** The built-in key card list had this very card. `isRookie` is the list's answer. Passed explicitly, never inferred. */
+  keyCard?: { isRookie: boolean };
+  /** The card says REPRINT. */
+  reprint?: boolean;
+  /** The word ROOKIE or RC was read on the card. */
+  rookieWord?: boolean;
+  /** A serial number as the reader saw it. */
+  serial?: { text: string; line: string; weak: boolean; why: string[] };
+};
+
+export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence };
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;
 
 export const recognitionResultSchema = z.object({

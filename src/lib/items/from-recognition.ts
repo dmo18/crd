@@ -3,23 +3,8 @@ import { REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
 import { serializeCatalog } from "@/lib/catalog/candidates";
 import { buildFirstSuggestion, sourcesFor } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
-import { withRookie, type RookieColumns } from "./rookie";
-
-/**
- * Readers whose rookie mark comes only from a hand written key card list
- * (the free reader's built-in list, and the sample mode's list). Their
- * "rookie" is a key list hit and is recorded with source `key_list`. Any
- * other reader (the paid AI) writes `isRookie` as before with no recorded
- * source; a catalog tag or a read word never writes the mark (task 11.4
- * turns them into suggestions).
- */
-const KEY_LIST_READERS = new Set(["free", "sample"]);
-
-function rookieFromScan(r: RecognizedItem, recognizer: string | null | undefined): RookieColumns {
-  const isCard = r.kind === "card";
-  if (isCard && r.isRookie && recognizer && KEY_LIST_READERS.has(recognizer)) return withRookie("yes", "key_list", r.rarityNotes);
-  return { isRookie: isCard && r.isRookie, rookieState: null, rookieSource: null, rookieNote: null };
-}
+import { rookieFromScan } from "./rookie";
+import { suggestionFromRead } from "./serial";
 
 /** The single figure used for totals: the middle of the estimated range. */
 export function midpointCents(low: number | null, high: number | null): number | null {
@@ -53,6 +38,9 @@ export function itemFromRecognition(
     team: isCard ? r.team : null,
     variation: r.variation,
   };
+  const serial = isCard ? (r.evidence?.serial ?? (r.serialNumber ? { text: r.serialNumber } : null)) : null;
+  const suggestion = suggestionFromRead(serial, r.year);
+  const serialSuggestion = suggestion ? JSON.stringify(suggestion) : null;
   const cat = isCard ? r.catalog : undefined;
   let catalogCandidates: string | null = null;
   if (cat?.status === "candidates") catalogCandidates = serializeCatalog({ status: "candidates", items: cat.candidates }, ctx.now);
@@ -68,13 +56,17 @@ export function itemFromRecognition(
     fieldSources: sourcesFor(read, "reading"),
     catalogCandidates,
     firstSuggestion: buildFirstSuggestion(read, { confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now }),
-    ...rookieFromScan(r, ctx.recognizer),
+    ...rookieFromScan(isCard, r.isRookie, r.evidence),
     isError: isCard && r.isError,
     isParallel: isCard && r.isParallel,
     isInsert: isCard && r.isInsert,
     isAutograph: isCard && r.isAutograph,
     isMemorabilia: isCard && r.isMemorabilia,
-    serialNumber: isCard ? r.serialNumber : null,
+    // A scan never writes the serial number or its parts: what it read waits for the owner's answer.
+    serialNumber: null,
+    serialCopy: null,
+    serialEdition: null,
+    serialSuggested: serialSuggestion,
     rarityTier: r.rarityTier,
     rarityNotes: r.rarityNotes,
     condition: isCard ? r.condition : null,

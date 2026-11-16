@@ -14,7 +14,7 @@ import { ItemBadges } from "@/components/items/ItemRow";
 import { ItemForm } from "@/components/items/ItemForm";
 import { Button, Card, Notice } from "@/components/ui";
 import { getDb } from "@/db";
-import { images, items, locations } from "@/db/schema";
+import { images, items, locations, type Item } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
@@ -26,11 +26,28 @@ import { VersionPicker } from "@/components/catalog/VersionPicker";
 import { versionView } from "@/lib/catalog/version-view";
 import { CHOOSE_VERSION_LINE, shownValue } from "@/lib/items/value-line";
 import { formatCents } from "@/lib/money";
+import { SerialAsk } from "@/components/items/SerialAsk";
+import { RookieAsk } from "@/components/items/RookieAsk";
+import { rookieAsk } from "@/lib/items/rookie";
+import { parseSuggestion } from "@/lib/items/serial";
 
 export const metadata = { title: "Item" };
 
 const ROLE_NAMES = { front: "Front", back: "Back", crop: "Close-up", source: "Original photo" } as const;
 const ROLE_ORDER = { crop: 0, front: 1, back: 2, source: 3 } as const;
+
+/** The two questions a scan leaves: serial number and rookie card. They show only when there is something to answer. */
+function AskBlock({ item }: { item: Item }) {
+  const serial = parseSuggestion(item.serialSuggested);
+  const rookie = rookieAsk(item);
+  if (!serial && !rookie) return null;
+  return (
+    <section className="flex flex-col gap-3" aria-label="Questions about this card">
+      {serial ? <SerialAsk itemId={item.id} title={item.title} view={serial} /> : null}
+      {rookie ? <RookieAsk itemId={item.id} title={item.title} view={rookie} /> : null}
+    </section>
+  );
+}
 
 export default async function ItemPage({ params }: { params: Promise<{ id: string }> }) {
   await requireOwner();
@@ -181,6 +198,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
       ) : null}
 
       {item.kind === "card" ? <VersionPicker itemId={item.id} title={item.title} view={versionView(item)} /> : null}
+
+      {item.kind === "card" ? <AskBlock item={item} /> : null}
 
       <CatalogBlock item={item} />
 
