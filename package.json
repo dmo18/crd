@@ -10,6 +10,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
+    "bench:reading": "tsx scripts/reading-bench.ts",
     "secret": "node scripts/secret.mjs",
     "set-password": "node scripts/set-password.mjs",
     "check": "npm run lint && npm run typecheck && npm test"
