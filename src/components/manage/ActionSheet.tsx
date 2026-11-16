@@ -57,6 +57,9 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
     if (d && !d.open) d.showModal();
   }, []);
 
+  // Whichever way the dialog closes (the sheet is removed), focus goes back to the "Actions" button.
+  useEffect(() => () => document.getElementById("manage-actions-button")?.focus(), []);
+
   const isFlag = (FLAGS as readonly string[]).includes(field);
   const changeField = (f: string) => {
     setField(f);
@@ -68,8 +71,8 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
   function buildAction(): unknown {
     switch (kind) {
       case "set": {
-        if (isFlag) return { type: "set", field, value: value !== "no", onlyEmpty };
-        return { type: "set", field, value: clear ? "" : value, onlyEmpty: clear ? false : onlyEmpty };
+        if (isFlag) return { type: "set", field, value: value !== "no", onlyEmpty, clear: false };
+        return { type: "set", field, value: clear ? "" : value, onlyEmpty: clear ? false : onlyEmpty, clear };
       }
       case "replace": return { type: "replace", field, find, replace, matchCase };
       case "move": return { type: "move", locationId: locationId === "none" ? null : Number(locationId) };
@@ -105,6 +108,7 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
     void run(() => applyBulkAction({ selection: applySelection(), action: buildAction() }), (r: { changed: number; summary: string }) =>
       onDone({ changed: r.changed, summary: r.summary, kind }));
 
+  const needsValue = kind === "set" && !isFlag && !clear && value.trim() === "";
   const idp = `sheet-${kind}`;
   return (
     <dialog
@@ -208,7 +212,7 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
           {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
           <p className="text-sm text-muted">Next you see how many items would change. Nothing changes until you confirm.</p>
           <div className="flex flex-col gap-3 sm:flex-row">
-            <Button type="submit" variant={kind === "delete" ? "danger" : "primary"} disabled={busy}>{busy ? "Checking" : "See what would change"}</Button>
+            <Button type="submit" variant={kind === "delete" ? "danger" : "primary"} disabled={busy || needsValue}>{busy ? "Checking" : "See what would change"}</Button>
             <Button type="button" variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
           </div>
         </form>

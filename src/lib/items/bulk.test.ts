@@ -34,7 +34,7 @@ const ok = <T extends object>(r: T | { error: string }): T => {
   return r;
 };
 const ids = (...list: number[]): Selection => ({ ids: list });
-const set = (field: string, value: unknown, onlyEmpty = false) => ({ type: "set", field, value, onlyEmpty }) as BulkAction;
+const set = (field: string, value: unknown, onlyEmpty = false, clear = false) => ({ type: "set", field, value, onlyEmpty, clear }) as BulkAction;
 
 describe("checking what the browser sends", () => {
   it("refuses an empty selection, 501 ids, unknown filters and bad values", () => {
@@ -104,9 +104,22 @@ describe("set a field", () => {
     expect(get(b).updatedAt).toEqual(T0);
   });
 
+  it("needs an explicit Clear to empty a field", () => {
+    const a = add({ notes: "keep me" });
+    const msg = { error: "Pick a value, or tick Clear this field." };
+    for (const v of ["", "  ", null, undefined]) expect(previewBulk(ids(a), set("notes", v), db)).toEqual(msg);
+    expect(applyBulk(ids(a), set("notes", ""), db)).toEqual(msg);
+    expect(get(a).notes).toBe("keep me");
+    // Clear ignores any value sent with it.
+    ok(applyBulk(ids(a), set("notes", "ignored", false, true), db));
+    expect(get(a).notes).toBeNull();
+    expect(previewBulk(ids(a), set("quantity", "", false, true), db)).toHaveProperty("error");
+    expect(parseAction({ type: "set", field: "notes", value: "", onlyEmpty: false })).toMatchObject({ clear: false });
+  });
+
   it("clears a field, sets flags, enums and quantity, and refuses bad values", () => {
     const a = add({ notes: "old note", condition: "mint" });
-    expect(ok(applyBulk(ids(a), set("notes", null), db)).summary).toBe("Cleared notes on 1 item");
+    expect(ok(applyBulk(ids(a), set("notes", null, false, true), db)).summary).toBe("Cleared notes on 1 item");
     expect(get(a).notes).toBeNull();
     ok(applyBulk(ids(a), set("isRookie", true), db));
     expect(get(a).isRookie).toBe(true);

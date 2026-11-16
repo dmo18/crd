@@ -1,12 +1,13 @@
 "use client";
 
+import { LocalTime } from "@/components/activity/LocalTime";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Button, Notice } from "@/components/ui";
 import { emptyBinAction, purgeItemsAction, restoreItemsAction } from "@/lib/items/bulk-actions";
 
-export type BinRow = { id: number; title: string; thumb: string | null; deletedOn: string; left: string };
+export type BinRow = { id: number; title: string; thumb: string | null; deletedAt: number; left: string };
 type Ask = "restore" | "forever" | "empty" | null;
 
 const items = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "item" : "items"}`;
@@ -66,7 +67,7 @@ export function DeletedList({ rows, total, page, pageCount, prev, next }: {
               ) : <div aria-hidden="true" className="size-16 shrink-0 rounded-lg bg-surface-2" />}
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <p className="font-semibold break-words">{r.title}</p>
-                <p className="text-sm text-muted">Deleted {r.deletedOn}</p>
+                <p className="text-sm text-muted">Deleted <LocalTime ms={r.deletedAt} /></p>
                 <p className="text-sm text-muted">{r.left.startsWith("Removed") ? r.left : `${r.left} left`}</p>
               </div>
             </Link>

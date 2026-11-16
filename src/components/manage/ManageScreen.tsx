@@ -157,7 +157,7 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
             <p className="font-semibold" role="status">{items(count)} selected</p>
             <div className="flex gap-2">
               <Button type="button" variant="ghost" onClick={() => sel.clear()}>Clear</Button>
-              <Button type="button" aria-expanded={menu} onClick={() => setMenu(!menu)}>{menu ? "Hide actions" : "Actions"}</Button>
+              <Button type="button" id="manage-actions-button" aria-expanded={menu} onClick={() => setMenu(!menu)}>{menu ? "Hide actions" : "Actions"}</Button>
             </div>
           </div>
           {menu ? (

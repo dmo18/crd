@@ -89,7 +89,13 @@ export async function restoreItemsAction(ids: unknown): Promise<{ restored: numb
   await requireOwner();
   const r = idsSchema.safeParse(ids);
   if (!r.success) return { error: r.error.issues[0]?.message ?? "Select the items again." };
-  const restored = restoreItems(r.data);
+  let restored: number;
+  try {
+    restored = restoreItems(r.data);
+  } catch (err) {
+    log.error("bulk_restore_failed", { error: errorKind(err) });
+    return FAILED;
+  }
   if (restored > 0) await auditThisRequest("bulk_restore", "ok", items(restored));
   revalidateAll();
   return { restored };

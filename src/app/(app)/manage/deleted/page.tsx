@@ -26,7 +26,7 @@ export default async function DeletedPage({ searchParams }: { searchParams: Prom
   const thumbs = thumbsFor(found.map((r) => r.id), db);
   const rows: BinRow[] = found.map((r) => ({
     id: r.id, title: r.title, thumb: thumbs.get(r.id) ?? null,
-    deletedOn: r.deletedAt!.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
+    deletedAt: r.deletedAt!.getTime(),
     left: timeLeftText(daysLeft(r.deletedAt!)).replace("It is removed for good in ", "").replace(/\.$/, "").replace("It will be removed for good soon", "Removed soon"),
   }));
 

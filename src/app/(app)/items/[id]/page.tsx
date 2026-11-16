@@ -1,3 +1,4 @@
+import { LocalTime } from "@/components/activity/LocalTime";
 import { asc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
 import { GradingAdvice } from "@/components/items/GradingAdvice";
@@ -36,12 +37,11 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   if (!item) notFound();
   if (item.deletedAt) {
     const left = daysLeft(item.deletedAt);
-    const on = item.deletedAt.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
     return (
       <div className="flex flex-col gap-4">
         <h1 className="text-2xl font-bold text-balance break-words">{item.title}</h1>
         <Card className="flex flex-col gap-3">
-          <p className="font-semibold">This was deleted on {on}.</p>
+          <p className="font-semibold">This was deleted on <LocalTime ms={item.deletedAt.getTime()} />.</p>
           <p className="text-sm text-muted">
             {timeLeftText(left)} Restore it to bring it back with its photos and value history.
           </p>

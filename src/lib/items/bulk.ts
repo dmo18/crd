@@ -66,7 +66,7 @@ export type SelectionFilters = Omit<InventoryFilters, "sort" | "page">;
 
 export type Selection = { ids: number[] } | { filters: InventoryFilters | SelectionFilters; expectedCount: number; fingerprint?: string };
 export type BulkAction =
-  | { type: "set"; field: BulkField; value: unknown; onlyEmpty: boolean }
+  | { type: "set"; field: BulkField; value: unknown; onlyEmpty: boolean; clear?: boolean }
   | { type: "replace"; field: BulkTextField; find: string; replace: string; matchCase: boolean }
   | { type: "move"; locationId: number | null }
   | { type: "status"; status: ItemStatus }
@@ -89,7 +89,7 @@ const selectionSchema = z.union([
 ]);
 
 export const bulkActionSchema = z.discriminatedUnion("type", [
-  z.strictObject({ type: z.literal("set"), field: z.enum(BULK_FIELDS), value: z.unknown(), onlyEmpty: z.boolean() }),
+  z.strictObject({ type: z.literal("set"), field: z.enum(BULK_FIELDS), value: z.unknown(), onlyEmpty: z.boolean(), clear: z.boolean().default(false) }),
   z.strictObject({
     type: z.literal("replace"), field: z.enum(BULK_TEXT_FIELDS),
     find: z.string().min(1, "Type the text to find.").max(100, "Keep the text to find under 100 characters."),
@@ -232,7 +232,12 @@ function planChanges(tx: Tx, rows: Item[], action: BulkAction, ctx: Ctx): Change
       if (action.onlyEmpty && (isFlag || action.field === "quantity")) {
         return { error: "\"Only fill where empty\" does not work for yes or no fields or quantity. Turn it off." };
       }
-      const checked = checkValue(action.field, action.value);
+      const clearing = action.clear === true;
+      if (clearing && (isFlag || action.field === "quantity")) return { error: "That field cannot be cleared." };
+      const given = !(action.value === null || action.value === undefined || (typeof action.value === "string" && action.value.trim() === ""));
+      if (!clearing && !isFlag && !given) return { error: "Pick a value, or tick Clear this field." };
+      // When clearing, any value sent is ignored.
+      const checked = checkValue(action.field, clearing ? "" : action.value);
       if ("error" in checked) return checked;
       const col = column(action.field);
       let yearClash = 0;
@@ -318,7 +323,7 @@ export function summarize(action: BulkAction, n: number, ctx: Ctx): string {
   switch (action.type) {
     case "set": {
       const label = FIELD_LABELS[action.field];
-      const clears = action.value === null || action.value === undefined || action.value === "";
+      const clears = action.clear === true;
       return `${clears ? "Cleared" : "Set"} ${label} on ${count(n)}`;
     }
     case "replace": return `Replaced text in ${FIELD_LABELS[action.field]} on ${count(n)}`;

@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { and, eq, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
-import { bulkOps, items } from "@/db/schema";
+import { items } from "@/db/schema";
 import { env } from "@/lib/env";
 import { errorKind, log } from "@/lib/log";
 import { pruneOps } from "./bulk";
+import { scrubUndo } from "./undo-scrub";
+
+export { scrubUndo };
 import { deletePhotoFiles, removeItemRows } from "./remove";
 
 /** Days an item stays in Recently deleted before it is removed for good. */
@@ -60,42 +63,19 @@ export function restoreItems(ids: number[], db: Db = getDb(), now: Date = new Da
 }
 
 /**
- * Takes purged item ids out of every saved bulk undo entry, so their old text
- * does not linger. An operation left with no items is deleted. Call inside a
- * transaction.
- */
-function scrubUndo(tx: Db, removedIds: number[]): void {
-  if (removedIds.length === 0) return;
-  const gone = new Set(removedIds);
-  for (const op of tx.select({ id: bulkOps.id, undo: bulkOps.undo }).from(bulkOps).all()) {
-    let parsed: { items?: unknown };
-    try {
-      parsed = JSON.parse(op.undo);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(parsed.items)) continue;
-    const kept = parsed.items.filter((e) => !(Array.isArray(e) && gone.has(e[0] as number)));
-    if (kept.length === parsed.items.length) continue;
-    if (kept.length === 0) tx.delete(bulkOps).where(eq(bulkOps.id, op.id)).run();
-    else tx.update(bulkOps).set({ undo: JSON.stringify({ ...parsed, items: kept }) }).where(eq(bulkOps.id, op.id)).run();
-  }
-}
-
-/**
  * Removes items in Recently deleted for good: their rows in one transaction,
  * then their photo files. Only items already in the bin are touched; a live
  * item in the list is skipped. Returns how many were removed.
  */
 export async function purgeItems(ids: number[], db: Db = getDb()): Promise<number> {
-  const parts = chunks(ids);
-  if (parts.length === 0) return 0;
-  const { removed, files } = db.transaction((tx) => {
-    const t = tx as unknown as Db;
-    let count = 0;
-    const toDelete: string[] = [];
-    const removedIds: number[] = [];
-    for (const part of parts) {
+  let total = 0;
+  // One short transaction per batch, files deleted after each, so the app is never blocked for long.
+  for (const part of chunks(ids)) {
+    const { removed, files } = db.transaction((tx) => {
+      const t = tx as unknown as Db;
+      let count = 0;
+      const toDelete: string[] = [];
+      const removedIds: number[] = [];
       // Reads deleted rows on purpose (purge).
       const inBin = t.select({ id: items.id }).from(items)
         .where(and(inArray(items.id, part), isNotNull(items.deletedAt))).all();
@@ -103,12 +83,13 @@ export async function purgeItems(ids: number[], db: Db = getDb()): Promise<numbe
         const f = removeItemRows(t, id);
         if (f) { count += 1; toDelete.push(...f); removedIds.push(id); }
       }
-    }
-    scrubUndo(t, removedIds);
-    return { removed: count, files: toDelete };
-  }, { behavior: "immediate" });
-  await deletePhotoFiles(files);
-  return removed;
+      scrubUndo(t, removedIds);
+      return { removed: count, files: toDelete };
+    }, { behavior: "immediate" });
+    await deletePhotoFiles(files);
+    total += removed;
+  }
+  return total;
 }
 
 /** Removes for good every item deleted at least BIN_DAYS days before `now`. Returns how many. */

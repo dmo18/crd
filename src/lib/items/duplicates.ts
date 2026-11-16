@@ -2,6 +2,7 @@ import { and, asc, count, eq, inArray, isNull, ne } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items, valuations, type Item } from "@/db/schema";
 import { liveItem } from "./live";
+import { scrubUndo } from "./undo-scrub";
 import { removeItemRows } from "./remove";
 
 const norm = (v: string | null | undefined): string | null => {
@@ -119,6 +120,7 @@ export function mergeInto(sourceId: number, targetId: number, db: Db = getDb()):
     // A hard delete on purpose, not the bin: the source's count now lives in
     // the target, so restoring the source would count it twice.
     const files = removeItemRows(tx as unknown as Db, sourceId) ?? [];
+    scrubUndo(tx as unknown as Db, [sourceId]);
     return { ok: true, targetId, files };
   });
 }

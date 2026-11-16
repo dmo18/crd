@@ -327,3 +327,16 @@ describe("scan activity and the bin", () => {
     expect(getScanView(one, db)!.inBin).toBe(0);
   });
 });
+
+describe("purging a big bin", () => {
+  it("removes more than 500 items, in batches", async () => {
+    const db2 = createDb(":memory:");
+    const n = 1203;
+    db2.insert(items).values(Array.from({ length: n }, (_, i) => ({ kind: "card" as const, title: `T${i}`, deletedAt: new Date() }))).run();
+    const all = db2.select({ id: items.id }).from(items).all().map((r) => r.id);
+    const txs = vi.spyOn(db2, "transaction");
+    expect(await purgeItems(all, db2)).toBe(n);
+    expect(txs).toHaveBeenCalledTimes(3);
+    expect(db2.select({ id: items.id }).from(items).all()).toHaveLength(0);
+  });
+});

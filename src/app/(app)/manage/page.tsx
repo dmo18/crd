@@ -35,7 +35,7 @@ export default async function ManagePage({ searchParams }: { searchParams: Promi
   const op = latestUndoable(db);
   const undo = op ? {
     id: op.id, summary: op.summary,
-    madeOn: op.at.toLocaleString("en-US", { month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }),
+    madeAt: op.at.getTime(),
   } : null;
   // Reads deleted rows on purpose: only to count what is in Recently deleted.
   const inBin = db.select({ n: count() }).from(items).where(isNotNull(items.deletedAt)).get()?.n ?? 0;

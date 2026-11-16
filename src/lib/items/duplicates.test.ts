@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
-import { images, items, valuations, type NewItem } from "@/db/schema";
+import { bulkOps, images, items, valuations, type NewItem } from "@/db/schema";
+import { applyBulk } from "./bulk";
 import { findDuplicates, MAX_QUANTITY, mergeInto, reviewCount } from "./duplicates";
 
 let db: Db;
@@ -120,5 +121,19 @@ describe("reviewCount", () => {
     add({ status: "needs_review" });
     add();
     expect(reviewCount(db)).toBe(1);
+  });
+});
+
+describe("merge and bulk undo", () => {
+  it("scrubs the merged-away item from saved undo entries", () => {
+    const a = add();
+    const b = add();
+    const c = add({ cardNumber: "9" });
+    const r = applyBulk({ ids: [a, b, c] }, { type: "set", field: "notes", value: "secret", onlyEmpty: false, clear: false }, db);
+    expect("error" in r).toBe(false);
+    expect(mergeInto(a, b, db).ok).toBe(true);
+    const undo = JSON.parse(db.select().from(bulkOps).all()[0].undo) as { items: number[][] };
+    expect(undo.items.map((e) => e[0]).sort()).toEqual([b, c].sort());
+    expect(db.select().from(bulkOps).all()[0].undo).not.toContain('"' + a + '"');
   });
 });
