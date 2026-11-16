@@ -4,6 +4,7 @@ import { startPhotoArchiver } from "@/lib/images/archive";
 import { maybeCleanupPhotos } from "@/lib/images/cleanup";
 import { reviewCount } from "@/lib/items/duplicates";
 import { scanQueueBusy } from "@/lib/scans/process";
+import { appVersion } from "@/lib/version";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   await requireOwner();
@@ -14,7 +15,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   void startPhotoArchiver({ busy: scanQueueBusy });
   return (
     <>
-      <main className="mx-auto w-full max-w-xl flex-1 p-4 pb-28">{children}</main>
+      <main className="mx-auto w-full max-w-xl flex-1 p-4 pb-28">
+        {children}
+        <footer className="mt-8 text-center text-xs text-muted">{appVersion()}</footer>
+      </main>
       <TabBar reviewCount={reviewCount()} />
     </>
   );

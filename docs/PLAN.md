@@ -634,6 +634,24 @@ number order unless "depends on" allows side by side work.
 - Check: `npm run check`, `npm run build`, live `/api/health`, one sample
   free scan on a test build (not on the owner's data), owner message sent.
 
+**9.4b Version in the footer** (added by the owner 2026-11-16, main session)
+- Files: `src/lib/version.ts` (+ test), `src/app/(app)/layout.tsx`.
+- Every signed-in page ends with "Version 0.1.0 (abc1234)": package version
+  plus the first 7 letters of `SOURCE_COMMIT`, which Coolify sets in the
+  running container. Anything not a hex commit shows "dev". Not on /login
+  (no version details for signed-out visitors).
+
+**9.3 review decisions (settled 2026-11-16 after the 9.3 review failed)**
+- The scan queue and uploader live in a client provider in `(app)/layout.tsx`,
+  so moving to another page inside the app never stops or loses uploads.
+- Permanent errors (4xx except 408 and 429) stop at once and show the
+  server's short message. No Retry for 400, 413, 415; for 401 keep Retry and
+  add a "Sign in again" link.
+- Each upload aborts after 90 s and counts as a retryable failure.
+- One live region, always rendered, announces counts ("2 saving, 1 not
+  saved"); the "Keep this page open" notice is announced too.
+- Preview URLs are freed on failure and timeout as well.
+
 #### Part B (9B)
 
 **9.6 Recently deleted: soft delete everywhere, restore, purge** (Opus, review)
