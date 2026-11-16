@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import sharp from "sharp";
 import type { RecognitionPhoto } from "@/lib/recognition/types";
 import type { OcrResult, TextReader } from "@/lib/free/ocr";
 
@@ -62,11 +63,16 @@ export function realCardFiles(id: RealCard) {
   };
 }
 
-/** Reads a real card's two photos as the recognizer does and, with UPDATE_OCR=1, writes the recording. */
+/** A photo as the reading bench passes it on: turned upright and saved as JPEG (quality 90). */
+async function asUploaded(file: string): Promise<Buffer> {
+  return sharp(fs.readFileSync(file)).rotate().jpeg({ quality: 90 }).toBuffer();
+}
+
+/** Reads a real card's two photos as the bench and recognizer do and, with UPDATE_OCR=1, writes the recording. */
 export async function readRealCard(id: RealCard, reader: TextReader): Promise<RecordedOcr> {
   const files = realCardFiles(id);
-  const front = await reader.read(fs.readFileSync(files.front));
-  const back = await reader.read(fs.readFileSync(files.back), { back: true });
+  const front = await reader.read(await asUploaded(files.front));
+  const back = await reader.read(await asUploaded(files.back), { back: true });
   const result = { front, back };
   if (updatingOcr) fs.writeFileSync(files.recording, `${JSON.stringify(result, null, 1)}\n`);
   return result;

@@ -275,6 +275,8 @@ describe("parseCardText", () => {
     const empty: ParsedCard = {
       year: null,
       yearSigns: 0,
+      yearFromStats: false,
+      brandSigns: 0,
       brand: null,
       setName: null,
       cardNumber: null,

@@ -471,6 +471,39 @@ describe("year or brand unknown", () => {
   });
 });
 
+describe("the card's own reading comes first (12R.4)", () => {
+  const card = (id: string, over: Partial<CatalogCard>): CatalogCard => ({
+    source: "mycardfolio", sourceId: id, url: `https://example.invalid/${id}`, sourceSetId: null, verified: true, sport: "baseball",
+    year: 1992, brand: "Donruss", setName: null, cardNumber: null, player: "Bob Milacki", otherPlayers: [], variation: null, tags: [], ...over,
+  });
+  const answers = [
+    card("1", { cardNumber: "202" }),
+    card("2", { cardNumber: "101" }),
+    card("3", { cardNumber: "55", verified: false, sourceId: "x-3" }),
+    card("4", { cardNumber: null, verified: false, sourceId: "x-4" }),
+    card("5", { cardNumber: "101", year: 1991 }),
+  ];
+
+  it("puts candidates whose number or year disagrees with the card last, and drops such unverified listings", async () => {
+    const { o } = setup({ everySearch: () => answers });
+    const r = await lookupCard(read({ year: null, brands: [], names: ["Bob Milacki"], cardNumber: "101" }), "background", o);
+    expect(r.sure).toBeNull();
+    const ids = r.candidates.map((c) => c.sourceId);
+    expect(ids[0]).toBe("2");
+    expect(ids).toContain("x-4");
+    expect(ids).not.toContain("x-3");
+    expect(ids.indexOf("1")).toBeGreaterThan(ids.indexOf("x-4"));
+  });
+
+  it("with a read year, a candidate of another year goes after the ones of that year", async () => {
+    const { o } = setup({ everySearch: () => answers });
+    const r = await lookupCard(read({ year: 1992, brands: [], names: ["Bob Milacki"], cardNumber: null }), "background", o);
+    const ids = r.candidates.map((c) => c.sourceId);
+    if (ids.includes("5")) expect(ids.indexOf("5")).toBe(ids.length - 1);
+    expect(ids[0]).not.toBe("5");
+  });
+});
+
 describe("basketball noise only", () => {
   it("1986 Fleer Michael Jordan: no match, at most 3 unverified candidates", async () => {
     const { o } = setup();

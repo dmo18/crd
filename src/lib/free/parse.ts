@@ -14,6 +14,10 @@ export type ParsedCard = {
   year: number | null;
   /** How many independent signs agree with the year (front set year, copyright, stat table). 0 without a year. */
   yearSigns: number;
+  /** True when the year came only from the stat table's last season (the set of the year before is possible too). */
+  yearFromStats: boolean;
+  /** How many independent places name the brand: the front logo, a back logo, the copyright line (0 to 3). */
+  brandSigns: number;
   brand: string | null;
   setName: string | null;
   cardNumber: string | null;
@@ -265,14 +269,15 @@ function isStatRow(l: Line): boolean {
   if (rest.filter(isNumber).length >= 3) return true;
   let k = 0;
   let letters = 0;
-  while (k < rest.length && k < 3 && /^[A-Z][A-Z.'-]*$/.test(rest[k])) {
-    letters += rest[k].replace(/[^A-Z]/g, "").length;
+  // Club words in capitals, or capitalized ("1991 Orioles 4.01 31") when numbers follow.
+  while (k < rest.length && k < 3 && /^[A-Z][A-Za-z.'-]*$/.test(rest[k])) {
+    letters += rest[k].replace(/[^A-Za-z]/g, "").length;
     k++;
   }
   if (k === 0 || letters < 3 || rest[0].replace(/[^A-Z]/g, "") in POS_TOKENS) return false;
   const after = rest.slice(k);
-  if (after.length === 0) return clubOnly(rest);
-  return after.every(isNumber);
+  if (after.length === 0) return rest.every((w) => w === w.toUpperCase()) && clubOnly(rest);
+  return after.length >= 2 || rest.slice(0, k).every((w) => w === w.toUpperCase()) ? after.every(isNumber) : false;
 }
 
 /** Words of card headers and checklists that are never a club: "88 ROOKIE", "87 DRAFT PICK", "1989 MONTHLY". */
@@ -584,9 +589,41 @@ function brandHits(lines: Line[]): BrandHit[] {
         hits.push({ def, line: l, score, logo: logo && !def.copyrightOnly });
       }
     }
+    // A copyright line read with its spaces lost ("\u00a91990 THETOPPS"): the maker's name inside the letters.
+    if (copyright && !hits.some((h) => h.line === l)) {
+      const compact = l.lz.replace(/[^A-Z]/g, "");
+      const glued = GLUED_MAKERS.find((g) => compact.includes(g.word));
+      const def = glued && BRANDS.find((b) => b.key === glued.key);
+      if (def) hits.push({ def, line: l, score: 4 + (hasYear ? 1 : 0), logo: false });
+    }
+    // A logo word with one letter misread ("JONRUSS"): a weak clue, never a logo that beats the copyright.
+    if (l.tokens.length <= 2 && !copyright && !hits.some((h) => h.line === l)) {
+      for (const word of l.lz.split(/[^A-Z]+/)) {
+        if (word.length < 6) continue;
+        const def = FUZZY_LOGOS.find((d) => d.word.length === word.length && editDistance(d.word, word) === 1);
+        const brand = def && BRANDS.find((b) => b.key === def.key);
+        if (brand) hits.push({ def: brand, line: l, score: 1, logo: false });
+      }
+    }
   }
   return hits;
 }
+
+/** Maker names as they stand in a copyright line read without spaces. */
+const GLUED_MAKERS: { word: string; key: string }[] = [
+  { word: "TOPPS", key: "topps" }, { word: "FLEER", key: "fleer" }, { word: "DONRUSS", key: "donruss" },
+  { word: "UPPERDECK", key: "upperdeck" }, { word: "BOWMAN", key: "bowman" }, { word: "LEAFINC", key: "leafinc" },
+  { word: "SKYBOX", key: "skybox" }, { word: "PINNACLEBRANDS", key: "pinnacle" }, { word: "PACIFICTRADING", key: "pacific" },
+  { word: "PROSET", key: "proset" }, { word: "OPEECHEE", key: "opc" }, { word: "IMPELMARKETING", key: "impel" },
+  { word: "PANINI", key: "panini" }, { word: "PLAYOFFCORP", key: "playoff" }, { word: "ACTIONPACKED", key: "actionpacked" },
+  { word: "MAJORLEAGUEMARKETING", key: "mlm" },
+];
+
+/** Long one-word maker logos, matched with one letter misread on a short line of their own. */
+const FUZZY_LOGOS: { word: string; key: string }[] = [
+  { word: "DONRUSS", key: "donruss" }, { word: "BOWMAN", key: "bowman" }, { word: "PINNACLE", key: "pinnacle" },
+  { word: "SKYBOX", key: "skybox" }, { word: "PARKHURST", key: "parkhurst" }, { word: "SPORTFLICS", key: "sportflics" },
+];
 
 type BrandPick = { brand: string; subSet: string | null; sport: Sport | null; sportWeight: number; lines: Line[] };
 
@@ -821,7 +858,10 @@ const TEAMS: TeamDef[] = [
     ["Texas", "Rangers"], ["Toronto", "Blue Jays"], ["Atlanta", "Braves"], ["Chicago", "Cubs"],
     ["Cincinnati", "Reds"], ["Houston", "Astros"], ["Los Angeles", "Dodgers"], ["Montreal", "Expos"],
     ["New York", "Mets"], ["Philadelphia", "Phillies"], ["Pittsburgh", "Pirates"], ["St. Louis", "Cardinals"],
-    ["San Diego", "Padres"], ["San Francisco", "Giants"], ["Florida", "Marlins", [], 1993], ["Colorado", "Rockies", [], 1993],
+    ["San Diego", "Padres"], ["San Francisco", "Giants"], ["Florida", "Marlins", [], 1993, 2011], ["Colorado", "Rockies", [], 1993],
+    // Later clubs and moves, so modern cards read too.
+    ["Arizona", "Diamondbacks", [], 1998], ["Tampa Bay", "Devil Rays", [], 1998, 2007], ["Tampa Bay", "Rays", [], 2008],
+    ["Washington", "Nationals", [], 2005], ["Miami", "Marlins", [], 2012], ["Cleveland", "Guardians", [], 2022],
   ]),
   ...teams("basketball", [
     ["Atlanta", "Hawks"], ["Boston", "Celtics"], ["Chicago", "Bulls"], ["Cleveland", "Cavaliers", ["CAVS"]],
@@ -832,19 +872,23 @@ const TEAMS: TeamDef[] = [
     ["Philadelphia", "76ers", ["SIXERS"]], ["Phoenix", "Suns"], ["Portland", "Trail Blazers", ["BLAZERS"]],
     ["Kansas City", "Kings", [], 1900, 1984], ["Sacramento", "Kings", [], 1985], ["San Antonio", "Spurs"],
     ["Seattle", "SuperSonics", ["SUPER SONICS", "SONICS"]], ["Utah", "Jazz"], ["Washington", "Bullets"],
-    ["Charlotte", "Hornets", [], 1988], ["Toronto", "Raptors", [], 1995], ["Vancouver", "Grizzlies", [], 1995],
+    ["Charlotte", "Hornets", [], 1988], ["Toronto", "Raptors", [], 1995], ["Vancouver", "Grizzlies", [], 1995, 2000],
+    ["Memphis", "Grizzlies", [], 2001], ["Oklahoma City", "Thunder", [], 2008], ["New Orleans", "Pelicans", [], 2013],
+    ["Brooklyn", "Nets", [], 2012], ["Washington", "Wizards", [], 1997],
   ]),
   ...teams("football", [
     ["Atlanta", "Falcons"], ["Buffalo", "Bills"], ["Chicago", "Bears"], ["Cincinnati", "Bengals"], ["Cleveland", "Browns"],
-    ["Dallas", "Cowboys"], ["Denver", "Broncos"], ["Detroit", "Lions"], ["Green Bay", "Packers"], ["Houston", "Oilers"],
+    ["Dallas", "Cowboys"], ["Denver", "Broncos"], ["Detroit", "Lions"], ["Green Bay", "Packers"], ["Houston", "Oilers", [], 1900, 1996],
     ["Baltimore", "Colts", [], 1900, 1983], ["Indianapolis", "Colts", [], 1984], ["Kansas City", "Chiefs"],
-    ["Oakland", "Raiders", [], 1900, 1981], ["Los Angeles", "Raiders", [], 1982, 1994], ["Oakland", "Raiders", [], 1995],
-    ["Los Angeles", "Rams", [], 1900, 1994], ["St. Louis", "Rams", [], 1995], ["Miami", "Dolphins"], ["Minnesota", "Vikings"],
+    ["Oakland", "Raiders", [], 1900, 1981], ["Los Angeles", "Raiders", [], 1982, 1994], ["Oakland", "Raiders", [], 1995, 2019],
+    ["Los Angeles", "Rams", [], 1900, 1994], ["St. Louis", "Rams", [], 1995, 2015], ["Miami", "Dolphins"], ["Minnesota", "Vikings"],
     ["New England", "Patriots"], ["New Orleans", "Saints"], ["New York", "Giants"], ["New York", "Jets"],
     ["Philadelphia", "Eagles"], ["St. Louis", "Cardinals", [], 1900, 1987], ["Phoenix", "Cardinals", [], 1988, 1993],
-    ["Arizona", "Cardinals", [], 1994], ["Pittsburgh", "Steelers"], ["San Diego", "Chargers"],
+    ["Arizona", "Cardinals", [], 1994], ["Pittsburgh", "Steelers"], ["San Diego", "Chargers", [], 1900, 2016],
     ["San Francisco", "49ers", ["FORTY NINERS", "NINERS"]], ["Seattle", "Seahawks"], ["Tampa Bay", "Buccaneers", ["BUCS"]],
-    ["Washington", "Redskins"], ["Carolina", "Panthers", [], 1995], ["Jacksonville", "Jaguars", [], 1995],
+    ["Washington", "Redskins", [], 1900, 2019], ["Carolina", "Panthers", [], 1995], ["Jacksonville", "Jaguars", [], 1995],
+    ["Baltimore", "Ravens", [], 1996], ["Tennessee", "Titans", [], 1999], ["Houston", "Texans", [], 2002],
+    ["Los Angeles", "Chargers", [], 2017], ["Las Vegas", "Raiders", [], 2020], ["Los Angeles", "Rams", [], 2016],
   ]),
   ...teams("hockey", [
     ["Boston", "Bruins"], ["Buffalo", "Sabres"], ["Calgary", "Flames"], ["Chicago", "Blackhawks", ["BLACK HAWKS"]],
@@ -854,7 +898,10 @@ const TEAMS: TeamDef[] = [
     ["New York", "Rangers"], ["Philadelphia", "Flyers"], ["Pittsburgh", "Penguins"], ["Quebec", "Nordiques", [], 1900, 1994],
     ["Colorado", "Avalanche", [], 1995], ["St. Louis", "Blues"], ["Toronto", "Maple Leafs"], ["Vancouver", "Canucks"],
     ["Washington", "Capitals"], ["Winnipeg", "Jets"], ["San Jose", "Sharks", [], 1991], ["Ottawa", "Senators", [], 1992],
-    ["Tampa Bay", "Lightning", [], 1992], ["Anaheim", "Mighty Ducks", [], 1993], ["Florida", "Panthers", [], 1993],
+    ["Tampa Bay", "Lightning", [], 1992], ["Anaheim", "Mighty Ducks", [], 1993, 2006], ["Florida", "Panthers", [], 1993],
+    ["Anaheim", "Ducks", [], 2006], ["Nashville", "Predators", [], 1998], ["Carolina", "Hurricanes", [], 1997],
+    ["Minnesota", "Wild", [], 2000], ["Columbus", "Blue Jackets", [], 2000], ["Vegas", "Golden Knights", [], 2017],
+    ["Seattle", "Kraken", [], 2021],
   ]),
 ];
 
@@ -989,6 +1036,8 @@ const PLAIN_NICKS = new Set([
   "PATRIOTS", "RANGERS", "PIRATES", "CARDINALS", "COLTS", "JAGUARS", "DOLPHINS", "GRIZZLIES", "HORNETS", "BULLS",
   "ROCKIES", "MARLINS", "EXPOS", "ASTROS", "PADRES", "ISLANDERS", "CANUCKS", "NORDIQUES", "FALCONS", "BENGALS",
   "SAINTS", "BUCCANEERS", "SEAHAWKS", "MAVERICKS", "NUGGETS", "PACERS", "CELTICS", "LAKERS",
+  "THUNDER", "WILD", "RAYS", "DUCKS", "TITANS", "TEXANS", "RAVENS", "HURRICANES", "PREDATORS", "NATIONALS", "GUARDIANS",
+  "WIZARDS", "KRAKEN", "PELICANS", "DIAMONDBACKS",
 ]);
 
 /** Words that may stand on a team line beside the team: positions (the position lists come later in this file). */
@@ -1501,8 +1550,12 @@ function headerName(l: Line): { words: NameWord[]; suffix: string | null; pos: P
   return { words, suffix, pos };
 }
 
-/** A name as read on one line: title cased words and a suffix ("Jr."). */
-type NameRead = { words: string[]; suffix: string | null; line: Line; header: boolean };
+/**
+ * A name as read on one line: title cased words and a suffix ("Jr."). `cut`:
+ * the line ends in a cut off suffix ("KEN GRIFFEY, J"), so the name is not
+ * whole unless the other side shows the suffix.
+ */
+type NameRead = { words: string[]; suffix: string | null; line: Line; header: boolean; cut?: boolean };
 
 /** Lines with labels ("BORN:", "HOME:") hold places and dates, not the name. */
 function labelLine(l: Line): boolean {
@@ -1515,6 +1568,7 @@ function nameRuns(l: Line): NameRead[] {
   const tokens = maskTeams(l);
   let run: NameWord[] = [];
   let suffix: string | null = null;
+  let cut = false;
   const flush = () => {
     // Drop vowel-less OCR scraps at either end ("ALEX RODRIGUEZ GML").
     let core = run;
@@ -1525,15 +1579,18 @@ function nameRuns(l: Line): NameRead[] {
     const capitals = core.every((w, i) => /^[A-Z]/.test(w.word) || (i > 0 && NAME_PARTICLES.has(w.word)));
     if (capitals && core.length >= 2 && core.length <= 3 && !core.every((w) => w.initials) && looksLikeName(core)) {
       const plainKey = normalizeName(core.map((w) => w.word).join(" "));
-      if (!CITY_KEYS.has(plainKey)) out.push({ words: core.map((w) => titleWord(w.word)), suffix, line: l, header: false });
+      if (!CITY_KEYS.has(plainKey)) out.push({ words: core.map((w) => titleWord(w.word)), suffix, line: l, header: false, cut });
     }
     run = [];
     suffix = null;
+    cut = false;
   };
   for (let ti = 0; ti < tokens.length; ti++) {
     const tok = tokens[ti];
     const w = nameWord(tok);
     if (!w) {
+      // "GRIFFEY, J" at the end of the line: the suffix was cut off (glare, the photo's edge).
+      if (run.length >= 2 && ti === tokens.length - 1 && /,$/.test(tokens[ti - 1] ?? "") && /^[JjSs]\.?$/.test(tok)) cut = true;
       flush();
       continue;
     }
@@ -1548,11 +1605,12 @@ function nameRuns(l: Line): NameRead[] {
       continue;
     }
     run.push(w);
-    // A comma ends a name unless a suffix follows ("Griffey, Jr.").
+    // A comma ends a name unless a suffix follows ("Griffey, Jr."), or what is left of one at the line's end.
     if (/,$/.test(tok)) {
       const next = tokens[ti + 1];
       const nw = next ? nameWord(next) : null;
-      if (!nw || !(nw.key in SUFFIXES)) flush();
+      const cutNext = next !== undefined && ti + 1 === tokens.length - 1 && /^[JjSs]\.?$/.test(next);
+      if ((!nw || !(nw.key in SUFFIXES)) && !cutNext) flush();
     }
   }
   flush();
@@ -1742,6 +1800,8 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
     suffix = chosen.suffix;
   }
   if (!chosen) return { player: null, names: [], agree: false, keyMatch: null, hint, header, nameLines };
+  // "KEN GRIFFEY, J" and no side shows the whole suffix: Jr. or Sr. is unknown, so no name.
+  if (chosen.cut && !suffix) return { player: null, names: [display(chosen)], agree: false, keyMatch: null, hint, header, nameLines };
 
   let player = display(chosen, suffix);
   let keyMatch: string | null = null;
@@ -1901,6 +1961,8 @@ function emptyCard(): ParsedCard {
   return {
     year: null,
     yearSigns: 0,
+    yearFromStats: false,
+    brandSigns: 0,
     brand: null,
     setName: null,
     cardNumber: null,
@@ -1945,8 +2007,14 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   const yearFind = findCardYear(front, back, lines, new Set(hits.map((h) => h.line)));
   out.year = yearFind?.year ?? slabLabel?.year ?? null;
   out.yearSigns = yearFind?.signs ?? (slabLabel ? 1 : 0);
+  out.yearFromStats = yearFind?.how === "stats";
   const pick = pickBrand(hits, out.year);
   out.brand = pick?.brand ?? slabLabel?.brand ?? null;
+  if (pick) {
+    const mine = hits.filter((h) => pick.lines.includes(h.line));
+    const kinds = new Set(mine.map((h) => (h.logo ? `logo-${h.line.side}` : isCopyrightLine(h.line) ? "copyright" : `text-${h.line.side}`)));
+    out.brandSigns = Math.min(3, kinds.size);
+  } else if (slabLabel) out.brandSigns = 1;
   if (!yearFind && slabLabel) ev.push(`Read ${slabLabel.year} ${slabLabel.brand} on the holder label`);
 
   if (yearFind?.how === "front") {

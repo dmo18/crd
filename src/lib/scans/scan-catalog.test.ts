@@ -59,7 +59,8 @@ describe("a scan with the catalog (fake, recorded answers, no network)", () => {
     expect(item).toMatchObject({ player: "Ken Griffey Jr.", cardNumber: "336" });
     expect(Object.values(marks(item)).every((m) => m === "reading")).toBe(true);
     const first = JSON.parse(item.firstSuggestion!);
-    expect(first.confidence).toBe(0.7);
+    // 12R.4: one sign each for year, brand and number, the name on one side only.
+    expect(first.confidence).toBe(0.6);
     void REVIEW_THRESHOLD;
   });
 

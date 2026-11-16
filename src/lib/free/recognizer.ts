@@ -48,7 +48,7 @@ export type FreeDeps = {
 };
 
 /** A card as read, with the name spellings the catalog look up may try. */
-type ReadCard = { item: RecognizedItem; names: string[] };
+type ReadCard = { item: RecognizedItem; names: string[]; yearFromStats?: boolean };
 
 const MAX_CARDS_PER_PHOTO = 30;
 const MAX_LOOKUPS_PER_CARD = 2;
@@ -197,7 +197,7 @@ export class FreeRecognizer implements Recognizer {
     const deadline = Math.min(this.clock() + this.catalogTimeMs, startedAt + CATALOG_LATEST_MS);
     let late = false;
     const gate = stoppable(catalog);
-    for (const { item, names } of cards) {
+    for (const { item, names, yearFromStats } of cards) {
       if (item.kind !== "card" || (names.length === 0 && !item.cardNumber)) continue;
       if (scan.stopped) {
         item.catalog = { status: "not_checked", reason: scan.stopped };
@@ -214,7 +214,7 @@ export class FreeRecognizer implements Recognizer {
       }
       try {
         const result = await within(lookupCard({
-          year: item.year, brands: item.brand ? [item.brand] : [], sport: item.sport, names, cardNumber: item.cardNumber,
+          year: item.year, yearFromStats, brands: item.brand ? [item.brand] : [], sport: item.sport, names, cardNumber: item.cardNumber,
         }, "background", { catalog: gate, scan }), left);
         if (result === TIMED_OUT) {
           late = true;
@@ -422,11 +422,17 @@ export class FreeRecognizer implements Recognizer {
       confidence = KEY_CONFIDENCE;
       if (errorCheck) confidence = Math.min(confidence, CHECK_CONFIDENCE);
     } else {
+      // Each field counts by how many independent signs on the card agree
+      // (12R.4): a year printed on the front, the copyright year and the stat
+      // table; a logo on the front, on the back and the copyright line; the
+      // name on both sides. Clean reads can then be filed on their own later,
+      // unsure ones wait for the owner.
+      const more = (signs: number) => 0.05 * Math.min(2, Math.max(0, signs - 1));
       confidence = 0.05;
-      if (item.year != null) confidence += 0.2;
-      if (item.brand) confidence += 0.2;
+      if (item.year != null) confidence += 0.15 + (item.year === parsed.year ? more(parsed.yearSigns) : 0);
+      if (item.brand) confidence += 0.15 + (item.brand === parsed.brand ? more(parsed.brandSigns) : 0);
       if (item.cardNumber) confidence += 0.15;
-      if (item.player) confidence += 0.1;
+      if (item.player) confidence += 0.1 + (parsed.playerAgree ? 0.05 : 0);
       if (facts) confidence += 0.15;
       // Without a key card the best is 0.8, and only with year, brand and number read:
       // Wikidata knowing the player does not say which card this is.
@@ -455,7 +461,7 @@ export class FreeRecognizer implements Recognizer {
     }
     const done: RecognizedItem = recognizedItemSchema.parse(item);
     if (Object.keys(evidence).length > 0) done.evidence = evidence;
-    return { item: done, names: names.slice(0, 5) };
+    return { item: done, names: names.slice(0, 5), yearFromStats: parsed.yearFromStats };
   }
 
   private async product(photos: RecognitionPhoto[], kind: "sealed" | "bulk"): Promise<RecognizedItem> {

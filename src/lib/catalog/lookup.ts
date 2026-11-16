@@ -175,8 +175,17 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   const m: MatchRead = matchRead(r.names, r.number);
   let callsUsed = 0;
   let stopped: LookupStop | null = scan.stopped;
+  // The card's own reading comes first (12R.4): a candidate whose year or
+  // number disagrees with what was read on the card goes last, and an
+  // unverified listing that disagrees is not offered at all.
+  const disagrees = (c: Candidate) => {
+    const year = r.year !== null && c.year !== null && c.year !== r.year && !(r.yearFromStats && c.year === r.year - 1);
+    const number = m.number !== null && c.cardNumber !== null && cleanCardNumber(c.cardNumber) !== m.number;
+    return year || number;
+  };
+  const cardFirst = (list: Candidate[]) => [...list.filter((c) => !disagrees(c)), ...list.filter((c) => disagrees(c) && c.verified)];
   const done = (j: Pick<Judgement, "sure" | "sureBy">, candidates: Candidate[]): LookupResult => {
-    const list = j.sure ? mergeCandidates([j.sure], candidates) : candidates;
+    const list = cardFirst(j.sure ? mergeCandidates([j.sure], candidates) : candidates);
     // A Tiffany read is a version question (Milestone 11): candidates only.
     const sure = r.tiffany ? null : j.sure;
     return { sure, sureBy: sure ? j.sureBy : null, candidates: list, callsUsed, stopped };
