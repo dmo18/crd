@@ -1349,6 +1349,16 @@ the designs above.
   each of the 4 rules including "old item with null sources is never
   overwritten"; `firstSuggestion` unchanged after edit, bulk edit and pick.
 
+**10.2 review decisions (settled 2026-11-16, main session)**
+- Unlinking a catalog card turns that card's `catalog` field marks into
+  `reading` marks (values kept), so a later link to another card lists or
+  replaces them under the normal rules. Done in 10.9.
+- Card numbers keep their printed order in the canonical key ("11T" and
+  "T11" differ). Done in 10.9 with a test; no stored keys exist yet.
+- Vault (10.4): a fresh `randomBytes(12)` iv on every save; keys shorter
+  than 16 characters are refused; `last4` never goes into audit detail or
+  logs.
+
 **10.3 Shared gate for outside calls** (Opus, review)
 - Files: `src/lib/outside/gate.ts`, `sources.ts`, `usage.ts`, `cache.ts`
   (+ tests), `src/lib/free/wikidata.ts` (its fetch goes through the gate,
