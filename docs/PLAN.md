@@ -2239,3 +2239,12 @@ repeats) or 2.2M delegated tokens, inside what is left of the roadmap cap.
   decision "combining still removes the newer record's photos". Done in
   11.6, with a test; existing merge code changes accordingly.
 - "Not sure yet" cards show no estimate until a version is chosen: kept.
+
+**11.1 review decisions (2026-11-16, main session; done in 11.4)**
+- Empty serial boxes keep an old whole serial text that does not split
+  ("1 of 1 promo"); test.
+- A key-list rookie hit gets the fixed note "On the built-in key card list";
+  a card marked as a reprint gets rookie state "not sure", not "yes".
+- Bulk "set rookie: no" skips cards with no rookie mark and isRookie 0
+  (nothing to change); the preview count shows only real changes.
+- Test: undo of a bulk change stored before 0009 (only isRookie saved).
