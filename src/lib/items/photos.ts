@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, type ImageRow } from "@/db/schema";
-import { EditError, lockPhoto, runOneAtATime, type PhotoEdit } from "@/lib/images/edit";
+import { EditError, JOB_TIMEOUT_MESSAGE, lockPhoto, runOneAtATime, type PhotoEdit } from "@/lib/images/edit";
 import {
   ARCHIVE_EDGE, deleteStored, ImageError, keepAsOriginal, removeNamed, restoreOriginal, sameFamily, saveUpload,
   SOURCE_ARCHIVE_EDGE, writeEdited, type StoredImage,
@@ -12,6 +12,20 @@ const fail = (error: string): PhotoResult => ({ ok: false, error });
 const BUSY = "This photo is being changed right now. Try again in a moment.";
 const CHANGED = "This photo changed while you were working. Nothing was saved. Try again.";
 const NOT_FOUND = "That photo was not found.";
+const NO_SOURCE_REPLACE = "A whole-sheet photo cannot be replaced. Add a new scan instead.";
+const failed = (e: unknown, fallback: string) => fail(e instanceof ImageError || e instanceof EditError ? e.userMessage : fallback);
+
+/** Saves an upload in the picture line; a late finish after the time limit removes its own files. */
+function saveQueued(data: Buffer): Promise<StoredImage> {
+  return runOneAtATime(async (ctl) => {
+    const stored = await saveUpload(data);
+    if (ctl.expired()) {
+      await deleteStored(stored.file).catch(() => {});
+      throw new EditError(JOB_TIMEOUT_MESSAGE);
+    }
+    return stored;
+  });
+}
 
 /** The photo, only when it belongs to this item and the item is not in Recently deleted. */
 function ownPhoto(db: Db, itemId: number, imageId: number): ImageRow | null {
@@ -36,12 +50,13 @@ export async function editPhoto(input: { itemId: number; imageId: number; edit: 
   const release = lockPhoto(row.id);
   if (!release) return fail(BUSY);
   try {
-    return await runOneAtATime(async () => {
+    return await runOneAtATime(async (ctl) => {
       const edge = row.role === "source" ? SOURCE_ARCHIVE_EDGE : ARCHIVE_EDGE;
       let written: StoredImage | null = null;
       let madeCopy: string | null = null;
       try {
         written = await writeEdited(row, input.edit, edge);
+        if (ctl.expired()) throw new EditError(JOB_TIMEOUT_MESSAGE);
         const firstEdit = row.originalFile == null;
         const original = firstEdit ? await keepAsOriginal(row) : row.originalFile!;
         if (firstEdit && row.workFile) madeCopy = original;
@@ -67,10 +82,11 @@ export async function editPhoto(input: { itemId: number; imageId: number; edit: 
       } catch (e) {
         if (written) await deleteStored(written.file).catch(() => {});
         if (madeCopy) await removeNamed(madeCopy);
-        if (e instanceof EditError || e instanceof ImageError) return fail(e.userMessage);
-        return fail("Could not change the photo. The old photo is unchanged.");
+        // A missing file because the archiver replaced the working copy meanwhile is a change, not a missing photo.
+        if (e instanceof ImageError && !sameRow(row, db.select().from(images).where(eq(images.id, row.id)).get())) return fail(CHANGED);
+        return failed(e, "Could not change the photo. The old photo is unchanged.");
       }
-    });
+    }).catch((e) => failed(e, "Could not change the photo. The old photo is unchanged."));
   } finally {
     release();
   }
@@ -97,10 +113,9 @@ export async function restorePhoto(input: { itemId: number; imageId: number }, d
         if (!sameFamily(row.file, row.originalFile!)) await deleteStored(row.file).catch(() => {});
         return { ok: true, imageId: row.id } as const;
       } catch (e) {
-        if (e instanceof ImageError) return fail(e.userMessage);
-        return fail("Could not put the original back. The photo is unchanged.");
+        return failed(e, "Could not put the original back. The photo is unchanged.");
       }
-    });
+    }).catch((e) => failed(e, "Could not put the original back. The photo is unchanged."));
   } finally {
     release();
   }
@@ -119,9 +134,9 @@ export async function addPhoto(input: { itemId: number; role: "front" | "back"; 
   if (taken()) return fail(already);
   let stored: StoredImage;
   try {
-    stored = await runOneAtATime(() => saveUpload(input.data));
+    stored = await saveQueued(input.data);
   } catch (e) {
-    return fail(e instanceof ImageError ? e.userMessage : "Could not save the photo. Try again.");
+    return failed(e, "Could not save the photo. Try again.");
   }
   const id = db.transaction((tx) => {
     if (taken()) return null;
@@ -138,14 +153,15 @@ export async function addPhoto(input: { itemId: number; role: "front" | "back"; 
 export async function replacePhoto(input: { itemId: number; imageId: number; data: Buffer }, db: Db = getDb()): Promise<PhotoResult> {
   const row = ownPhoto(db, input.itemId, input.imageId);
   if (!row) return fail(NOT_FOUND);
+  if (row.role === "source") return fail(NO_SOURCE_REPLACE);
   const release = lockPhoto(row.id);
   if (!release) return fail(BUSY);
   try {
     let stored: StoredImage;
     try {
-      stored = await runOneAtATime(() => saveUpload(input.data));
+      stored = await saveQueued(input.data);
     } catch (e) {
-      return fail(e instanceof ImageError ? e.userMessage : "Could not save the photo. Try again.");
+      return failed(e, "Could not save the photo. Try again.");
     }
     const stale = db.transaction((tx) => {
       const current = tx.select().from(images).where(eq(images.id, row.id)).get();

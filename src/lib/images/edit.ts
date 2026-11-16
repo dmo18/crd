@@ -49,10 +49,42 @@ export function applyEdit(input: Buffer, width: number, height: number, edit: Ph
   return base.extract(trimBox(width, height, edit));
 }
 
-/** One picture job at a time: this server is slow, so edits wait in line instead of running together. */
+export const QUEUE_BUSY_MESSAGE = "Busy with other photos. Try again in a moment.";
+export const JOB_TIMEOUT_MESSAGE = "That took too long and was stopped. Nothing was changed. Try again.";
+/** At most this many jobs may wait behind the one running. */
+export const MAX_WAITING = 3;
+export const JOB_TIMEOUT_MS = 60_000;
+
+/** Given to a job so it can tell, once it finishes, that it was stopped for taking too long. */
+export type JobControl = { expired: () => boolean };
+
+/**
+ * One picture job at a time: this server is slow, so edits wait in line instead
+ * of running together. A fourth waiting job is refused, and a job that runs
+ * longer than the time limit is given up on so the line moves on (its own
+ * code must clean up when `expired()` is true after it finishes).
+ */
 let tail: Promise<unknown> = Promise.resolve();
-export function runOneAtATime<T>(job: () => Promise<T>): Promise<T> {
-  const next = tail.then(job, job);
+let waiting = 0;
+export function runOneAtATime<T>(job: (ctl: JobControl) => Promise<T>, timeoutMs = JOB_TIMEOUT_MS): Promise<T> {
+  if (waiting >= MAX_WAITING) return Promise.reject(new EditError(QUEUE_BUSY_MESSAGE));
+  waiting++;
+  const start = async (): Promise<T> => {
+    waiting--;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { stopped = true; reject(new EditError(JOB_TIMEOUT_MESSAGE)); }, timeoutMs);
+    });
+    const running = job({ expired: () => stopped });
+    running.catch(() => {});
+    try {
+      return await Promise.race([running, limit]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const next = tail.then(start, start);
   tail = next.catch(() => undefined);
   return next;
 }

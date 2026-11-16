@@ -376,6 +376,11 @@
 - The value chart needs at least two days of use before it draws a line.
 - `npm audit`: 12 moderate findings, all in developer tools (the linter's
   file matcher), none in the running app.
+- The photo edit queue is separate from the scan and archiver sharp work (a
+  builder choice). Worst case is about 3 large decodes at once, which is fine
+  on 4 GB.
+- A restored original is turned into AVIF again by the archiver within
+  minutes, so restore is exact only until then.
 - No paid price feed yet. The `PriceSource` interface is where one plugs in.
 
 ## Open security findings

@@ -7,7 +7,7 @@ import { createDb, type Db } from "@/db";
 import { images, items } from "@/db/schema";
 import { convertPhoto } from "@/lib/images/archive";
 import { removeOrphanPhotos } from "@/lib/images/cleanup";
-import { photoEditSchema } from "@/lib/images/edit";
+import { photoEditSchema, runOneAtATime } from "@/lib/images/edit";
 import { readStored, saveUpload, uploadsDir } from "@/lib/images/store";
 import { purgeItems, softDeleteItems } from "./bin";
 import { mergeInto } from "./duplicates";
@@ -245,4 +245,34 @@ describe("adding a photo later", () => {
     softDeleteItems([item], db);
     expect((await addPhoto({ itemId: item, role: "back", data: await jpeg() }, db)).ok).toBe(false);
   });
+
+describe("photo tool edge cases", () => {
+  it("answers with the changed message when the working copy vanished because the archiver replaced it", async () => {
+    const item = newItem();
+    const id = await photoFor(item);
+    const before = row(id);
+    // Hold the picture line so the edit has read the photo but not started yet.
+    let release!: () => void;
+    const hold = runOneAtATime(() => new Promise<void>((r) => { release = r; }));
+    const pending = editPhoto({ itemId: item, imageId: id, edit: turn() }, db);
+    // The archiver swaps the files and removes the working copy meanwhile.
+    await fs.rm(path.join(uploadsDir(), "work", before.workFile!));
+    db.update(images).set({ workFile: null, file: "other.avif" }).where(eq(images.id, id)).run();
+    release();
+    await hold;
+    const res = await pending;
+    expect(res).toMatchObject({ ok: false });
+    expect((res as { error: string }).error).toMatch(/changed while you were working/);
+  });
+
+  it("refuses to replace a whole-sheet source photo", async () => {
+    const item = newItem();
+    const id = await photoFor(item);
+    db.update(images).set({ role: "source" }).where(eq(images.id, id)).run();
+    const res = await replacePhoto({ itemId: item, imageId: id, data: await jpeg() }, db);
+    expect(res.ok).toBe(false);
+    expect(res).toMatchObject({ error: expect.stringMatching(/cannot be replaced/) });
+  });
+});
+
 });

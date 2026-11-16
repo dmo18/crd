@@ -44,10 +44,14 @@ beforeEach(async () => {
 });
 afterEach(() => setDbForTests(undefined));
 
-const post = (id: string, fields: Record<string, string | Blob>) => {
+// A browser states the size of a form it sends; so does this helper.
+const post = async (id: string, fields: Record<string, string | Blob>) => {
   const f = new FormData();
   for (const [k, v] of Object.entries(fields)) f.set(k, v);
-  return POST(new Request(`http://localhost/api/items/${id}/photos`, { method: "POST", body: f }), { params: Promise.resolve({ id }) });
+  const probe = new Request("http://localhost/", { method: "POST", body: f });
+  const body = Buffer.from(await probe.arrayBuffer());
+  const headers = { "content-type": probe.headers.get("content-type")!, "content-length": String(body.length) };
+  return POST(new Request(`http://localhost/api/items/${id}/photos`, { method: "POST", body, headers }), { params: Promise.resolve({ id }) });
 };
 
 describe("photo actions", () => {

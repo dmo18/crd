@@ -54,3 +54,14 @@ describe("GET /api/images/[file]", () => {
     }
   });
 });
+
+describe("POST /api/items/[id]/photos without a stated size", () => {
+  it("answers 411 before reading the body", async () => {
+    const { POST } = await import("@/app/api/items/[id]/photos/route");
+    const req = new Request("http://localhost/api/items/1/photos", { method: "POST", body: new Uint8Array([1]).buffer, headers: { "content-type": "application/octet-stream" } });
+    req.headers.delete("content-length");
+    const res = await POST(req, { params: Promise.resolve({ id: "1" }) });
+    expect(res.status).toBe(411);
+    expect((await res.json()).error).toMatch(/could not be checked/);
+  });
+});

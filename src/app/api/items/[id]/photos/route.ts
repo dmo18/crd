@@ -23,8 +23,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   if (!/^\d{1,9}$/.test(rawId)) return bad("That item was not found.", 404);
   const itemId = Number(rawId);
 
+  // Refuse before reading anything when the size is not stated.
+  const length = request.headers.get("content-length");
+  if (length === null || !/^\d{1,12}$/.test(length)) {
+    return bad("The photo could not be checked. Try again from the photo screen.", 411);
+  }
   // One photo plus a little for the form's own text.
-  if (Number(request.headers.get("content-length") ?? 0) > MAX_UPLOAD_BYTES + 64 * 1024) {
+  if (Number(length) > MAX_UPLOAD_BYTES + 64 * 1024) {
     return bad("That photo is too large. The limit is 15 MB.", 413);
   }
   let form: FormData;
