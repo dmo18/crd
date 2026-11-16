@@ -408,8 +408,8 @@ describe("safety", () => {
     const undoMs = performance.now() - mid;
     expect(r.changed).toBe(MAX_BULK_ITEMS);
     expect(undo.restored).toBe(MAX_BULK_ITEMS);
-    expect(applyMs).toBeLessThan(5000);
-    expect(undoMs).toBeLessThan(5000);
+    expect(applyMs).toBeLessThan(15_000); // loose: about 2 s when the server is quiet; catches slow code, not a busy server
+    expect(undoMs).toBeLessThan(15_000);
   });
 });
 

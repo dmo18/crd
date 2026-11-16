@@ -15,8 +15,10 @@ import { saveCatalogCardIn } from "./store";
 import type { Catalog, CatalogCard } from "./types";
 
 /**
- * The catalog in Review: a sure card from a scan is applied when the item is
- * filed; candidates wait for the owner's one tap ("This one"). Every rule
+ * The catalog in Review: candidates wait for the owner's one tap ("This one").
+ * Automatic filling of a sure card is OFF (AUTO_FILL_SURE in
+ * src/lib/free/recognizer.ts, see PLAN 10.6 fifth review): applyScanCard is
+ * kept for a later switch-on but is not reached today. Every rule
  * goes through `applyCatalogCard` (the filling rule), so an `owner` field is
  * never changed and a `reading` field only through "Use the catalog's values".
  */

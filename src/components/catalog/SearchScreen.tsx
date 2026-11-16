@@ -61,6 +61,9 @@ export function SearchScreen({ initialText, initialSport, initialYear, itemId, i
 }) {
   const [state, action, pending] = useActionState(searchCardsAction, INITIAL);
   const [sport, setSport] = useState(initialSport);
+  // Kept by the screen, so the words stay in the box after a search.
+  const [text, setText] = useState(initialText);
+  const [year, setYear] = useState(initialYear);
   const clean = state.rows.filter((r) => r.verified);
   const loose = state.rows.filter((r) => !r.verified);
   return (
@@ -70,7 +73,7 @@ export function SearchScreen({ initialText, initialSport, initialYear, itemId, i
       ) : null}
       <form action={action} className="flex flex-col gap-3">
         <Field label="Words to search" htmlFor="s-q" hint="Year, brand, player. For example: 1990 Topps Griffey.">
-          <input id="s-q" name="q" type="search" defaultValue={initialText} minLength={2} maxLength={SEARCH_MAX} required className={INPUT_CLASS} />
+          <input id="s-q" name="q" type="search" value={text} onChange={(e) => setText(e.target.value)} minLength={2} maxLength={SEARCH_MAX} required className={INPUT_CLASS} />
         </Field>
         <Field label="Sport (optional)" htmlFor="s-sport">
           <select id="s-sport" name="sport" value={sport} onChange={(e) => setSport(e.target.value)} className={INPUT_CLASS}>
@@ -82,7 +85,7 @@ export function SearchScreen({ initialText, initialSport, initialYear, itemId, i
           <Notice tone="warn">The catalog has few checked entries for this sport. Most results will be unverified listings.</Notice>
         ) : null}
         <Field label="Year (optional)" htmlFor="s-year">
-          <input id="s-year" name="year" type="text" inputMode="numeric" maxLength={4} defaultValue={initialYear} className={INPUT_CLASS} />
+          <input id="s-year" name="year" type="text" inputMode="numeric" maxLength={4} value={year} onChange={(e) => setYear(e.target.value)} className={INPUT_CLASS} />
         </Field>
         <Button type="submit" disabled={pending} className="w-full">{pending ? "Searching..." : "Search"}</Button>
       </form>

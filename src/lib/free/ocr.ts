@@ -30,6 +30,11 @@ export type ReadOptions = {
    * every distinct line from all passes, since labels mix big and small text.
    */
   thorough?: boolean;
+  /**
+   * Many cards from one photo: no band or edge passes, so a big sheet stays
+   * inside the scan's time limit on the slow server (at most 6 passes).
+   */
+  quick?: boolean;
 };
 export interface TextReader {
   read(image: Buffer, options?: ReadOptions): Promise<OcrResult>;
@@ -48,6 +53,8 @@ const SIDEWAYS_SCORE = 60;
 const SIDEWAYS_CONFIDENCE = 0.55;
 /** Most reading passes for one card photo, band and edge passes included. */
 export const MAX_PASSES = 9;
+/** Most passes for a card cut from a many-card photo (`quick`). */
+export const QUICK_PASSES = 6;
 /** Most reading passes for one box label or bulk box photo (thorough mode). */
 const MAX_THOROUGH_PASSES = 6;
 /** Wide colored bands read on their own, at most this many per photo. */
@@ -419,6 +426,7 @@ async function recognizeOnce(png: Buffer, mode: PSM = PSM.SPARSE_TEXT): Promise<
 }
 
 async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrResult> {
+  const maxPasses = options.quick ? QUICK_PASSES : MAX_PASSES;
   const variants = await preprocess(image);
   let best: OcrLine[] = [];
   let bestScore = -1;
@@ -491,7 +499,7 @@ async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrR
   // picture, which is the card the right way up.
   if (bestScore < SIDEWAYS_SCORE || summarize(best).confidence < SIDEWAYS_CONFIDENCE) {
     for (const angle of [90, 270] as const) {
-      if (passes >= MAX_PASSES) break;
+      if (passes >= maxPasses) break;
       const v = await turned(bestVariant, angle);
       const lines = linesFrom(await recognizeOnce(v.png), v.width, v.height);
       passes++;
@@ -517,11 +525,13 @@ async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrR
     }
   };
   let upright: Variant | null = null;
-  try {
+  // Quick reads (cards cut from a many-card photo) skip band and edge passes:
+  // `upright` stays null, so the edge pass below is skipped too.
+  if (!options.quick) try {
     upright = await colorUpright(image, turn);
     for (const band of await findBands(upright.png, MAX_BANDS)) {
-      if (passes >= MAX_PASSES) break;
-      const read = await readBand(upright, band, MAX_PASSES - passes);
+      if (passes >= maxPasses) break;
+      const read = await readBand(upright, band, maxPasses - passes);
       passes += read.passes;
       add(read.lines);
     }
@@ -531,7 +541,7 @@ async function readImage(image: Buffer, options: ReadOptions = {}): Promise<OcrR
   // The year on many backs stands only in tiny upright print by the edge.
   if (upright && !merged.some((l) => YEAR_RE.test(l.text))) {
     for (const side of ["right", "left"] as const) {
-      if (passes >= MAX_PASSES) break;
+      if (passes >= maxPasses) break;
       try {
         const lines = await readEdge(upright, side);
         passes++;

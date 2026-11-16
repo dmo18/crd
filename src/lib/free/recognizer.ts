@@ -262,7 +262,8 @@ export class FreeRecognizer implements Recognizer {
       for (const box of boxes) {
         let text: OcrResult | null = null;
         try {
-          text = await this.read(await this.straighten(await cropPhoto(photo, box)));
+          // Many cards per photo: quick reads keep a big sheet inside the time limit.
+          text = await this.read(await this.straighten(await cropPhoto(photo, box)), { quick: true });
         } catch {
           text = null;
         }

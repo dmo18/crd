@@ -14,8 +14,9 @@ export function midpointCents(low: number | null, high: number | null): number |
  * Turns one recognized item into a database row (not yet saved). The fields
  * the scanner filled are marked `reading`, and what it read is kept once in
  * `firstSuggestion`, which no later change touches. Catalog candidates, or
- * why the catalog was not checked, are kept for Review. A sure catalog card
- * is not applied here: the scan does that when it files the item.
+ * why the catalog was not checked, are kept for Review. Catalog cards are
+ * never applied here; automatic filling is OFF (AUTO_FILL_SURE), so every
+ * catalog card needs the owner's tap in Review.
  */
 export function itemFromRecognition(
   r: RecognizedItem,
