@@ -342,6 +342,32 @@ const CASES: Case[] = [
     ],
     check: (i) => expect(i).toMatchObject({ rarityTier: "key", isRookie: true }),
   },
+  {
+    name: "1990 Topps Griffey back from a phone photo: the name comes from the header, never the bio",
+    back: [
+      ["4 Ken Griffey, Jr.\u00ae OF", 0.05, 0.12, 0.67, 0.1, 0.57],
+      ["87 BELLINGHAM", 0.31, 0.12, 0.2, 0.03, 0.85],
+      ["88 SN BERNARDINO", 0.35, 0.12, 0.2, 0.03, 0.87],
+      ["88 VERMONT", 0.4, 0.12, 0.2, 0.03, 0.9],
+      ["89 MARMNERS", 0.44, 0.12, 0.2, 0.03, 0.71],
+      ["Ken graduated from Moeller (Cincinnati) High School", 0.56, 0.15, 0.7, 0.04, 0.96],
+      ["in 1987. He played 3 years of football and 4 years", 0.62, 0.15, 0.7, 0.04, 0.95],
+    ],
+    check: (i) => {
+      expect(i.player).toBe("Ken Griffey Jr.");
+      expect(i).toMatchObject({ year: 1990, team: "Seattle Mariners", sport: "baseball", cardNumber: null });
+    },
+  },
+  {
+    name: "a bio that starts with a first name is not the player",
+    back: [
+      ["BO JACKSON", 0.06, 0.2, 0.5, 0.05, 0.85],
+      ["Bo played football at Auburn", 0.5, 0.1, 0.8, 0.03, 0.8],
+      ["Vincent Edward Jackson was drafted by the Royals.", 0.55, 0.1, 0.8, 0.03, 0.8],
+      ["\u00a9 1990 THE TOPPS COMPANY, INC.", 0.95, 0.1, 0.8, 0.02, 0.7],
+    ],
+    check: (i) => expect(i.player).toBe("Bo Jackson"),
+  },
 ];
 
 describe("realistic noisy card text", () => {

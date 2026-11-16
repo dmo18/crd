@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import { afterAll, describe, expect, it } from "vitest";
-import { closeTextReader, getTextReader, type OcrResult } from "./ocr";
+import { GRIFFEY, readFixture } from "../../../tests/helpers/ocr-fixture";
+import { closeTextReader, getTextReader, MAX_PASSES, type OcrResult } from "./ocr";
 
 const TIMEOUT = 60_000;
 
@@ -163,4 +164,98 @@ describe("framed labels", () => {
       expect(l.box.y + l.box.h).toBeLessThanOrEqual(1.0001);
     }
   }, 60000);
+});
+
+describe("band and edge passes", () => {
+  // A card front: a busy photo area, a team banner and a name strip.
+  function front(band: string, ink: string, name: string): Buffer {
+    return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="600" height="840">
+      <rect width="100%" height="100%" fill="#d9d4c7"/>
+      <rect x="30" y="30" width="540" height="780" fill="#6f8fa8"/>
+      <circle cx="300" cy="420" r="170" fill="#8a6b52"/>
+      <rect x="60" y="690" width="510" height="80" fill="${band}"/>
+      <text x="90" y="748" font-family="DejaVu Sans, Arial, sans-serif" font-size="46" font-weight="bold" fill="${ink}">${name}</text>
+    </svg>`);
+  }
+
+  it("finds a dark band and a colored band where they are", async () => {
+    const { findBands } = await import("./ocr");
+    for (const [band, ink] of [["#111111", "#ffffff"], ["#f26a1b", "#111111"]]) {
+      const bands = await findBands(await jpeg(front(band, ink, "KEN GRIFFEY, JR.")));
+      const hit = bands.find((b) => Math.abs(b.box.y - 690 / 840) < 0.03);
+      expect(hit, band).toBeDefined();
+      expect(hit!.box.w).toBeGreaterThan(0.7);
+      expect(hit!.box.h).toBeLessThan(0.15);
+    }
+  });
+
+  it("finds no band in a plain photo", async () => {
+    const { findBands } = await import("./ocr");
+    const plain = await sharp({ create: { width: 600, height: 840, channels: 3, background: "#f3ecd8" } }).jpeg().toBuffer();
+    expect(await findBands(plain)).toEqual([]);
+  });
+
+  it(
+    "reads white on black and black on orange name strips",
+    async () => {
+      const cases: [string, string, string, RegExp][] = [
+        ["#111111", "#ffffff", "KEN GRIFFEY, JR.", /GRIFFEY/i],
+        ["#f26a1b", "#111111", "CAL RIPKEN, JR.", /RIPKEN/i],
+      ];
+      for (const [band, ink, name, re] of cases) {
+        const result = await getTextReader().read(await jpeg(front(band, ink, name)));
+        const line = result.lines.find((l) => re.test(l.text));
+        expect(line, name).toBeDefined();
+        expect(line!.box.y).toBeGreaterThan(0.75);
+        expect(result.passes).toBeLessThanOrEqual(MAX_PASSES);
+        expectBoxes(result);
+      }
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "reads the year from upright print by the right edge",
+    async () => {
+      const back = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="700">
+        <rect width="100%" height="100%" fill="#f3ecd8"/>
+        <g font-family="DejaVu Sans, Arial, sans-serif" fill="#222">
+          <text x="60" y="110" font-size="48" font-weight="bold">KEN GRIFFEY, JR. OF</text>
+          <text x="60" y="220" font-size="30">BATS: LEFT THROWS: LEFT</text>
+          <text transform="translate(965 640) rotate(-90)" font-size="24">© 1990 THE TOPPS COMPANY, INC.</text>
+        </g></svg>`);
+      const result = await getTextReader().read(await jpeg(back));
+      const line = result.lines.find((l) => /1990/.test(l.text));
+      expect(line).toBeDefined();
+      expect(line!.source).toBe("edge");
+      expect(line!.box.x).toBeGreaterThan(0.85);
+      expect(result.passes).toBeLessThanOrEqual(MAX_PASSES);
+      expectBoxes(result);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("the 1990 Topps Ken Griffey Jr. photos", () => {
+  it(
+    "reads the name from the front strip and the back header, within the pass and time limits",
+    async () => {
+      const reader = getTextReader();
+      // Start the engine first, so the time below is the reading only.
+      await reader.read(await jpeg(cardSvg("#f3ecd8", "#222222")));
+      const started = Date.now();
+      const { front, back } = await readFixture(GRIFFEY, reader);
+      const seconds = (Date.now() - started) / 1000;
+      console.log(`Griffey photos read in ${seconds.toFixed(1)} s (front ${front.passes} passes, back ${back.passes} passes)`);
+      expect(seconds).toBeLessThan(40);
+      expect(front.passes).toBeLessThanOrEqual(MAX_PASSES);
+      expect(back.passes).toBeLessThanOrEqual(MAX_PASSES);
+      expect(front.lines.some((l) => /GRIFFEY/i.test(l.text))).toBe(true);
+      // The back header is light text on a dark band at the top.
+      expect(back.lines.some((l) => /GRIFFEY/i.test(l.text) && l.box.y < 0.25)).toBe(true);
+      // The cap hides part of MARINERS on the front; the back stat table reads it with one letter off.
+      expect([...front.lines, ...back.lines].some((l) => /MAR[A-Z]{1,2}NERS/i.test(l.text))).toBe(true);
+    },
+    TIMEOUT * 2,
+  );
 });
