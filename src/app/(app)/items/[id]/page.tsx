@@ -13,7 +13,7 @@ import { getDb } from "@/db";
 import { images, items, locations } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
-import { daysLeft } from "@/lib/items/bin";
+import { daysLeft, timeLeftText } from "@/lib/items/bin";
 import { confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
 import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
@@ -43,7 +43,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
         <Card className="flex flex-col gap-3">
           <p className="font-semibold">This was deleted on {on}.</p>
           <p className="text-sm text-muted">
-            {left === 1 ? "It is removed for good in 1 day." : `It is removed for good in ${left} days.`} Restore it to bring it back with its photos and value history.
+            {timeLeftText(left)} Restore it to bring it back with its photos and value history.
           </p>
           <form action={restoreItemAction}>
             <input type="hidden" name="id" value={item.id} />

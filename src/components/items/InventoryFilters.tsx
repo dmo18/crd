@@ -1,3 +1,4 @@
+import { SmartChips } from "@/components/items/SmartChips";
 import { Button, Field, INPUT_CLASS, LinkButton } from "@/components/ui";
 import { ITEM_KINDS, ITEM_STATUSES, RARITY_TIERS, SPORTS, type Location } from "@/db/schema";
 import { KIND_LABELS, RARITY_LABELS, SPORT_LABELS } from "@/lib/items/labels";
@@ -15,6 +16,12 @@ const SORT_OPTIONS = [
   ["title", "Title A to Z"],
 ] as const;
 
+const MISSING_LABELS = {
+  player: "No player", year: "No year", brand: "No brand", cardNumber: "No card number", team: "No team",
+  location: "No location", value: "No value", photo: "No photo",
+} as const;
+const FLAG_LABELS = { duplicates: "Possible duplicates", lowConfidence: "Unsure reads" } as const;
+
 /** The dashboard's "Key cards" tile counts both of these. */
 const KEY_OR_GRAIL = "key,grail";
 
@@ -28,16 +35,24 @@ export function activeFilterLabels(f: Filters, locations: Pick<Location, "id" | 
   if (f.location === "none") out.push("No location");
   else if (f.location != null) out.push(`Location ${locations.find((l) => l.id === f.location)?.name ?? "Unknown"}`);
   if (f.value === "none") out.push("Needs a value");
+  if (f.missing) out.push(MISSING_LABELS[f.missing]);
+  if (f.flag) out.push(FLAG_LABELS[f.flag]);
   if (f.rookie) out.push("Rookies only");
   if (f.yearFrom != null) out.push(`From ${f.yearFrom}`);
   if (f.yearTo != null) out.push(`To ${f.yearTo}`);
   return out;
 }
 
-export function InventoryFilters({ filters, locations }: { filters: Filters; locations: Pick<Location, "id" | "name">[] }) {
+export function InventoryFilters({ filters, locations, action = "/items" }: {
+  filters: Filters; locations: Pick<Location, "id" | "name">[]; action?: "/items" | "/manage";
+}) {
   const active = activeFilterLabels(filters, locations);
   return (
-    <form method="get" action="/items" className="flex flex-col gap-3 pb-4">
+    <>
+    <SmartChips filters={filters} basePath={action} />
+    <form method="get" action={action} className="flex flex-col gap-3 pb-4">
+      {filters.missing ? <input type="hidden" name="missing" value={filters.missing} /> : null}
+      {filters.flag ? <input type="hidden" name="flag" value={filters.flag} /> : null}
       <Field label="Search" htmlFor="inv-q">
         <input id="inv-q" name="q" type="search" defaultValue={filters.q ?? ""} maxLength={100}
           placeholder="Player, set, team, number" className={INPUT_CLASS} />
@@ -110,8 +125,9 @@ export function InventoryFilters({ filters, locations }: { filters: Filters; loc
       {active.length > 0 ? <p className="text-sm text-muted">Filters on: {active.join(", ")}</p> : null}
       <div className="grid grid-cols-2 gap-3">
         <Button type="submit">Apply</Button>
-        <LinkButton href="/items" variant="secondary">Clear</LinkButton>
+        <LinkButton href={action} variant="secondary">Clear</LinkButton>
       </div>
     </form>
+    </>
   );
 }

@@ -11,7 +11,7 @@ const idsOf = (url: string) => (new URL(url, "http://x").searchParams.get("ids")
 
 function view(id: number, status: ScanView["status"]): ScanView {
   return {
-    id, mode: "single", status, error: status === "failed" ? "Bad photo" : null, itemCount: status === "done" ? 1 : 0, createdAt: 0,
+    id, mode: "single", status, error: status === "failed" ? "Bad photo" : null, itemCount: status === "done" ? 1 : 0, inBin: 0, createdAt: 0,
     startedAt: status === "queued" ? null : 0, queuePosition: status === "queued" ? 1 : null, serverTime: 0,
     items: (status === "done" ? [{ id: 1, status: "confirmed" }] : []) as unknown as ScanView["items"],
   };

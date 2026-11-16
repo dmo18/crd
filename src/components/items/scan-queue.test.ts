@@ -11,7 +11,7 @@ function run(actions: QueueAction[], from: QueueState = emptyQueue): QueueState 
 const add = (key: number): QueueAction => ({ type: "add", key, clientKey: `k${key}`, name: `p${key}.jpg`, previewUrl: null });
 function view(id: number, status: ScanView["status"], itemStatuses: string[] = []): ScanView {
   return {
-    id, mode: "single", status, error: status === "failed" ? "Bad photo" : null, itemCount: itemStatuses.length, createdAt: 0,
+    id, mode: "single", status, error: status === "failed" ? "Bad photo" : null, itemCount: itemStatuses.length, inBin: 0, createdAt: 0,
     startedAt: status === "queued" ? null : 0, queuePosition: status === "queued" ? 1 : null, serverTime: 0,
     items: itemStatuses.map((s, i) => ({ id: i + 1, status: s })) as unknown as ScanView["items"],
   };

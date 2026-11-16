@@ -89,7 +89,12 @@ function ScanRow({ scan, photo, onChanged }: { scan: ScanView; photo: string | n
           {scanStatusWords(scan)}
         </p>
         {wait ? <p className="text-sm text-muted">{wait}</p> : null}
-        {scan.status === "done" && scan.items.length === 0 ? <p className="text-sm text-muted">No card found.</p> : null}
+        {scan.status === "done" && scan.items.length === 0 && scan.inBin === 0 ? <p className="text-sm text-muted">No card found.</p> : null}
+        {scan.status === "done" && scan.inBin > 0 ? (
+          <Link href="/manage/deleted" className="inline-flex min-h-11 items-center text-sm text-accent underline">
+            {scan.items.length === 0 ? "In Recently deleted" : `${scan.inBin === 1 ? "1 card" : `${scan.inBin} cards`} in Recently deleted`}
+          </Link>
+        ) : null}
         {scan.status === "done" && scan.items.length > 0 ? (
           <ul className="flex flex-col gap-1">
             {scan.items.map((item) => (

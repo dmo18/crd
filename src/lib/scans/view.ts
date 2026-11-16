@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, lt, or } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, type Item, type Scan } from "@/db/schema";
 import { liveItem } from "@/lib/items/live";
@@ -26,6 +26,8 @@ export type ScanView = {
   status: Scan["status"];
   error: string | null;
   itemCount: number;
+  /** Items of this scan that are in Recently deleted (they are not in `items`). */
+  inBin: number;
   createdAt: number;
   /** When processing began (ms), or null while it waits in line. */
   startedAt: number | null;
@@ -35,6 +37,16 @@ export type ScanView = {
   serverTime: number;
   items: ItemSummary[];
 };
+
+/** How many items of each scan are in Recently deleted. Reads deleted rows on purpose (scan activity says so). */
+function binCounts(scanIds: number[], db: Db): Map<number, number> {
+  const out = new Map<number, number>();
+  if (scanIds.length === 0) return out;
+  const rows = db.select({ scanId: items.scanId, n: count() }).from(items)
+    .where(and(inArray(items.scanId, scanIds), isNotNull(items.deletedAt))).groupBy(items.scanId).all();
+  for (const r of rows) if (r.scanId != null) out.set(r.scanId, r.n);
+  return out;
+}
 
 /**
  * Place in line for a queued scan. Uses this server's queue order when the
@@ -80,6 +92,7 @@ export function getScanView(scanId: number, db: Db = getDb(), order: number[] = 
   const rows = db.select().from(items).where(and(eq(items.scanId, scanId), liveItem)).orderBy(asc(items.id)).all();
   return {
     id: scan.id, mode: scan.mode, status: scan.status, error: scan.error, itemCount: scan.itemCount,
+    inBin: binCounts([scan.id], db).get(scan.id) ?? 0,
     createdAt: scan.createdAt.getTime(), startedAt: scan.startedAt?.getTime() ?? null,
     queuePosition: scan.status === "queued" ? queuePositionOf(scan, order, db) : null,
     serverTime: now,
@@ -114,8 +127,10 @@ export function scanViews(scanIds: number[], db: Db = getDb(), order: number[] =
     if (at >= 0) return at + 1 - (at > 0 && headProcessing ? 1 : 0);
     return active.filter((a) => a.id < id).length + 1;
   };
+  const bin = binCounts(rows.map((r) => r.id), db);
   return rows.map((scan) => ({
     id: scan.id, mode: scan.mode, status: scan.status, error: scan.error, itemCount: scan.itemCount,
+    inBin: bin.get(scan.id) ?? 0,
     createdAt: scan.createdAt.getTime(), startedAt: scan.startedAt?.getTime() ?? null,
     queuePosition: scan.status === "queued" ? position(scan.id) : null,
     serverTime: now,
@@ -146,9 +161,18 @@ export function scanStatusCounts(db: Db = getDb()): ScanStatusCounts {
   return { reading, failed, toReview };
 }
 
-/** One small photo per scan (front first), for the Scan activity page. Null when the files are gone. */
+/**
+ * One small photo per scan (front first), for the Scan activity page. None
+ * when the files are gone, or when every item of the scan is in Recently
+ * deleted (the photo shows the card, so it goes with it).
+ */
 export function scanPhotoThumbs(scanIds: number[], db: Db = getDb()): Map<number, string> {
   const out = new Map<number, string>();
+  if (scanIds.length === 0) return out;
+  const bin = binCounts(scanIds, db);
+  const live = new Set(bin.size === 0 ? [] : db.select({ scanId: items.scanId }).from(items)
+    .where(and(inArray(items.scanId, [...bin.keys()]), liveItem)).all().map((r) => r.scanId));
+  scanIds = scanIds.filter((id) => !bin.has(id) || live.has(id));
   if (scanIds.length === 0) return out;
   const order = { front: 0, source: 1, back: 2, crop: 3 } as const;
   const rows = db.select({ scanId: images.scanId, role: images.role, thumbFile: images.thumbFile })

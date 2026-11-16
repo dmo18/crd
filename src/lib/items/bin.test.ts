@@ -10,14 +10,15 @@ import { convertScanPhotos } from "@/lib/images/archive";
 import { removeOrphanPhotos } from "@/lib/images/cleanup";
 import { uploadsDir } from "@/lib/images/store";
 import { listLocations } from "@/lib/locations/locations";
+import { setLogSink } from "@/lib/log";
 import { recognizedItemSchema, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan } from "@/lib/scans/create";
 import { processScan } from "@/lib/scans/process";
-import { getScanView, recentScans, scanStatusCounts, scanViews } from "@/lib/scans/view";
+import { getScanView, recentScans, scanPhotoThumbs, scanStatusCounts, scanViews } from "@/lib/scans/view";
 import { revalueItem } from "@/lib/valuation";
 import { SampleSource } from "@/lib/valuation/sample-source";
 import { collectionTotals, recordSnapshot } from "@/lib/valuation/snapshots";
-import { BIN_DAYS, daysLeft, maybePurgeBin, purgeExpired, purgeItems, resetBinPurge, restoreItems, softDeleteItems } from "./bin";
+import { BIN_DAYS, daysLeft, timeLeftText, maybePurgeBin, purgeExpired, purgeItems, resetBinPurge, restoreItems, softDeleteItems } from "./bin";
 import { findDuplicates, mergeInto, reviewCount, reviewItems } from "./duplicates";
 import { inventoryFilterSchema, listItems } from "./query";
 import { setQuickValue } from "./quick-value";
@@ -240,5 +241,62 @@ describe("purge after 30 days", () => {
     expect(await maybePurgeBin({ db, now: new Date(now.getTime() + DAY / 2), marker })).toBe(0);
     resetBinPurge();
     await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("a failed purge is logged with its kind and does not write the marker, so the next visit tries again", async () => {
+    resetBinPurge();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "crd-bin-"));
+    const marker = path.join(dir, ".bin-purge");
+    const id = insert({});
+    const now = new Date();
+    softDeleteItems([id], db, new Date(now.getTime() - 31 * DAY));
+    const lines: string[] = [];
+    setLogSink((l) => lines.push(l));
+    const spy = vi.spyOn(db, "select").mockImplementation(() => { throw new TypeError("boom with private words"); });
+    expect(await maybePurgeBin({ db, now, marker })).toBe(0);
+    spy.mockRestore();
+    setLogSink();
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ event: "bin_purge_failed", level: "error", error: "TypeError" });
+    expect(lines[0]).not.toContain("private words");
+    expect(await exists(marker)).toBe(false);
+    // Next visit (new process): the marker is missing, so it purges and then writes it.
+    resetBinPurge();
+    expect(await maybePurgeBin({ db, now, marker })).toBe(1);
+    expect(Number(await fs.readFile(marker, "utf8"))).toBe(now.getTime());
+    resetBinPurge();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("says plain words when no days are left", () => {
+    expect(timeLeftText(0)).toBe("It will be removed for good soon.");
+    expect(timeLeftText(1)).toBe("It is removed for good in 1 day.");
+    expect(timeLeftText(12)).toBe("It is removed for good in 12 days.");
+  });
+});
+
+describe("scan activity and the bin", () => {
+  it("a one-card scan whose card is deleted says it is in the bin, with no photo, and comes back on restore", async () => {
+    const one = db.insert(scans).values({ mode: "single", status: "done", itemCount: 1 }).returning({ id: scans.id }).get().id;
+    const two = db.insert(scans).values({ mode: "multi", status: "done", itemCount: 2 }).returning({ id: scans.id }).get().id;
+    const a = insert({ scanId: one });
+    const b = insert({ scanId: two });
+    insert({ scanId: two });
+    for (const s of [one, two]) {
+      db.insert(images).values({ scanId: s, role: "front", file: `f${s}.jpg`, thumbFile: `t${s}.jpg`, width: 1, height: 1, bytes: 1 }).run();
+    }
+    softDeleteItems([a, b], db);
+    const list = recentScans(50, db);
+    const v1 = list.find((s) => s.id === one)!;
+    expect([v1.items.length, v1.inBin]).toEqual([0, 1]);
+    const v2 = list.find((s) => s.id === two)!;
+    expect([v2.items.length, v2.inBin]).toEqual([1, 1]);
+    expect(getScanView(one, db)!.inBin).toBe(1);
+    const thumbs = scanPhotoThumbs([one, two], db);
+    expect(thumbs.has(one)).toBe(false);
+    expect(thumbs.get(two)).toBe(`t${two}.jpg`);
+    restoreItems([a], db);
+    expect(scanPhotoThumbs([one], db).get(one)).toBe(`t${one}.jpg`);
+    expect(getScanView(one, db)!.inBin).toBe(0);
   });
 });

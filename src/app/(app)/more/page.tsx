@@ -26,6 +26,13 @@ export default async function MorePage() {
       </Card>
 
       <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Manage records</h2>
+        <p className="text-sm text-muted">Pick many cards and fix, move, check or delete them in one go.</p>
+        <LinkButton href="/manage" variant="secondary">Select and edit</LinkButton>
+        <LinkButton href="/manage/deleted" variant="secondary">Recently deleted</LinkButton>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Scan activity</h2>
         <p className="text-sm text-muted">What was read, what is waiting and what did not work.</p>
         <LinkButton href="/scans" variant="secondary">See scan activity</LinkButton>

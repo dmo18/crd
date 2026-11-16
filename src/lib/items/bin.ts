@@ -4,7 +4,7 @@ import { and, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items } from "@/db/schema";
 import { env } from "@/lib/env";
-import { log } from "@/lib/log";
+import { errorKind, log } from "@/lib/log";
 import { deletePhotoFiles, removeItemRows } from "./remove";
 
 /** Days an item stays in Recently deleted before it is removed for good. */
@@ -96,6 +96,12 @@ export function daysLeft(deletedAt: Date, now: Date = new Date()): number {
   return Math.max(0, Math.ceil((deletedAt.getTime() + BIN_DAYS * DAY_MS - now.getTime()) / DAY_MS));
 }
 
+/** Plain words for the time left, on the item page and in the bin. */
+export function timeLeftText(left: number): string {
+  if (left <= 0) return "It will be removed for good soon.";
+  return left === 1 ? "It is removed for good in 1 day." : `It is removed for good in ${left} days.`;
+}
+
 const EVERY_MS = DAY_MS;
 const holder = globalThis as unknown as { __crdBinPurge?: { lastRun: number; running: boolean } };
 
@@ -118,11 +124,13 @@ export function maybePurgeBin(deps: { db?: Db; now?: Date; marker?: string } = {
         state.lastRun = saved;
         return 0;
       }
-      await fs.writeFile(/*turbopackIgnore: true*/ marker, String(now.getTime()));
       const removed = await purgeExpired(deps.db ?? getDb(), now);
+      // The marker is written only after a purge that worked, so a failure tries again on the next visit.
+      await fs.writeFile(/*turbopackIgnore: true*/ marker, String(now.getTime()));
       if (removed > 0) log.info("bin_purge", { removed });
       return removed;
-    } catch {
+    } catch (err) {
+      log.error("bin_purge_failed", { error: errorKind(err) });
       return 0;
     } finally {
       state.running = false;

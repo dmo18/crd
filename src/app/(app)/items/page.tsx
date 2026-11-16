@@ -6,6 +6,7 @@ import { requireOwner } from "@/lib/auth/guard";
 import { locations } from "@/db/schema";
 import { inventoryFilterSchema, listItems } from "@/lib/items/query";
 import { formatCents } from "@/lib/money";
+import { filterParams } from "@/components/manage/filter-url";
 import { summarize } from "@/lib/scans/view";
 
 export const metadata = { title: "Inventory" };
@@ -25,7 +26,8 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
 
   const hasFilters = Boolean(
     filters.q || filters.kind || filters.sport || filters.status || filters.tier || filters.rookie ||
-    filters.yearFrom != null || filters.yearTo != null || filters.location != null,
+    filters.yearFrom != null || filters.yearTo != null || filters.location != null || filters.value != null ||
+    filters.missing || filters.flag,
   );
   const subtitle = [
     `${plural(result.total, "item", "items")}${hasFilters ? " matching" : ""}`,
@@ -47,6 +49,11 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
   return (
     <>
       <PageHeader title="Inventory" subtitle={subtitle} />
+      <div className="pb-4">
+        <LinkButton href={`/manage${filterParams(filters).size ? `?${filterParams(filters).toString()}` : ""}`} variant="secondary" className="w-full">
+          Select and edit
+        </LinkButton>
+      </div>
       <InventoryFilters filters={filters} locations={locationList} />
       {result.total === 0 ? (
         hasFilters ? (
