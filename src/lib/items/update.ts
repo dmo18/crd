@@ -1,9 +1,10 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { CONDITIONS, items, locations, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS, valuations, type Item } from "@/db/schema";
 import { MAX_QUANTITY } from "@/lib/items/duplicates";
-import { deletePhotoFiles, removeItemRows } from "@/lib/items/remove";
+import { softDeleteItems } from "@/lib/items/bin";
+import { liveItem } from "@/lib/items/live";
 import { parseDollars } from "@/lib/money";
 import { buildTitle } from "@/lib/title";
 
@@ -87,7 +88,7 @@ export function editableFields(kind: Item["kind"]): readonly string[] {
 }
 
 export function updateItem(id: number, input: unknown, db: Db = getDb()): UpdateResult {
-  const existing = db.select().from(items).where(eq(items.id, id)).get();
+  const existing = db.select().from(items).where(and(eq(items.id, id), liveItem)).get();
   if (!existing) return GONE;
 
   const raw: Record<string, unknown> = { ...(input as Record<string, unknown>) };
@@ -121,7 +122,7 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
       title: buildTitle(merged),
       manualValueCents: manualValue,
       updatedAt: now,
-    }).where(eq(items.id, id)).run();
+    }).where(and(eq(items.id, id), liveItem)).run();
     if (manualValue !== null && manualValue !== existing.manualValueCents) {
       tx.insert(valuations).values({
         itemId: id, source: "manual", lowCents: null, highCents: null, valueCents: manualValue,
@@ -133,17 +134,14 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
 }
 
 export function confirmItem(id: number, db: Db = getDb()): UpdateResult {
-  const res = db.update(items).set({ status: "confirmed", updatedAt: new Date() }).where(eq(items.id, id)).run();
+  const res = db.update(items).set({ status: "confirmed", updatedAt: new Date() }).where(and(eq(items.id, id), liveItem)).run();
   return res.changes > 0 ? { ok: true } : GONE;
 }
 
 /**
- * Deletes an item: all its rows in one transaction, then its photo files.
- * The last item of a scan also takes the scan's own photos with it.
+ * Deletes an item: it moves to Recently deleted with its photos and value
+ * history, and is removed for good after BIN_DAYS days (see bin.ts).
  */
-export async function deleteItem(id: number, db: Db = getDb()): Promise<UpdateResult> {
-  const files = db.transaction((tx) => removeItemRows(tx as unknown as Db, id), { behavior: "immediate" });
-  if (files === null) return GONE;
-  await deletePhotoFiles(files);
-  return { ok: true };
+export function deleteItem(id: number, db: Db = getDb()): UpdateResult {
+  return softDeleteItems([id], db) > 0 ? { ok: true } : GONE;
 }

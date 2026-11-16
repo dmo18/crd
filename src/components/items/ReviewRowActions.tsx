@@ -10,7 +10,7 @@ export function ReviewRowActions({ id, title }: { id: number; title: string }) {
     return (
       <form action={deleteFromReviewAction} className="flex flex-col gap-2">
         <input type="hidden" name="id" value={id} />
-        <p role="alert" className="text-sm font-semibold">Delete this item and its photos? This cannot be undone.</p>
+        <p role="alert" className="text-sm font-semibold">Delete this item? It goes to Recently deleted. You can bring it back for 30 days, then it is removed for good.</p>
         <div className="flex gap-2">
           <Button type="submit" variant="danger" aria-label={`Yes, delete ${title}`} className="flex-1">Yes, delete</Button>
           <Button type="button" variant="secondary" className="flex-1" onClick={() => setAsking(false)}>Cancel</Button>

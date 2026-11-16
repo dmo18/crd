@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, type Item, type Scan } from "@/db/schema";
+import { liveItem } from "@/lib/items/live";
 import { effectiveValueCents } from "@/lib/money";
 
 export type ItemSummary = {
@@ -76,7 +77,7 @@ export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {
 export function getScanView(scanId: number, db: Db = getDb(), order: number[] = [], now: number = Date.now()): ScanView | null {
   const scan = db.select().from(scans).where(eq(scans.id, scanId)).get();
   if (!scan) return null;
-  const rows = db.select().from(items).where(eq(items.scanId, scanId)).orderBy(asc(items.id)).all();
+  const rows = db.select().from(items).where(and(eq(items.scanId, scanId), liveItem)).orderBy(asc(items.id)).all();
   return {
     id: scan.id, mode: scan.mode, status: scan.status, error: scan.error, itemCount: scan.itemCount,
     createdAt: scan.createdAt.getTime(), startedAt: scan.startedAt?.getTime() ?? null,
@@ -95,7 +96,7 @@ export function scanViews(scanIds: number[], db: Db = getDb(), order: number[] =
   if (scanIds.length === 0) return [];
   const rows = db.select().from(scans).where(inArray(scans.id, scanIds)).orderBy(asc(scans.id)).all();
   if (rows.length === 0) return [];
-  const itemRows = db.select().from(items).where(inArray(items.scanId, rows.map((r) => r.id))).orderBy(asc(items.id)).all();
+  const itemRows = db.select().from(items).where(and(inArray(items.scanId, rows.map((r) => r.id)), liveItem)).orderBy(asc(items.id)).all();
   const summaries = summarize(itemRows, db);
   const byScan = new Map<number, ItemSummary[]>();
   itemRows.forEach((r, i) => {
@@ -141,7 +142,7 @@ export type ScanStatusCounts = { reading: number; failed: number; toReview: numb
 export function scanStatusCounts(db: Db = getDb()): ScanStatusCounts {
   const reading = db.select({ n: count() }).from(scans).where(inArray(scans.status, ["queued", "processing"])).get()?.n ?? 0;
   const failed = db.select({ n: count() }).from(scans).where(eq(scans.status, "failed")).get()?.n ?? 0;
-  const toReview = db.select({ n: count() }).from(items).where(eq(items.status, "needs_review")).get()?.n ?? 0;
+  const toReview = db.select({ n: count() }).from(items).where(and(liveItem, eq(items.status, "needs_review"))).get()?.n ?? 0;
   return { reading, failed, toReview };
 }
 

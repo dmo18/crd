@@ -6,6 +6,7 @@ import { z } from "zod";
 import { auditThisRequest } from "@/lib/audit/request";
 import { itemLabel } from "@/lib/audit/subjects";
 import { requireOwner } from "@/lib/auth/guard";
+import { restoreItems } from "./bin";
 import { confirmItem, deleteItem, updateItem } from "./update";
 
 export type SaveState = { status: "idle" | "saved" | "error"; errors: Record<string, string>; savedAt?: number };
@@ -54,8 +55,21 @@ export async function deleteItemAction(formData: FormData): Promise<void> {
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) redirect("/items");
   const title = itemLabel(id.data);
-  const result = await deleteItem(id.data);
-  if (result.ok) await auditThisRequest("item_deleted", "ok", title);
+  const result = deleteItem(id.data);
+  if (result.ok) await auditThisRequest("item_deleted", "ok", `${title}, to Recently deleted`);
   revalidateItem(id.data);
   redirect("/items");
+}
+
+/** Puts one item from Recently deleted back in the collection. */
+export async function restoreItemAction(formData: FormData): Promise<void> {
+  await requireOwner();
+  const id = idSchema.safeParse(formData.get("id"));
+  if (!id.success) redirect("/items");
+  const restored = restoreItems([id.data]);
+  if (restored > 0) await auditThisRequest("item_restored", "ok", itemLabel(id.data));
+  revalidateItem(id.data);
+  revalidatePath("/review");
+  revalidatePath("/scans");
+  redirect(`/items/${id.data}`);
 }

@@ -2,6 +2,7 @@ import { and, asc, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { items, locations } from "@/db/schema";
+import { liveItem } from "@/lib/items/live";
 import { LOCATION_KINDS } from "./kinds";
 
 
@@ -39,7 +40,7 @@ export function listLocations(db: Db = getDb()): LocationSummary[] {
       totalValueCents: sql<number>`coalesce(sum(coalesce(${items.manualValueCents}, ${items.estValueCents}, 0) * ${items.quantity}), 0)`.mapWith(Number),
     })
     .from(locations)
-    .leftJoin(items, eq(items.locationId, locations.id))
+    .leftJoin(items, and(eq(items.locationId, locations.id), liveItem))
     .groupBy(locations.id)
     .orderBy(asc(sql`lower(${locations.name})`), asc(locations.id))
     .all();

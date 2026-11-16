@@ -10,7 +10,7 @@ const row = (over: Partial<Item> = {}): Item => ({
   worthGrading: null, gradingNotes: null, productType: null, packCount: null, sealState: null, estCount: null,
   containerType: null, description: null, pullList: null, quantity: 1, locationId: null, notes: null, confidence: null,
   aiNotes: null, estLowCents: null, estHighCents: null, estValueCents: null, valueSource: null, valueBasis: null,
-  valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(),
+  valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(), deletedAt: null,
   ...over,
 });
 

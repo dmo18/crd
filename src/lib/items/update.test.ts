@@ -69,11 +69,15 @@ describe("confirm and delete", () => {
     expect(get(id).status).toBe("confirmed");
   });
 
-  it("deletes an item", async () => {
-    const id = insert();
-    expect(await deleteItem(id, db)).toEqual({ ok: true });
-    expect(db.select().from(items).where(eq(items.id, id)).get()).toBeUndefined();
-    expect((await deleteItem(id, db)).ok).toBe(false);
+  it("deletes an item to Recently deleted, and a deleted item cannot be edited or confirmed", () => {
+    const id = insert({ status: "needs_review" });
+    expect(deleteItem(id, db)).toEqual({ ok: true });
+    expect(get(id).deletedAt).toBeInstanceOf(Date);
+    expect(deleteItem(id, db).ok).toBe(false);
+    expect(deleteItem(999, db).ok).toBe(false);
+    expect(updateItem(id, { ...base, player: "X" }, db).ok).toBe(false);
+    expect(confirmItem(id, db).ok).toBe(false);
+    expect(get(id).status).toBe("needs_review");
   });
 });
 

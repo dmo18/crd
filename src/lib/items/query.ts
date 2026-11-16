@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql, type SQL } from
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { ITEM_KINDS, ITEM_STATUSES, RARITY_TIERS, SPORTS, items, type Item } from "@/db/schema";
+import { liveItem } from "./live";
 
 export const PAGE_SIZE = 40;
 export const SORTS = ["newest", "oldest", "value_desc", "value_asc", "year_asc", "year_desc", "player", "title"] as const;
@@ -54,7 +55,7 @@ const SEARCH_COLUMNS = [
 const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 function where(f: InventoryFilters): SQL | undefined {
-  const conds: (SQL | undefined)[] = [];
+  const conds: (SQL | undefined)[] = [liveItem];
   const words = (f.q ?? "").split(/\s+/).filter(Boolean).slice(0, 5);
   for (const w of words) {
     const pattern = `%${escapeLike(w)}%`;

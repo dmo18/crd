@@ -4,7 +4,9 @@ import { images, items, scans, valuations } from "@/db/schema";
 import { deleteStored } from "@/lib/images/store";
 
 /**
- * Removes an item's database rows. Call inside a transaction. When it was the
+ * Removes an item's database rows for good. Only purge (bin.ts) and merging
+ * duplicates call this; the Delete buttons move items to Recently deleted.
+ * Reads the item whether or not it is in the bin. Call inside a transaction. When it was the
  * last item left from its scan (for example the last card cut out of a
  * multi-card photo), the scan's own photos and the scan itself go too.
  * Returns the photo files to delete once the transaction has committed, or
@@ -20,6 +22,7 @@ export function removeItemRows(tx: Db, itemId: number): string[] | null {
   tx.delete(items).where(eq(items.id, itemId)).run();
 
   if (item.scanId != null) {
+    // Counts items in Recently deleted too, on purpose: they still need the scan's photos.
     const left = tx.select({ n: count() }).from(items).where(eq(items.scanId, item.scanId)).get()?.n ?? 0;
     const scan = tx.select({ status: scans.status }).from(scans).where(eq(scans.id, item.scanId)).get();
     if (left === 0 && scan?.status === "done") {

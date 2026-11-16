@@ -46,8 +46,8 @@ export async function deleteFromReviewAction(formData: FormData): Promise<void> 
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) return;
   const label = itemLabel(id.data);
-  const result = await deleteItem(id.data);
-  if (result.ok) await auditThisRequest("item_deleted", "ok", label);
+  const result = deleteItem(id.data);
+  if (result.ok) await auditThisRequest("item_deleted", "ok", `${label}, to Recently deleted`);
   refresh();
 }
 

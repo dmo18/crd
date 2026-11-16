@@ -38,6 +38,8 @@ export function describeAudit(row: { event: AuditEvent; ip: string; detail: stri
       return d ? `Merged duplicates: ${d}` : "Merged duplicates";
     case "location_deleted":
       return d ? `Deleted location ${d}` : "Deleted a location";
+    case "item_restored":
+      return d ? `Brought back ${d} from Recently deleted` : "Brought back an item from Recently deleted";
     case "backup_note":
       return d ? `Backup: ${d}` : "Backup note";
   }

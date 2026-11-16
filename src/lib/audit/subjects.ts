@@ -4,6 +4,7 @@ import { items, locations } from "@/db/schema";
 
 /** "item 12, 1989 Topps Ken Griffey Jr." for the activity log. Read it before the item is gone. */
 export function itemLabel(id: number, db: Db = getDb()): string {
+  // Any item, also one in Recently deleted: the label is only for the log.
   const row = db.select({ title: items.title }).from(items).where(eq(items.id, id)).get();
   return row ? `item ${id}, ${row.title}` : `item ${id}`;
 }

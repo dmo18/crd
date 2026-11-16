@@ -1,4 +1,4 @@
-import { asc, count, eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { DeleteFailedScans } from "@/components/items/DeleteFailedScans";
 import { ItemRow } from "@/components/items/ItemRow";
@@ -6,8 +6,8 @@ import { ReviewRowActions } from "@/components/items/ReviewRowActions";
 import { Button, Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
 import { requireOwner } from "@/lib/auth/guard";
-import { items, scans } from "@/db/schema";
-import { findDuplicates, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount } from "@/lib/items/duplicates";
+import { scans } from "@/db/schema";
+import { findDuplicates, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount, reviewItems } from "@/lib/items/duplicates";
 import { mergeDuplicateAction } from "@/lib/items/review-actions";
 import { summarize } from "@/lib/scans/view";
 
@@ -30,8 +30,7 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
   const db = getDb();
   const failedScans = db.select({ n: count() }).from(scans).where(eq(scans.status, "failed")).get()?.n ?? 0;
   const total = reviewCount(db);
-  const rows = db.select().from(items).where(eq(items.status, "needs_review"))
-    .orderBy(asc(items.createdAt), asc(items.id)).limit(LIMIT).all();
+  const rows = reviewItems(LIMIT, db);
   const summaries = summarize(rows, db);
 
   return (

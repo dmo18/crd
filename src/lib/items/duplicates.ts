@@ -1,6 +1,7 @@
 import { and, asc, count, eq, isNull, ne } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items, valuations, type Item } from "@/db/schema";
+import { liveItem } from "./live";
 import { removeItemRows } from "./remove";
 
 const norm = (v: string | null | undefined): string | null => {
@@ -29,12 +30,13 @@ function keyFor(item: Item): string[] | null {
 
 /** Other confirmed items that are the same card (or sealed product) as this one. */
 export function findDuplicates(itemId: number, db: Db = getDb()): Item[] {
-  const item = db.select().from(items).where(eq(items.id, itemId)).get();
+  const item = db.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
   if (!item) return [];
   const key = keyFor(item);
   if (!key) return [];
   const candidates = db.select().from(items)
     .where(and(
+      liveItem,
       eq(items.kind, item.kind),
       eq(items.status, "confirmed"),
       ne(items.id, item.id),
@@ -73,8 +75,9 @@ const VALUE_FIELDS = ["estLowCents", "estHighCents", "estValueCents", "valueSour
 export function mergeInto(sourceId: number, targetId: number, db: Db = getDb()): MergeResult {
   if (sourceId === targetId) return refuse("not_same");
   return db.transaction((tx): MergeResult => {
-    const source = tx.select().from(items).where(eq(items.id, sourceId)).get();
-    const target = tx.select().from(items).where(eq(items.id, targetId)).get();
+    // An item in Recently deleted cannot take part in a merge.
+    const source = tx.select().from(items).where(and(eq(items.id, sourceId), liveItem)).get();
+    const target = tx.select().from(items).where(and(eq(items.id, targetId), liveItem)).get();
     if (!source || !target) return refuse("gone");
     if (!findDuplicates(sourceId, tx as unknown as Db).some((d) => d.id === targetId)) return refuse("not_same");
     const quantity = target.quantity + source.quantity;
@@ -89,12 +92,20 @@ export function mergeInto(sourceId: number, targetId: number, db: Db = getDb()):
     }
     tx.update(items).set(patch).where(eq(items.id, targetId)).run();
     if (takeValue) tx.update(valuations).set({ itemId: targetId }).where(eq(valuations.itemId, sourceId)).run();
+    // A hard delete on purpose, not the bin: the source's count now lives in
+    // the target, so restoring the source would count it twice.
     const files = removeItemRows(tx as unknown as Db, sourceId) ?? [];
     return { ok: true, targetId, files };
   });
 }
 
+/** The review queue, oldest first. */
+export function reviewItems(limit: number, db: Db = getDb()): Item[] {
+  return db.select().from(items).where(and(liveItem, eq(items.status, "needs_review")))
+    .orderBy(asc(items.createdAt), asc(items.id)).limit(limit).all();
+}
+
 /** How many items are waiting in the review queue. */
 export function reviewCount(db: Db = getDb()): number {
-  return db.select({ n: count() }).from(items).where(eq(items.status, "needs_review")).get()?.n ?? 0;
+  return db.select({ n: count() }).from(items).where(and(liveItem, eq(items.status, "needs_review"))).get()?.n ?? 0;
 }

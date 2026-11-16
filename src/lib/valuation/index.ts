@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items, valuations } from "@/db/schema";
+import { liveItem } from "@/lib/items/live";
 import { env, recognitionMode } from "@/lib/env";
 import { errorKind, log } from "@/lib/log";
 import { AiPriceSource } from "./ai-source";
@@ -34,7 +35,7 @@ export type RevalueDeps = { db?: Db; source?: PriceSource; now?: Date };
  */
 export async function revalueItem(itemId: number, deps: RevalueDeps = {}): Promise<RevalueResult> {
   const db = deps.db ?? getDb();
-  const item = db.select().from(items).where(eq(items.id, itemId)).get();
+  const item = db.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
   if (!item) return { ok: false, error: REVALUE_MESSAGES.missing };
 
   let quote: PriceQuote | null;
@@ -59,7 +60,7 @@ export async function revalueItem(itemId: number, deps: RevalueDeps = {}): Promi
       valueBasis: saved.basis,
       valuedAt: at,
       updatedAt: at,
-    }).where(eq(items.id, itemId)).returning({ id: items.id }).get();
+    }).where(and(eq(items.id, itemId), liveItem)).returning({ id: items.id }).get();
     if (!row) return false;
     tx.insert(valuations).values({
       itemId, source: saved.source, lowCents: saved.lowCents, highCents: saved.highCents,
@@ -67,7 +68,7 @@ export async function revalueItem(itemId: number, deps: RevalueDeps = {}): Promi
     }).run();
     return true;
   });
-  // The item can be deleted while the AI is answering.
+  // The item can be deleted (or moved to Recently deleted) while the AI is answering.
   if (!updated) return { ok: false, error: REVALUE_MESSAGES.missing };
   return { ok: true, quote };
 }

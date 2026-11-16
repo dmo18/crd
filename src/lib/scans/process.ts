@@ -107,6 +107,7 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
       });
       // One-item scans: the photos themselves belong to that item.
       if (scan.mode !== "multi" && recognized.length === 1) {
+        // Not filtered by liveItem: the item was made a moment ago in this transaction.
         const only = tx.select({ id: items.id }).from(items).where(eq(items.scanId, scanId)).get();
         if (only) tx.update(images).set({ itemId: only.id }).where(eq(images.scanId, scanId)).run();
       }

@@ -11,8 +11,8 @@ import { recognizedItemSchema, type RecognizedItemInput, type Recognizer } from 
 import { createScan } from "@/lib/scans/create";
 import { processScan } from "@/lib/scans/process";
 import { mergeInto } from "./duplicates";
+import { purgeItems, softDeleteItems } from "./bin";
 import { deleteFailedScans } from "./remove";
-import { deleteItem } from "./update";
 
 const photo = () => sharp({ create: { width: 900, height: 1200, channels: 3, background: "#336699" } }).jpeg().toBuffer();
 const exists = (f: string) => fs.access(path.join(uploadsDir(), f)).then(() => true, () => false);
@@ -26,6 +26,12 @@ const card: RecognizedItemInput = {
 
 let db: Db;
 beforeEach(() => { db = createDb(":memory:"); });
+
+/** Delete forever: to the bin, then purged, as the bin screen and the daily job do. */
+async function forever(id: number, on: Db = db): Promise<number> {
+  softDeleteItems([id], db);
+  return purgeItems([id], on);
+}
 
 async function multiScan() {
   const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }] }, db);
@@ -42,15 +48,15 @@ async function multiScan() {
   return { scanId, itemIds: db.select({ id: items.id }).from(items).all().map((r) => r.id), files: rows.flatMap((r) => [r.file, r.thumbFile]) };
 }
 
-describe("deleteItem", () => {
+describe("deleting an item forever (purge)", () => {
   it("keeps the scan's photo until its last card is deleted, then removes the photo and the scan", async () => {
     const { scanId, itemIds, files } = await multiScan();
     const source = db.select().from(images).where(eq(images.role, "source")).get()!;
-    expect(await deleteItem(itemIds[0]!, db)).toEqual({ ok: true });
+    expect(await forever(itemIds[0]!)).toBe(1);
     expect(await exists(source.file)).toBe(true);
     expect(db.select().from(scans).where(eq(scans.id, scanId)).get()).toBeDefined();
 
-    expect(await deleteItem(itemIds[1]!, db)).toEqual({ ok: true });
+    expect(await forever(itemIds[1]!)).toBe(1);
     expect(db.select().from(scans).all()).toHaveLength(0);
     expect(db.select().from(images).all()).toHaveLength(0);
     expect(db.select().from(valuations).all()).toHaveLength(0);
@@ -66,7 +72,7 @@ describe("deleteItem", () => {
     expect(files).toHaveLength(4);
     for (const f of files) expect(await exists(f)).toBe(true);
     const id = db.select().from(items).get()!.id;
-    await deleteItem(id, db);
+    expect(await forever(id)).toBe(1);
     for (const f of files) expect(await exists(f)).toBe(false);
     expect(db.select().from(scans).all()).toHaveLength(0);
   });
@@ -79,7 +85,7 @@ describe("deleteItem", () => {
         return Reflect.get(target, prop, recv);
       },
     });
-    await expect(deleteItem(itemIds[0]!, broken)).rejects.toThrow();
+    await expect(forever(itemIds[0]!, broken)).rejects.toThrow();
     expect(db.select().from(items).all()).toHaveLength(2);
     for (const f of files) expect(await exists(f)).toBe(true);
   });
@@ -91,7 +97,7 @@ describe("merge of the last card of a scan", () => {
     db.update(items).set({ status: "needs_review" }).where(eq(items.id, itemIds[1]!)).run();
     // Make the second card a duplicate of an older confirmed one from somewhere else.
     const target = db.insert(items).values({ kind: "card", title: "T", status: "confirmed", year: 1989, brand: "Upper Deck", cardNumber: "2", player: "Ken Griffey Jr." }).returning().get();
-    await deleteItem(itemIds[0]!, db);
+    await forever(itemIds[0]!);
     const r = mergeInto(itemIds[1]!, target.id, db);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.files.length).toBeGreaterThanOrEqual(2);

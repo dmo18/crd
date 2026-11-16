@@ -1,6 +1,7 @@
 import { and, asc, gte, lte, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { collectionSnapshots, items } from "@/db/schema";
+import { liveItem } from "@/lib/items/live";
 
 /** The UTC day of a moment, as "YYYY-MM-DD". */
 export function utcDay(at: Date): string {
@@ -8,7 +9,8 @@ export function utcDay(at: Date): string {
 }
 
 /**
- * The whole collection's worth right now, over every item whatever its status.
+ * The whole collection's worth right now, over every item whatever its status
+ * (items in Recently deleted are not counted).
  * Each unit counts at the owner's value when set, else the estimate, else 0.
  */
 export function collectionTotals(db: Db = getDb()): { totalValueCents: number; itemCount: number; unitCount: number } {
@@ -16,7 +18,7 @@ export function collectionTotals(db: Db = getDb()): { totalValueCents: number; i
     totalValueCents: sql<number>`coalesce(sum(coalesce(${items.manualValueCents}, ${items.estValueCents}, 0) * ${items.quantity}), 0)`,
     itemCount: sql<number>`count(*)`,
     unitCount: sql<number>`coalesce(sum(${items.quantity}), 0)`,
-  }).from(items).get();
+  }).from(items).where(liveItem).get();
   return {
     totalValueCents: Number(row?.totalValueCents ?? 0),
     itemCount: Number(row?.itemCount ?? 0),

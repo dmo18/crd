@@ -12,7 +12,8 @@ import { Button, Card, Notice } from "@/components/ui";
 import { getDb } from "@/db";
 import { images, items, locations } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
-import { confirmItemAction } from "@/lib/items/actions";
+import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
+import { daysLeft } from "@/lib/items/bin";
 import { confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
 import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
@@ -30,8 +31,28 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   if (!/^\d{1,9}$/.test(rawId)) notFound();
   const id = Number(rawId);
   const db = getDb();
+  // Reads deleted rows on purpose: a deleted item shows only its Restore step.
   const item = db.select().from(items).where(eq(items.id, id)).get();
   if (!item) notFound();
+  if (item.deletedAt) {
+    const left = daysLeft(item.deletedAt);
+    const on = item.deletedAt.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    return (
+      <div className="flex flex-col gap-4">
+        <h1 className="text-2xl font-bold text-balance break-words">{item.title}</h1>
+        <Card className="flex flex-col gap-3">
+          <p className="font-semibold">This was deleted on {on}.</p>
+          <p className="text-sm text-muted">
+            {left === 1 ? "It is removed for good in 1 day." : `It is removed for good in ${left} days.`} Restore it to bring it back with its photos and value history.
+          </p>
+          <form action={restoreItemAction}>
+            <input type="hidden" name="id" value={item.id} />
+            <Button type="submit" className="w-full">Restore</Button>
+          </form>
+        </Card>
+      </div>
+    );
+  }
   const photos = db.select().from(images).where(eq(images.itemId, id)).orderBy(asc(images.id)).all()
     .sort((a, b) => ROLE_ORDER[a.role] - ROLE_ORDER[b.role]);
   const location = item.locationId == null ? null

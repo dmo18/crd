@@ -19,7 +19,7 @@ export const ATTEMPT_KINDS = ["login", "setup", "change_password"] as const;
 export const AUDIT_EVENTS = [
   "sign_in_ok", "sign_in_failed", "sign_in_blocked", "setup_done", "setup_failed", "password_changed",
   "signed_out", "signed_out_others", "export_csv", "item_deleted", "failed_scans_deleted", "items_merged",
-  "location_deleted", "backup_note",
+  "location_deleted", "backup_note", "item_restored",
 ] as const;
 /** Sign-in and account events. The rest are changes to the collection. */
 export const SECURITY_AUDIT_EVENTS = [
@@ -27,6 +27,8 @@ export const SECURITY_AUDIT_EVENTS = [
   "signed_out", "signed_out_others",
 ] as const satisfies readonly (typeof AUDIT_EVENTS)[number][];
 export const AUDIT_OUTCOMES = ["ok", "failed", "blocked"] as const;
+/** The kinds of change a bulk operation can make (Manage records). */
+export const BULK_OP_ACTIONS = ["set", "replace", "move", "status", "delete"] as const;
 
 export type ItemKind = (typeof ITEM_KINDS)[number];
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
@@ -42,6 +44,7 @@ export type ValueSource = (typeof VALUE_SOURCES)[number];
 export type AttemptKind = (typeof ATTEMPT_KINDS)[number];
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 export type AuditOutcome = (typeof AUDIT_OUTCOMES)[number];
+export type BulkOpAction = (typeof BULK_OP_ACTIONS)[number];
 
 const now = sql`(unixepoch() * 1000)`;
 const bool = (name: string) => integer(name, { mode: "boolean" }).notNull().default(false);
@@ -160,6 +163,11 @@ export const items = sqliteTable("items", {
 
   createdAt: ts("created_at").notNull().default(now),
   updatedAt: ts("updated_at").notNull().default(now),
+  /**
+   * When the owner deleted it (it sits in Recently deleted). Null while it is
+   * part of the collection. Readers use `liveItem` from src/lib/items/live.ts.
+   */
+  deletedAt: ts("deleted_at"),
 }, (t) => [
   index("items_kind_idx").on(t.kind),
   index("items_status_idx").on(t.status),
@@ -167,6 +175,7 @@ export const items = sqliteTable("items", {
   index("items_year_idx").on(t.year),
   index("items_scan_idx").on(t.scanId),
   index("items_location_idx").on(t.locationId),
+  index("items_deleted_idx").on(t.deletedAt),
 ]);
 
 /**
@@ -283,6 +292,22 @@ export const auditEvents = sqliteTable("audit_events", {
   index("audit_events_event_idx").on(t.event, t.at),
 ]);
 
+/**
+ * One change made to many items at once (Manage records), kept so the latest
+ * one can be undone. The last 20 are kept, at most 30 days.
+ */
+export const bulkOps = sqliteTable("bulk_ops", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  at: ts("at").notNull().default(now),
+  action: text("action", { enum: BULK_OP_ACTIONS }).notNull(),
+  /** A few plain words, e.g. "Set team on 12 items". Never the full text of notes. */
+  summary: text("summary").notNull(),
+  itemCount: integer("item_count").notNull(),
+  /** JSON: for each item id, the old values of the columns that changed. */
+  undo: text("undo").notNull(),
+  undoneAt: ts("undone_at"),
+}, (t) => [index("bulk_ops_at_idx").on(t.at)]);
+
 /** When each kind of alert was last sent, so alerts are not repeated too often. */
 export const alertState = sqliteTable("alert_state", {
   key: text("key").primaryKey(),
@@ -304,3 +329,4 @@ export type Scan = typeof scans.$inferSelect;
 export type ImageRow = typeof images.$inferSelect;
 export type Location = typeof locations.$inferSelect;
 export type Valuation = typeof valuations.$inferSelect;
+export type BulkOp = typeof bulkOps.$inferSelect;

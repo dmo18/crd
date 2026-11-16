@@ -189,6 +189,7 @@ export type StorageSummary = {
 export function storageSummary(db: Db = getDb()): StorageSummary {
   const all = db.select({ photos: count(), main: sum(images.bytes), thumbs: sum(images.thumbBytes) }).from(images).get();
   const waiting = db.select({ n: count() }).from(images).where(waitingToConvert).get()?.n ?? 0;
+  // Every item, also those in Recently deleted: their photos still take space.
   const itemCount = db.select({ n: count() }).from(items).get()?.n ?? 0;
   const totalBytes = Number(all?.main ?? 0) + Number(all?.thumbs ?? 0);
   return {
