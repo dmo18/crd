@@ -62,12 +62,18 @@ export const INPUT_CLASS =
   "min-h-11 w-full rounded-xl border border-border bg-surface px-3 text-base text-text placeholder:text-muted";
 
 /** A labeled form control. Pass the input, select or textarea as children. */
-export function Field({ label, hint, error, htmlFor, children }: {
-  label: string; hint?: string; error?: string | null; htmlFor: string; children: ReactNode;
+export function Field({ label, hint, error, htmlFor, check, children }: {
+  label: string; hint?: string; error?: string | null; htmlFor: string;
+  /** Marks a value the reader was not sure of: a small "Check this" beside the label. */
+  check?: boolean;
+  children: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={htmlFor} className="text-sm font-semibold">{label}</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor={htmlFor} className="text-sm font-semibold">{label}{check ? <span className="sr-only"> (check this, the reader was not sure)</span> : null}</label>
+        {check ? <span aria-hidden="true"><Badge tone="warn">Check this</Badge></span> : null}
+      </div>
       {children}
       {hint && !error ? <p className="text-xs text-muted">{hint}</p> : null}
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}

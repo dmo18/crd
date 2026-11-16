@@ -83,15 +83,40 @@ export const firstSuggestionSchema = z.object({
   confidence: z.number().min(0).max(1).nullable(),
   /** Which reader made it, e.g. "free". */
   reader: z.string().max(40).nullable(),
+  /**
+   * Fields the reader filled without being sure (12R.5 round 2): shown to the
+   * owner as "Check this" while the value is still the one read. Kept here
+   * so no new column is needed; old suggestions have none.
+   */
+  unsure: z.array(z.enum(CATALOG_FIELDS)).max(CATALOG_FIELDS.length).optional().catch(undefined),
   /** Time in milliseconds. */
   at: z.number().int(),
 });
 export type FirstSuggestion = z.infer<typeof firstSuggestionSchema>;
 
-export function buildFirstSuggestion(values: FieldValues, meta: { confidence: number | null; reader: string | null; at: Date }): string {
+export function buildFirstSuggestion(
+  values: FieldValues,
+  meta: { confidence: number | null; reader: string | null; at: Date; unsure?: readonly CatalogField[] },
+): string {
   const fields: Record<string, unknown> = {};
   for (const f of CATALOG_FIELDS) if (isFilled(values[f])) fields[f] = values[f];
-  return JSON.stringify({ v: 1, fields, confidence: meta.confidence, reader: meta.reader ? meta.reader.slice(0, 40) : null, at: meta.at.getTime() });
+  const unsure = CATALOG_FIELDS.filter((f) => isFilled(values[f]) && meta.unsure?.includes(f));
+  return JSON.stringify({
+    v: 1, fields, confidence: meta.confidence, reader: meta.reader ? meta.reader.slice(0, 40) : null, at: meta.at.getTime(),
+    ...(unsure.length > 0 ? { unsure } : {}),
+  });
+}
+
+/**
+ * The fields to mark "Check this" for the owner: the reader was not sure of
+ * them, and they still hold the value it read (not changed by the owner or
+ * filled from the catalog since).
+ */
+export function fieldsToCheck(item: Pick<Item, CatalogField | "fieldSources" | "firstSuggestion">): CatalogField[] {
+  const first = parseFirstSuggestion(item.firstSuggestion);
+  if (!first?.unsure?.length) return [];
+  const marks = parseFieldSources(item.fieldSources);
+  return first.unsure.filter((f) => sourceOf(item, f, marks) === "reading" && String(item[f]) === String(first.fields[f]));
 }
 
 /** Reads a stored first suggestion. Null when there is none (items from before the catalog) or it cannot be read. */

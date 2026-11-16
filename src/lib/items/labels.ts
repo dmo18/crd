@@ -1,4 +1,4 @@
-import type { Condition, ItemKind, ProductType, RarityTier, SealState, Sport } from "@/db/schema";
+import type { CatalogField, Condition, ItemKind, ProductType, RarityTier, SealState, Sport } from "@/db/schema";
 
 export const KIND_LABELS: Record<ItemKind, string> = {
   card: "Card",
@@ -68,4 +68,22 @@ export const VALUE_SOURCE_LABELS = {
 export function confidenceLabel(c: number | null): string {
   if (c == null || Number.isNaN(c)) return "Not rated";
   return `${Math.round(Math.min(Math.max(c, 0), 1) * 100)}% sure`;
+}
+
+/** Names of the card fields a reading fills, as the item form shows them. */
+export const CARD_FIELD_LABELS: Record<CatalogField, string> = {
+  sport: "Sport",
+  year: "Year",
+  brand: "Brand",
+  setName: "Set",
+  cardNumber: "Card number",
+  player: "Player",
+  team: "Team",
+  variation: "Variation",
+};
+
+/** One line for Review: which fields the reader was not sure of. */
+export function checkLine(fields: readonly CatalogField[]): string | null {
+  if (fields.length === 0) return null;
+  return `Not sure of: ${fields.map((f) => CARD_FIELD_LABELS[f]).join(", ")}. Check ${fields.length === 1 ? "it" : "them"} against the card.`;
 }

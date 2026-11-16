@@ -18,7 +18,8 @@ import { images, items, locations, type Item } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
-import { confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
+import { checkLine, confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
+import { fieldsToCheck } from "@/lib/catalog/sources";
 import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
 import { recognitionMode } from "@/lib/env";
@@ -90,6 +91,9 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   const source = item.manualValueCents != null ? "manual" : item.valueSource;
   const hasRange = item.estLowCents != null && item.estHighCents != null;
   const pulls = parsePullList(item.pullList);
+  // Fields the reader was not sure of, still as it read them.
+  const toCheck = item.kind === "card" ? fieldsToCheck(item) : [];
+  const checkText = checkLine(toCheck);
   const notes: [string, string][] = [];
   if (item.rarityNotes) notes.push(["About its rarity", item.rarityNotes]);
   if (item.conditionNotes) notes.push(["About its condition", item.conditionNotes]);
@@ -136,7 +140,10 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       {item.status === "needs_review" ? (
         <div className="flex flex-col gap-3">
-          <Notice tone="warn">The AI was not sure about this one. Check the details, fix anything wrong, then confirm.</Notice>
+          <Notice tone="warn">
+            The AI was not sure about this one. Check the details, fix anything wrong, then confirm.
+            {checkText ? <> {checkText} They are marked Check this below.</> : null}
+          </Notice>
           <form action={confirmItemAction}>
             <input type="hidden" name="id" value={item.id} />
             <Button type="submit" className="w-full">Looks right, confirm</Button>
@@ -205,7 +212,10 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       <section id="edit" className="flex scroll-mt-4 flex-col gap-3">
         <h2 className="text-lg font-semibold">Edit details</h2>
-        <ItemForm item={item} locations={db.select({ id: locations.id, name: locations.name }).from(locations).orderBy(locations.name).all()} />
+        <ItemForm
+          item={item} check={toCheck}
+          locations={db.select({ id: locations.id, name: locations.name }).from(locations).orderBy(locations.name).all()}
+        />
       </section>
 
       <section className="flex flex-col gap-2 border-t border-border pt-5">

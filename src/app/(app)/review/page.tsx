@@ -17,6 +17,8 @@ import { SerialAsk } from "@/components/items/SerialAsk";
 import { RookieAsk } from "@/components/items/RookieAsk";
 import { rookieAsk } from "@/lib/items/rookie";
 import { parseSuggestion } from "@/lib/items/serial";
+import { checkLine } from "@/lib/items/labels";
+import { fieldsToCheck } from "@/lib/catalog/sources";
 
 export const metadata = { title: "Review" };
 
@@ -80,8 +82,10 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
                     const full = rowById.get(item.id);
                     const serial = full ? parseSuggestion(full.serialSuggested) : null;
                     const rookie = full ? rookieAsk(full) : null;
+                    const check = full ? checkLine(fieldsToCheck(full)) : null;
                     return (
                       <>
+                        {check ? <Notice tone="warn">{check}</Notice> : null}
                         {serial ? <SerialAsk itemId={item.id} title={item.title} view={serial} /> : null}
                         {rookie ? <RookieAsk itemId={item.id} title={item.title} view={rookie} /> : null}
                       </>

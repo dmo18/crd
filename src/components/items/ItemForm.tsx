@@ -52,8 +52,10 @@ function blankItem(kind: ItemKind): Item {
 }
 
 /** Edits `item`, or (with `create`) makes a new record of that kind by hand. */
-export function ItemForm({ item: given, create, locations = [] }: {
+export function ItemForm({ item: given, create, locations = [], check = [] }: {
   item?: Item; create?: ItemKind; locations?: { id: number; name: string }[];
+  /** Fields the reader filled without being sure: marked "Check this". */
+  check?: readonly string[];
 }) {
   const item = given ?? blankItem(create ?? "card");
   const [state, action, pending] = useActionState(create ? createItemAction : saveItemAction, INITIAL);
@@ -68,7 +70,7 @@ export function ItemForm({ item: given, create, locations = [] }: {
   const text = (name: keyof Item, label: string, opts: { hint?: string; inputMode?: "numeric" | "decimal"; max?: number } = {}) => {
     const v = item[name];
     return (
-      <Field label={label} hint={opts.hint} error={e[name]} htmlFor={`f-${name}`}>
+      <Field label={label} hint={opts.hint} error={e[name]} htmlFor={`f-${name}`} check={check.includes(name)}>
         <input
           id={`f-${name}`} name={name} type="text" defaultValue={v == null ? "" : String(v)}
           inputMode={opts.inputMode} maxLength={opts.max} className={INPUT_CLASS}
@@ -83,7 +85,7 @@ export function ItemForm({ item: given, create, locations = [] }: {
       {create ? <input type="hidden" name="kind" value={create} /> : <input type="hidden" name="id" value={item.id} />}
 
       <Group title="What it is">
-        <Field label="Sport" error={e.sport} htmlFor="f-sport">
+        <Field label="Sport" error={e.sport} htmlFor="f-sport" check={check.includes("sport")}>
           <Select id="f-sport" name="sport" value={item.sport} values={SPORTS} labels={SPORT_LABELS} />
         </Field>
         {text("year", isBulk ? "First year" : "Year", { inputMode: "numeric", max: 4 })}

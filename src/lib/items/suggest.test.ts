@@ -110,6 +110,14 @@ describe("what a scan writes", () => {
     expect(parseSuggestion(row.serialSuggested)).toEqual({ copy: "045", edition: "100", line: "045/100", weak: false, why: [] });
   });
 
+  it("keeps the fields the reader was unsure of with the first suggestion, so Review can mark them", () => {
+    const r = read({ year: 1990, player: "Ken Griffey Jr.", brand: "Topps" }, { certainty: { year: "unsure", player: "sure", brand: "unsure", team: "unsure" } });
+    const row = itemFromRecognition(r, ctx);
+    expect(JSON.parse(row.firstSuggestion!).unsure).toEqual(["year", "brand"]);
+    // A reader that does not say (AI, sample) leaves no list.
+    expect(JSON.parse(itemFromRecognition(read({ year: 1990 }), ctx).firstSuggestion!).unsure).toBeUndefined();
+  });
+
   it("the paid reader's serial text takes the same road, and bad text makes no suggestion", () => {
     expect(parseSuggestion(itemFromRecognition(read({ serialNumber: "45 of 100" }), ctx).serialSuggested)).toMatchObject({ copy: "45", edition: "100", weak: false });
     expect(itemFromRecognition(read({ serialNumber: "1 of 1 promo" }), ctx).serialSuggested).toBeNull();

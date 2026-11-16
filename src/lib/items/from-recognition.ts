@@ -1,5 +1,5 @@
-import type { NewItem, ValueSource } from "@/db/schema";
-import { REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
+import type { CatalogField, NewItem, ValueSource } from "@/db/schema";
+import { CERTAIN_FIELDS, REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
 import { serializeCatalog } from "@/lib/catalog/candidates";
 import { buildFirstSuggestion, sourcesFor } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
@@ -55,7 +55,9 @@ export function itemFromRecognition(
     yearEnd: r.kind === "bulk" ? r.yearEnd : null,
     fieldSources: sourcesFor(read, "reading"),
     catalogCandidates,
-    firstSuggestion: buildFirstSuggestion(read, { confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now }),
+    firstSuggestion: buildFirstSuggestion(read, {
+      confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now, unsure: isCard ? unsureFields(r) : [],
+    }),
     ...rookieFromScan(isCard, r.isRookie, r.evidence),
     isError: isCard && r.isError,
     isParallel: isCard && r.isParallel,
@@ -96,6 +98,13 @@ export function itemFromRecognition(
     createdAt: ctx.now,
     updatedAt: ctx.now,
   };
+}
+
+/** The fields the reader filled but was not sure of (see ReadEvidence.certainty). */
+function unsureFields(r: RecognizedItem): CatalogField[] {
+  const c = r.evidence?.certainty;
+  if (!c) return [];
+  return CERTAIN_FIELDS.filter((f) => c[f] === "unsure");
 }
 
 /** Reads the stored pull list back into an array. Bad data gives an empty list. */

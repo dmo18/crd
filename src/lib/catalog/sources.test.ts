@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Item } from "@/db/schema";
-import { buildFirstSuggestion, markOwnerChanges, parseFieldSources, parseFirstSuggestion, sourceOf, sourcesFor } from "./sources";
+import { buildFirstSuggestion, fieldsToCheck, markOwnerChanges, parseFieldSources, parseFirstSuggestion, sourceOf, sourcesFor } from "./sources";
 
 const item = (over: Partial<Item>) => ({
   sport: null, year: null, brand: null, setName: null, cardNumber: null, player: null, team: null, variation: null, fieldSources: null, ...over,
@@ -52,5 +52,32 @@ describe("first suggestion", () => {
     expect(parseFirstSuggestion(null)).toBeNull();
     expect(parseFirstSuggestion("{")).toBeNull();
     expect(parseFirstSuggestion("{\"v\":2}")).toBeNull();
+  });
+});
+
+describe("fields to check (12R.5 round 2)", () => {
+  const at = new Date(1_700_000_000_000);
+  const read = { player: "Ken Griffey Jr.", year: 1990, brand: "Topps" };
+  const first = buildFirstSuggestion(read, { confidence: 0.6, reader: "free", at, unsure: ["year", "team"] });
+
+  it("keeps only unsure fields that were filled", () => {
+    expect(parseFirstSuggestion(first)?.unsure).toEqual(["year"]);
+    expect(parseFirstSuggestion(buildFirstSuggestion(read, { confidence: 0.9, reader: "free", at }))?.unsure).toBeUndefined();
+  });
+
+  it("marks an unsure field while it still holds the value read", () => {
+    const fresh = item({ ...read, fieldSources: sourcesFor(read, "reading"), firstSuggestion: first });
+    expect(fieldsToCheck(fresh)).toEqual(["year"]);
+    // The owner changed it, or the catalog filled it: nothing to check.
+    expect(fieldsToCheck({ ...fresh, year: 1991, fieldSources: JSON.stringify({ player: "reading", year: "owner", brand: "reading" }) })).toEqual([]);
+    expect(fieldsToCheck({ ...fresh, fieldSources: JSON.stringify({ player: "reading", year: "catalog", brand: "reading" }) })).toEqual([]);
+    // Old items without the list, or a broken one, have nothing to check.
+    expect(fieldsToCheck({ ...fresh, firstSuggestion: null })).toEqual([]);
+    expect(fieldsToCheck({ ...fresh, firstSuggestion: "{" })).toEqual([]);
+  });
+
+  it("drops an unreadable list without losing the rest of the suggestion", () => {
+    const raw = JSON.stringify({ v: 1, fields: { year: 1990 }, confidence: 0.5, reader: "free", at: 1, unsure: ["nope"] });
+    expect(parseFirstSuggestion(raw)).toMatchObject({ fields: { year: 1990 }, unsure: undefined });
   });
 });
