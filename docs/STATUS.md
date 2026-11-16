@@ -38,6 +38,21 @@
   never an autograph; catalog candidates that disagree with the card go
   last. Bench on the 4 owner cards: 0 wrong of 22 filled, bar PASS. The
   real test is the owner's unseen cards (12R.5).
+- 12R.5 round 1 (not deployed): two private test sets outside git (flat
+  scans and phone-style copies, each split tune and holdout). Bench options
+  --split, --card, --show-text; holdout cards print totals only. New rules,
+  each tested in rules-12r5.test.ts: league and licence text (NBA
+  Properties) is never a brand; a maker's name in two stacked words; UDC and
+  "Deck Co" copyright lines are Upper Deck; season sports take the first year
+  of the season after the last stat row; one season row above a totals row
+  counts; a large short year in a back logo one year after the copyright;
+  "#67" with the position is a jersey number; a first name one letter from a
+  common given name is put right only when the card's text settles it, else
+  left out; lower case back headings starting with a common given name. The
+  reader turns upside down photos round and keeps corner re-reads only when
+  they hold a digit. Tune: flat 0 wrong, bar PASS; phone-style 0 wrong, year
+  and brand 6 of 8 (the tiny copyright line is lost in the blurred photo at
+  any read size).
 - Known: npm audit shows 11 moderate advisories in dev tools only
   (drizzle-kit's esbuild, eslint's minimatch), same as before this task;
   npm audit --omit=dev is 0.
