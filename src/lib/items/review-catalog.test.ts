@@ -22,6 +22,9 @@ vi.mock("next/navigation", () => ({ redirect: (to: string) => { throw new Error(
 const actions = await import("./review-actions");
 const { setCatalogForTests } = await import("@/lib/catalog/provider");
 const { serializeCatalog, parseCatalog, CANDIDATE_DAYS } = await import("@/lib/catalog/candidates");
+const require_candidates = await import("@/lib/catalog/candidates");
+const slim = require_candidates.slimCandidate;
+const { saveCatalogCardIn } = await import("@/lib/catalog/store");
 const pick = await import("@/lib/catalog/pick");
 const { itemFromRecognition } = await import("./from-recognition");
 const { confirmItem } = await import("./update");
@@ -50,6 +53,11 @@ function scanned(read: Record<string, unknown>, candidates: Candidate[] = [griff
   const row = itemFromRecognition(r, { scanId: null as unknown as number, locationId: null, valueSource: "ai_estimate", now: new Date(), recognizer: "free" });
   return get(db.insert(items).values(row).returning({ id: items.id }).get().id);
 }
+function savedCard(): { catalogCardId: number } {
+  const r = saveCatalogCardIn(db, require_candidates.candidateCard(slim(griffey)), T0);
+  if (!r.ok) throw new Error("not saved");
+  return r;
+}
 const audit = () => db.select().from(auditEvents).all().map((a) => a.event);
 
 beforeEach(() => {
@@ -64,7 +72,7 @@ afterEach(() => { setDbForTests(undefined); setCatalogForTests(undefined); });
 describe("This is my card (one tap pick in Review)", () => {
   it("fills empty fields only, keeps the first suggestion, confirms, clears the list and writes an audit row", async () => {
     const item = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps" });
-    const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0 }));
+    const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0, sourceId: "551033" }));
     expect(r.message).toBeNull();
     const after = get(item.id);
     expect(after).toMatchObject({ cardNumber: "336", sport: "baseball", status: "confirmed", catalogCandidates: null, firstSuggestion: item.firstSuggestion });
@@ -76,7 +84,7 @@ describe("This is my card (one tap pick in Review)", () => {
   it("never changes an owner field", () => {
     const item = scanned({ player: "Ken Griffey Jr.", year: 1990 });
     db.update(items).set({ brand: "My Topps", fieldSources: JSON.stringify({ ...marks(item), brand: "owner" }) }).where(eq(items.id, item.id)).run();
-    const r = pick.pickCandidate(item.id, 0, db);
+    const r = pick.pickCandidate(item.id, 0, "551033", db);
     expect(r).toMatchObject({ ok: true, differences: [], confirmed: true });
     expect(get(item.id)).toMatchObject({ brand: "My Topps" });
     expect(pick.takeCatalogValues(item.id, {}, db)).toEqual({ ok: true, replaced: [] });
@@ -85,7 +93,7 @@ describe("This is my card (one tap pick in Review)", () => {
 
   it("lists a reading difference and changes it only through Use the catalog's values", async () => {
     const item = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps", cardNumber: "33" });
-    const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0 }));
+    const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0, sourceId: "551033" }));
     expect(r.message).toMatch(/differ/);
     let row = get(item.id);
     expect(row).toMatchObject({ cardNumber: "33", status: "needs_review", catalogCandidates: null });
@@ -103,22 +111,34 @@ describe("This is my card (one tap pick in Review)", () => {
   it("takes the candidate by its place in the stored list; a place not on the list is refused", async () => {
     const item = scanned({ player: "Ken Griffey" }, [griffey, senior, extra(1)]);
     for (const position of [7, 3, -1, "x"]) {
-      const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position }));
+      const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position, sourceId: "551033" }));
       expect(r.message).toBe(pick.NOT_ON_LIST);
     }
     expect(get(item.id).catalogCardId).toBeNull();
-    expect(pick.pickCandidate(item.id, 7, db)).toEqual({ ok: false, error: pick.NOT_ON_LIST });
-    const second = pick.pickCandidate(item.id, 1, db);
+    expect(pick.pickCandidate(item.id, 7, "551033", db)).toEqual({ ok: false, error: pick.NOT_ON_LIST });
+    const second = pick.pickCandidate(item.id, 1, "551885", db);
     expect(second).toMatchObject({ ok: true });
     expect(get(item.id).cardNumber).toBe("581");
     // Linked now: a second pick is refused.
-    expect(pick.pickCandidate(item.id, 0, db)).toEqual({ ok: false, error: pick.ALREADY_LINKED });
+    expect(pick.pickCandidate(item.id, 0, "551033", db)).toEqual({ ok: false, error: pick.ALREADY_LINKED });
+  });
+
+  it("refuses a pick when the card at that place is not the one that was shown", async () => {
+    const item = scanned({ player: "Ken Griffey" }, [griffey, senior]);
+    // The list was looked up again meanwhile: place 0 now holds another card.
+    db.update(items).set({ catalogCandidates: serializeCatalog({ status: "candidates", items: [senior, griffey] }, new Date()) }).where(eq(items.id, item.id)).run();
+    expect(pick.pickCandidate(item.id, 0, "551033", db)).toEqual({ ok: false, error: pick.NOT_ON_LIST });
+    const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0, sourceId: "551033" }));
+    expect(r.message).toBe(pick.NOT_ON_LIST);
+    expect((await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0 }))).message).toBe(pick.NOT_ON_LIST);
+    expect(get(item.id).catalogCardId).toBeNull();
+    expect(pick.pickCandidate(item.id, 0, "551885", db)).toMatchObject({ ok: true });
   });
 
   it("is refused without a session", async () => {
     const item = scanned({ player: "Ken Griffey Jr." });
     owner = false;
-    await expect(actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0 }))).rejects.toThrow(/login/);
+    await expect(actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0, sourceId: "551033" }))).rejects.toThrow(/login/);
     await expect(actions.catalogValuesAction(form({ id: item.id }))).rejects.toThrow(/login/);
     await expect(actions.dismissCandidatesAction(form({ id: item.id }))).rejects.toThrow(/login/);
     await expect(actions.lookUpAgainAction({ message: null }, form({ id: item.id }))).rejects.toThrow(/login/);
@@ -207,10 +227,74 @@ describe("Look up again", () => {
   });
 });
 
+describe("Look up again and None of these: limits, audit and races", () => {
+  it("allows 30 look ups an hour for all items together, from the database, and writes audit rows with the item label only", async () => {
+    const catalog = new FakeCatalog();
+    let t = T0.getTime();
+    const made = Array.from({ length: 31 }, () => scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps", sport: "baseball" }, []));
+    for (const it of made.slice(0, 30)) expect(await pick.lookUpAgain(it.id, { db, catalog, now: () => new Date(t) })).toMatchObject({ ok: true });
+    pick.resetLookupLimitForTests(); // a restart forgets the per item memory, not the database
+    const calls = catalog.calls.length;
+    expect(await pick.lookUpAgain(made[30].id, { db, catalog, now: () => new Date(t) })).toEqual({ ok: false, error: pick.LOOKUP_HOURLY });
+    expect(catalog.calls.length).toBe(calls);
+    t += 61 * 60 * 1000;
+    expect(await pick.lookUpAgain(made[30].id, { db, catalog, now: () => new Date(t) })).toMatchObject({ ok: true });
+    const rows = db.select().from(auditEvents).all().filter((a) => a.event === "catalog_lookup_again");
+    expect(rows).toHaveLength(31);
+    expect(rows[0].detail).toMatch(/^item \d+, /);
+  });
+
+  it("a sure card from a scan is confirmed only when nothing differs; otherwise it waits in Review with the differences", () => {
+    const { candidateCard } = require_candidates;
+    const same = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps", cardNumber: "336" }, []);
+    const differs = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps", cardNumber: "33" }, []);
+    const card = candidateCard(slim(griffey));
+    expect(pick.applyScanCard(db, same, card, 0.9, T0)).toBe(true);
+    expect(get(same.id).status).toBe("confirmed");
+    expect(pick.applyScanCard(db, differs, card, 0.9, T0)).toBe(true);
+    const row = get(differs.id);
+    expect(row).toMatchObject({ status: "needs_review", cardNumber: "33" });
+    expect(row.catalogCardId).not.toBeNull();
+    expect(pick.reviewCatalogView(row, db)!.linked?.differences).toEqual([{ label: "number", read: "33", catalog: "336" }]);
+  });
+
+  it("writes an audit row for None of these", async () => {
+    const item = scanned({ player: "Ken Griffey Jr." });
+    await actions.dismissCandidatesAction(form({ id: item.id }));
+    expect(get(item.id).catalogCandidates).toBeNull();
+    const row = db.select().from(auditEvents).all().find((a) => a.event === "catalog_none_of_these");
+    expect(row?.detail).toMatch(/^item \d+/);
+  });
+
+  it("a look up that finishes after the item was linked does not write a list", async () => {
+    const item = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps", sport: "baseball" }, []);
+    const slow = new FakeCatalog();
+    const search = slow.search.bind(slow);
+    slow.search = async (q: { text: string }, line: string) => {
+      const got = await search(q, line);
+      const saved = savedCard();
+      db.update(items).set({ catalogCardId: saved.catalogCardId, catalogCandidates: null }).where(eq(items.id, item.id)).run();
+      return got;
+    };
+    const r = await pick.lookUpAgain(item.id, { db, catalog: slow });
+    expect(r).toEqual({ ok: false, error: pick.ALREADY_LINKED });
+    expect(get(item.id).catalogCandidates).toBeNull();
+  });
+
+  it("a search link clears the stored candidates", async () => {
+    const { linkCatalogCard } = await import("@/lib/catalog/apply");
+    const item = scanned({ player: "Ken Griffey Jr." });
+    const saved = savedCard();
+    expect(get(item.id).catalogCandidates).not.toBeNull();
+    expect(linkCatalogCard(item.id, saved.catalogCardId, db).ok).toBe(true);
+    expect(get(item.id).catalogCandidates).toBeNull();
+  });
+});
+
 describe("plain words", () => {
   it("has no em or en dashes in the Review catalog texts", async () => {
     const { NOT_CHECKED_LINES } = await import("@/lib/catalog/candidates");
-    const texts = [...Object.values(NOT_CHECKED_LINES), pick.NOT_ON_LIST, pick.LOOKUP_WAIT, pick.LOOKUP_NEEDS, pick.ALREADY_LINKED];
+    const texts = [...Object.values(NOT_CHECKED_LINES), pick.NOT_ON_LIST, pick.LOOKUP_WAIT, pick.LOOKUP_NEEDS, pick.ALREADY_LINKED, pick.LOOKUP_HOURLY];
     for (const t of texts) expect(t).not.toMatch(/[\u2013\u2014]/);
   });
 });

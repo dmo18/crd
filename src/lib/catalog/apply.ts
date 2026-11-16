@@ -82,9 +82,8 @@ export function linkCatalogCard(
     const card = tx.select().from(catalogCards).where(eq(catalogCards.id, catalogCardId)).get();
     if (!card) return { ok: false, error: "That catalog card no longer exists." };
     const { patch, differences } = applyCatalogCard(item, card, opts);
-    if (Object.keys(patch).length > 0) {
-      tx.update(items).set({ ...patch, updatedAt: opts.now ?? new Date() }).where(and(eq(items.id, itemId), liveItem)).run();
-    }
+    // A linked item has no list of candidates to pick from any more.
+    tx.update(items).set({ ...patch, catalogCandidates: null, updatedAt: opts.now ?? new Date() }).where(and(eq(items.id, itemId), liveItem)).run();
     return { ok: true, differences };
   }, { behavior: "immediate" });
 }

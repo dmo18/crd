@@ -1,6 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { catalogCards, catalogSources, type CatalogField, type Item, items } from "@/db/schema";
+import { countAuditSince, recordAudit } from "@/lib/audit/store";
+import { itemLabel } from "@/lib/audit/subjects";
 import { liveItem } from "@/lib/items/live";
 import { REVIEW_THRESHOLD } from "@/lib/recognition/types";
 import { applyCatalogCard, type CatalogDifference } from "./apply";
@@ -24,6 +26,7 @@ const NOT_A_CARD = "Only a single card can be linked to a catalog card.";
 export const ALREADY_LINKED = "This item is already linked. Unlink it first.";
 export const NOT_ON_LIST = "That choice is no longer on the list. Look at the list again.";
 export const LOOKUP_WAIT = "Wait a few seconds before looking this card up again.";
+export const LOOKUP_HOURLY = "Too many catalog look ups this hour. Try again later.";
 export const LOOKUP_NEEDS = "Add a player or a card number first, then look it up again.";
 
 /**
@@ -38,9 +41,12 @@ export function applyScanCard(tx: Db, item: Item, card: CatalogCard, confidence:
   if (!saved.ok) return false;
   const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get();
   if (!row) return false;
-  const { patch } = applyCatalogCard(item, row);
+  const { patch, differences } = applyCatalogCard(item, row);
+  // Confirmed only when the catalog agrees with every field the scanner read;
+  // otherwise it waits in Review with the differences and "Use the catalog's values".
+  const confirmed = differences.length === 0 && confidence >= REVIEW_THRESHOLD;
   tx.update(items).set({
-    ...patch, confidence, status: confidence >= REVIEW_THRESHOLD ? "confirmed" : "needs_review", catalogCandidates: null, updatedAt: now,
+    ...patch, confidence, status: confirmed ? "confirmed" : "needs_review", catalogCandidates: null, updatedAt: now,
   }).where(eq(items.id, item.id)).run();
   return true;
 }
@@ -56,7 +62,7 @@ export type PickResult =
  * is confirmed and leaves Review; with differences it stays so the owner can
  * choose "Use the catalog's values" or keep the scanner's.
  */
-export function pickCandidate(itemId: number, position: number, db: Db = getDb(), now: Date = new Date()): PickResult {
+export function pickCandidate(itemId: number, position: number, sourceId: string, db: Db = getDb(), now: Date = new Date()): PickResult {
   return db.transaction((tx): PickResult => {
     const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
     if (!item) return { ok: false, error: GONE };
@@ -64,7 +70,8 @@ export function pickCandidate(itemId: number, position: number, db: Db = getDb()
     if (item.catalogCardId != null) return { ok: false, error: ALREADY_LINKED };
     const stored = parseCatalog(item.catalogCandidates, now);
     const chosen = stored?.status === "candidates" && Number.isInteger(position) && position >= 0 ? stored.items[position] : undefined;
-    if (!chosen) return { ok: false, error: NOT_ON_LIST };
+    // The list may have changed since the owner looked at it: the card shown must still be at that place.
+    if (!chosen || chosen.sourceId !== sourceId) return { ok: false, error: NOT_ON_LIST };
     const card = candidateCard(chosen);
     const saved = saveCatalogCardIn(tx as unknown as Db, card, now);
     if (!saved.ok) return { ok: false, error: saved.error };
@@ -100,12 +107,21 @@ export function takeCatalogValues(itemId: number, opts: { confirm?: boolean; now
 }
 
 /** "None of these": the list is cleared; the item stays in Review with its reading. */
-export function dismissCandidates(itemId: number, db: Db = getDb()): { ok: boolean } {
+export function dismissCandidates(itemId: number, db: Db = getDb(), audit: AuditWho = {}): { ok: boolean } {
   const res = db.update(items).set({ catalogCandidates: null }).where(and(eq(items.id, itemId), liveItem)).run();
+  if (res.changes > 0) {
+    recordAudit({ event: "catalog_none_of_these", outcome: "ok", ip: audit.ip ?? "unknown", deviceId: audit.deviceId, detail: itemLabel(itemId, db) }, { db });
+  }
   return { ok: res.changes > 0 };
 }
 
+/** Who did it, for the activity log. */
+export type AuditWho = { ip?: string; deviceId?: string | null };
+
 // "Look up again": once per 10 seconds per item, remembered next to the database.
+// And 30 an hour for all items together, counted from the activity log (so a restart does not reset it).
+export const LOOKUPS_PER_HOUR = 30;
+const HOUR_MS = 60 * 60 * 1000;
 export const LOOKUP_EVERY_MS = 10_000;
 const holder = globalThis as unknown as { __crdLookups?: Map<number, number> };
 function lastLookups(): Map<number, number> {
@@ -126,7 +142,7 @@ export type LookupAgainResult =
  * What comes back is stored as the item's candidates for one tap, a sure
  * card first; nothing is filled in until the owner picks.
  */
-export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Catalog; now?: () => Date } = {}): Promise<LookupAgainResult> {
+export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Catalog; now?: () => Date; who?: AuditWho } = {}): Promise<LookupAgainResult> {
   const db = deps.db ?? getDb();
   const now = deps.now ?? (() => new Date());
   const item = db.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
@@ -138,7 +154,9 @@ export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Cat
   const t = now().getTime();
   const last = seen.get(itemId);
   if (last !== undefined && t - last < LOOKUP_EVERY_MS) return { ok: false, error: LOOKUP_WAIT };
+  if (countAuditSince(["catalog_lookup_again"], new Date(t - HOUR_MS), db) >= LOOKUPS_PER_HOUR) return { ok: false, error: LOOKUP_HOURLY };
   seen.set(itemId, t);
+  recordAudit({ event: "catalog_lookup_again", outcome: "ok", ip: deps.who?.ip ?? "unknown", deviceId: deps.who?.deviceId, detail: itemLabel(itemId, db) }, { db, now: now() });
   if (seen.size > 1000) for (const [k, v] of seen) if (t - v >= LOOKUP_EVERY_MS) seen.delete(k);
 
   let stored: string;
@@ -160,10 +178,14 @@ export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Cat
     notChecked = "failed";
     stored = serializeCatalog({ status: "not_checked", reason: "failed" }, now());
   }
-  const res = db.update(items).set({ catalogCandidates: stored })
-    .where(and(eq(items.id, itemId), liveItem)).run();
-  if (res.changes === 0) return { ok: false, error: GONE };
-  return { ok: true, found, notChecked };
+  // Written only if the item is still live and still unlinked: a card linked meanwhile keeps no list.
+  return db.transaction((tx): LookupAgainResult => {
+    const res = tx.update(items).set({ catalogCandidates: stored })
+      .where(and(eq(items.id, itemId), liveItem, isNull(items.catalogCardId))).run();
+    if (res.changes > 0) return { ok: true, found, notChecked };
+    const now2 = tx.select({ link: items.catalogCardId }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
+    return { ok: false, error: now2 ? ALREADY_LINKED : GONE };
+  }, { behavior: "immediate" });
 }
 
 /** What Review shows for one item: the catalog's part, in plain data for the screen. */
@@ -172,7 +194,7 @@ export type ReviewCatalogView = {
   linked: { line: string; url: string | null; differences: { label: string; read: string; catalog: string }[] } | null;
   status: "candidates" | "none" | "not_checked" | null;
   reason: NotCheckedReason | null;
-  candidates: { position: number; line: string; verified: boolean; url: string | null }[];
+  candidates: { position: number; sourceId: string; line: string; verified: boolean; url: string | null }[];
   /** "Look up again" is offered: a card with a player or a number and no link. */
   canLookUp: boolean;
 };
@@ -200,7 +222,7 @@ export function reviewCatalogView(item: Item, db: Db = getDb(), now: Date = new 
     linked,
     status: stored?.status ?? null,
     reason: stored?.reason ?? null,
-    candidates: (stored?.items ?? []).map((c, position) => ({ position, line: cardLine(c), verified: c.verified, url: sourceUrl(c.url) })),
+    candidates: (stored?.items ?? []).map((c, position) => ({ position, sourceId: c.sourceId, line: cardLine(c), verified: c.verified, url: sourceUrl(c.url) })),
     canLookUp: item.catalogCardId == null && Boolean(item.player?.trim() || item.cardNumber?.trim()),
   };
 }

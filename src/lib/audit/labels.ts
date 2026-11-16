@@ -66,6 +66,10 @@ export function describeAudit(row: { event: AuditEvent; ip: string; detail: stri
       return d ? `Linked an item to a catalog card: ${d}` : "Linked an item to a catalog card";
     case "catalog_card_unlinked":
       return d ? `Unlinked an item from its catalog card: ${d}` : "Unlinked an item from its catalog card";
+    case "catalog_none_of_these":
+      return d ? `Said none of the catalog cards fit: ${d}` : "Said none of the catalog cards fit";
+    case "catalog_lookup_again":
+      return d ? `Looked a card up again in the catalog: ${d}` : "Looked a card up again in the catalog";
     case "backup_note":
       return d ? `Backup: ${d}` : "Backup note";
   }

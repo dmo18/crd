@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireOwner } from "@/lib/auth/guard";
 import { getDb } from "@/db";
-import { auditThisRequest } from "@/lib/audit/request";
+import { auditThisRequest, requestContext } from "@/lib/audit/request";
 import { itemLabel } from "@/lib/audit/subjects";
 import { MAX_STORED_CANDIDATES } from "@/lib/catalog/candidates";
 import { dismissCandidates, lookUpAgain, NOT_ON_LIST, pickCandidate, takeCatalogValues } from "@/lib/catalog/pick";
@@ -16,6 +16,8 @@ import { confirmItem, deleteItem } from "./update";
 const idSchema = z.coerce.number().int().positive().max(2_000_000_000);
 /** The candidate is chosen by its place in the list the server stored, never by its fields. */
 const positionSchema = z.coerce.number().int().min(0).max(MAX_STORED_CANDIDATES - 1);
+
+const sourceIdSchema = z.string().regex(/^[A-Za-z0-9_]{1,40}$/);
 
 export type CatalogActionState = { message: string | null };
 
@@ -76,8 +78,10 @@ export async function pickCandidateAction(_prev: CatalogActionState, formData: F
   if (!id.success) return { message: "This item no longer exists." };
   const position = positionSchema.safeParse(formData.get("position"));
   if (!position.success) return { message: NOT_ON_LIST };
+  const sourceId = sourceIdSchema.safeParse(formData.get("sourceId"));
+  if (!sourceId.success) return { message: NOT_ON_LIST };
   const label = itemLabel(id.data);
-  const r = pickCandidate(id.data, position.data);
+  const r = pickCandidate(id.data, position.data, sourceId.data);
   if (!r.ok) return { message: r.error };
   await auditThisRequest("catalog_card_linked", "ok", `${label} is ${r.line}`);
   refresh();
@@ -103,7 +107,8 @@ export async function dismissCandidatesAction(formData: FormData): Promise<void>
   await requireOwner();
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) return;
-  dismissCandidates(id.data);
+  const who = await requestContext();
+  dismissCandidates(id.data, getDb(), who);
   refresh();
 }
 
@@ -112,7 +117,7 @@ export async function lookUpAgainAction(_prev: CatalogActionState, formData: For
   await requireOwner();
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) return { message: "This item no longer exists." };
-  const r = await lookUpAgain(id.data);
+  const r = await lookUpAgain(id.data, { who: await requestContext() });
   if (!r.ok) return { message: r.error };
   refresh();
   if (r.found > 0) return { message: r.found === 1 ? "Found 1 possible card." : `Found ${r.found} possible cards.` };

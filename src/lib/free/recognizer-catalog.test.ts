@@ -96,14 +96,27 @@ describe("FreeRecognizer catalog step", () => {
     });
     const many = await r.recognize({ mode: "multi", photos: [{ role: "source", data: await solid(), width: 600, height: 300 }] });
     expect(many.map((i) => i.catalog?.status)).toEqual(["none", "none", "not_checked"]);
-    expect(many[2].catalog).toEqual({ status: "not_checked", reason: "budget" });
+    expect(many[2].catalog).toEqual({ status: "not_checked", reason: "time" });
     expect(lookupCard).toHaveBeenCalledTimes(2);
   });
 
   it("a look up slower than the time left is given up; the card shows not checked", async () => {
     lookupCard.mockImplementation(() => new Promise(() => undefined));
     const item = await run({ catalog: new FakeCatalog(), catalogTimeMs: 20 });
-    expect(item.catalog).toEqual({ status: "not_checked", reason: "budget" });
+    expect(item.catalog).toEqual({ status: "not_checked", reason: "time" });
+  });
+
+  it("when the time runs out the look up in progress is stopped: later catalog calls are refused without a network call", async () => {
+    const fake = new FakeCatalog();
+    let used: import("@/lib/catalog/types").Catalog | undefined;
+    lookupCard.mockImplementation((_r, _l, o) => { used = (o as { catalog: import("@/lib/catalog/types").Catalog }).catalog; return new Promise(() => undefined); });
+    const item = await run({ catalog: fake, catalogTimeMs: 20 });
+    expect(item.catalog).toEqual({ status: "not_checked", reason: "time" });
+    const after = await used!.search({ text: "griffey" }, "background");
+    expect(after).toMatchObject({ ok: false, reason: "busy" });
+    expect(await used!.card("1", "background")).toMatchObject({ ok: false });
+    expect(await used!.checklist("1", "background")).toMatchObject({ ok: false });
+    expect(fake.calls).toEqual([]);
   });
 
   it("sealed and bulk scans make no look up; an unread card is not looked up", async () => {
@@ -136,7 +149,7 @@ describe("FreeRecognizer catalog time and the scan's 5 minutes", () => {
     lookupCard.mockClear();
     // Reading two cards takes 460 s of fake time: past 4 minutes, so no look up starts.
     const items = await many.recognize({ mode: "multi", photos: [{ role: "source", data: await solid(), width: 600, height: 300 }] });
-    expect(items.map((i) => i.catalog)).toEqual([{ status: "not_checked", reason: "budget" }, { status: "not_checked", reason: "budget" }]);
+    expect(items.map((i) => i.catalog)).toEqual([{ status: "not_checked", reason: "time" }, { status: "not_checked", reason: "time" }]);
     expect(lookupCard).not.toHaveBeenCalled();
   });
 });

@@ -31,6 +31,7 @@ function CandidateRow({ id, row, action, pending }: { id: number; row: Row; acti
       <form action={action}>
         <input type="hidden" name="id" value={id} />
         <input type="hidden" name="position" value={row.position} />
+        <input type="hidden" name="sourceId" value={row.sourceId} />
         <Button type="submit" className="w-full" disabled={pending} aria-label={`This is my card: ${row.line}`}>
           This is my card
         </Button>
@@ -88,13 +89,13 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
         <>
           <p className="text-sm font-semibold">Is it one of these?</p>
           <ul className="flex flex-col gap-2">
-            {view.candidates.slice(0, SHOWN).map((row) => <CandidateRow key={row.position} id={id} row={row} action={pick} pending={picking} />)}
+            {view.candidates.slice(0, SHOWN).map((row) => <CandidateRow key={row.position} id={id} row={row} action={pick} pending={picking || looking} />)}
           </ul>
           {view.candidates.length > SHOWN ? (
             <details>
               <summary className="min-h-11 cursor-pointer py-3 text-sm font-semibold">More ({view.candidates.length - SHOWN})</summary>
               <ul className="flex flex-col gap-2">
-                {view.candidates.slice(SHOWN).map((row) => <CandidateRow key={row.position} id={id} row={row} action={pick} pending={picking} />)}
+                {view.candidates.slice(SHOWN).map((row) => <CandidateRow key={row.position} id={id} row={row} action={pick} pending={picking || looking} />)}
               </ul>
             </details>
           ) : null}

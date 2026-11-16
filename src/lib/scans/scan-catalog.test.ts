@@ -78,7 +78,7 @@ describe("a scan with the catalog (fake, recorded answers, no network)", () => {
     // Nothing is filled without the owner's tap.
     expect(db.select().from(catalogCards).all()).toHaveLength(0);
 
-    const r = pickCandidate(item.id, 0, db);
+    const r = pickCandidate(item.id, 0, "551033", db);
     expect(r).toMatchObject({ ok: true, confirmed: true, differences: [] });
     const after = db.select().from(items).where(eq(items.id, item.id)).get()!;
     expect(after).toMatchObject({ cardNumber: "336", status: "confirmed", catalogCandidates: null, firstSuggestion: item.firstSuggestion });

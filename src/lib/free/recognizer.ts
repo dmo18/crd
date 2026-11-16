@@ -86,6 +86,23 @@ async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED
   }
 }
 
+/**
+ * The catalog with a stop switch. lookupCard has no way to be told to stop, so
+ * when the scan's catalog time runs out the switch is thrown and every catalog
+ * call the look up in progress makes after that is refused at once (no network
+ * call). The one call already in flight when time ran out may still finish.
+ */
+function stoppable(inner: Catalog): Catalog & { stop(): void } {
+  let stopped = false;
+  const refused = { ok: false as const, reason: "busy" as const, tries: 0 };
+  return {
+    stop() { stopped = true; },
+    search: (q, line, limits) => (stopped ? Promise.resolve(refused) : inner.search(q, line, limits)),
+    card: (id, line, limits) => (stopped ? Promise.resolve(refused) : inner.card(id, line, limits)),
+    checklist: (id, line, limits) => (stopped ? Promise.resolve(refused) : inner.checklist(id, line, limits)),
+  };
+}
+
 /** The look up's answer as the catalog part of a recognized card. */
 export function catalogPart(result: LookupResult, readingConfidence: number): RecognizedCatalog {
   if (result.sure) return { status: "sure", card: result.sure, confidence: lookupConfidence(result, readingConfidence) };
@@ -166,6 +183,7 @@ export class FreeRecognizer implements Recognizer {
     const scan = createScanBudget();
     const deadline = Math.min(this.clock() + this.catalogTimeMs, startedAt + CATALOG_LATEST_MS);
     let late = false;
+    const gate = stoppable(catalog);
     for (const { item, names } of cards) {
       if (item.kind !== "card" || (names.length === 0 && !item.cardNumber)) continue;
       if (scan.stopped) {
@@ -173,17 +191,22 @@ export class FreeRecognizer implements Recognizer {
         continue;
       }
       const left = deadline - this.clock();
-      if (late || left <= 0 || scan.used >= scan.max) {
+      if (late || left <= 0) {
+        item.catalog = { status: "not_checked", reason: "time" };
+        continue;
+      }
+      if (scan.used >= scan.max) {
         item.catalog = { status: "not_checked", reason: "budget" };
         continue;
       }
       try {
         const result = await within(lookupCard({
           year: item.year, brands: item.brand ? [item.brand] : [], sport: item.sport, names, cardNumber: item.cardNumber,
-        }, "background", { catalog, scan }), left);
+        }, "background", { catalog: gate, scan }), left);
         if (result === TIMED_OUT) {
           late = true;
-          item.catalog = { status: "not_checked", reason: "budget" };
+          gate.stop();
+          item.catalog = { status: "not_checked", reason: "time" };
         } else {
           item.catalog = catalogPart(result, item.confidence);
         }

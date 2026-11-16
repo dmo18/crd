@@ -14,9 +14,9 @@ export const MAX_STORED_CANDIDATES = 5;
 /** Candidates older than this are not shown any more. */
 export const CANDIDATE_DAYS = 30;
 
-/** Why the catalog was not checked for an item. `budget`: the scan's call budget or time ran out. */
-export type NotCheckedReason = CatalogFailure | "budget";
-export const NOT_CHECKED_REASONS = ["off", "paused", "cap", "busy", "failed", "budget"] as const satisfies readonly NotCheckedReason[];
+/** Why the catalog was not checked for an item. `budget`: the scan's call budget ran out. `time`: the reading used up the time. */
+export type NotCheckedReason = CatalogFailure | "budget" | "time";
+export const NOT_CHECKED_REASONS = ["off", "paused", "cap", "busy", "failed", "budget", "time"] as const satisfies readonly NotCheckedReason[];
 
 const text = (max: number) => z.string().trim().min(1).max(max).nullable().catch(null);
 
@@ -111,4 +111,5 @@ export const NOT_CHECKED_LINES: Record<NotCheckedReason, string> = {
   busy: "The catalog was busy, so it was skipped for this scan.",
   failed: "The catalog did not answer properly.",
   budget: "This scan had many cards, and the catalog was only checked for the first ones.",
+  time: "The catalog was not checked: the reading took too long.",
 };
