@@ -3,6 +3,11 @@ import type { Db } from "@/db";
 import { images, items, scans, valuations } from "@/db/schema";
 import { deleteStored } from "@/lib/images/store";
 
+/** The files of photo rows, each with its kept original: an original goes with its photo. */
+function photoFiles(rows: { file: string; original: string | null }[]): string[] {
+  return rows.flatMap((r) => (r.original ? [r.file, r.original] : [r.file]));
+}
+
 /**
  * Removes an item's database rows for good. Only purge (bin.ts) and merging
  * duplicates call this; the Delete buttons move items to Recently deleted.
@@ -16,7 +21,7 @@ import { deleteStored } from "@/lib/images/store";
 export function removeItemRows(tx: Db, itemId: number): string[] | null {
   const item = tx.select({ id: items.id, scanId: items.scanId }).from(items).where(eq(items.id, itemId)).get();
   if (!item) return null;
-  const files = tx.select({ file: images.file }).from(images).where(eq(images.itemId, itemId)).all().map((r) => r.file);
+  const files = photoFiles(tx.select({ file: images.file, original: images.originalFile }).from(images).where(eq(images.itemId, itemId)).all());
   tx.delete(images).where(eq(images.itemId, itemId)).run();
   tx.delete(valuations).where(eq(valuations.itemId, itemId)).run();
   tx.delete(items).where(eq(items.id, itemId)).run();
@@ -35,7 +40,7 @@ export function removeItemRows(tx: Db, itemId: number): string[] | null {
 /** Removes scans and all their photo rows. Call inside a transaction. Returns the files to delete afterwards. */
 export function removeScanRows(tx: Db, scanIds: number[]): string[] {
   if (scanIds.length === 0) return [];
-  const files = tx.select({ file: images.file }).from(images).where(inArray(images.scanId, scanIds)).all().map((r) => r.file);
+  const files = photoFiles(tx.select({ file: images.file, original: images.originalFile }).from(images).where(inArray(images.scanId, scanIds)).all());
   tx.delete(images).where(inArray(images.scanId, scanIds)).run();
   // Items keep existing; they simply lose the link to a scan that is gone.
   tx.update(items).set({ scanId: null }).where(inArray(items.scanId, scanIds)).run();

@@ -4,6 +4,7 @@ import path from "node:path";
 import sharp, { type Sharp } from "sharp";
 import { env } from "@/lib/env";
 import type { Box } from "@/lib/recognition/types";
+import { applyEdit, type PhotoEdit } from "./edit";
 
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 export const MAX_PHOTOS_PER_SCAN = 12;
@@ -332,4 +333,89 @@ export async function deleteStored(file: string): Promise<void> {
       throw new ImageError("Could not delete the photo.");
     }
   }
+}
+
+/**
+ * Makes the edited form of a photo from its best copy, in ONE encode of the
+ * full picture (plus the small picture). Writes new files under new server
+ * made names and changes nothing else; the caller records them, then removes
+ * what was replaced. A failure leaves nothing behind.
+ */
+export async function writeEdited(photo: PhotoRef, edit: PhotoEdit, edge: number): Promise<StoredImage> {
+  const input = await readSource(photo);
+  const id = crypto.randomUUID();
+  const dir = uploadsDir();
+  const out: StoredImage = { file: archiveName(id), thumbFile: thumbName(id), workFile: null, width: 0, height: 0, bytes: 0, thumbBytes: 0 };
+  try {
+    const meta = await sharp(input, DECODE_OPTIONS).metadata();
+    const pipeline = applyEdit(input, meta.width ?? 0, meta.height ?? 0, edit, DECODE_OPTIONS);
+    const main = await avif(pipeline, edge).toBuffer({ resolveWithObject: true });
+    const thumb = await avif(sharp(main.data, DECODE_OPTIONS), THUMB_EDGE).toBuffer();
+    out.width = main.info.width;
+    out.height = main.info.height;
+    out.bytes = main.data.length;
+    out.thumbBytes = thumb.length;
+    await writeAtomic(path.join(dir, out.file), main.data);
+    await writeAtomic(path.join(dir, out.thumbFile), thumb);
+    return out;
+  } catch (e) {
+    await deleteStored(out.file).catch(() => {});
+    if (e instanceof ImageError || (e instanceof Error && e.name === "EditError")) throw e;
+    throw new ImageError("Could not change the photo. The old photo is unchanged.");
+  }
+}
+
+/**
+ * Keeps the photo as it is now as the original. A photo that still has a
+ * working copy has it copied (same bytes, no encoding) to the uploads folder
+ * as a JPEG, since the working area is not kept. Returns the original's name.
+ */
+export async function keepAsOriginal(photo: PhotoRef): Promise<string> {
+  if (!photo.workFile) {
+    // Already a file in the uploads folder (archive or older JPEG): it simply stays.
+    await fs.access(resolveInside(photo.file)).catch(() => { throw new ImageError("Photo not found."); });
+    return photo.file;
+  }
+  const name = `${idOf(photo.file)}.jpg`;
+  try {
+    await fs.copyFile(resolveWork(photo.workFile), resolveInside(name));
+  } catch {
+    throw new ImageError("Photo not found.");
+  }
+  return name;
+}
+
+/** Brings a kept original back as the photo: same file, same bytes, and a new small picture. */
+export async function restoreOriginal(original: string): Promise<StoredImage> {
+  const full = resolveInside(original);
+  let data: Buffer;
+  try {
+    data = await fs.readFile(full);
+  } catch {
+    throw new ImageError("The original photo is no longer there.");
+  }
+  try {
+    const id = idOf(original);
+    const meta = await sharp(data, DECODE_OPTIONS).metadata();
+    const thumb = await avif(sharp(data, DECODE_OPTIONS), THUMB_EDGE).toBuffer();
+    const thumbFile = thumbName(id);
+    await writeAtomic(path.join(uploadsDir(), thumbFile), thumb);
+    return { file: original, thumbFile, workFile: null, width: meta.width ?? 0, height: meta.height ?? 0, bytes: data.length, thumbBytes: thumb.length };
+  } catch {
+    throw new ImageError("Could not put the original back. The photo is unchanged.");
+  }
+}
+
+/** Removes one file by its server made name (the uploads folder or the working area). Never throws. */
+export async function removeNamed(name: string, work = false): Promise<void> {
+  try {
+    await fs.rm(work ? resolveWork(name) : resolveInside(name), { force: true });
+  } catch {
+    // Left for the daily cleanup.
+  }
+}
+
+/** The same id means the same photo family: used to never remove an original together with an edit. */
+export function sameFamily(a: string, b: string): boolean {
+  return idOf(a) === idOf(b);
 }

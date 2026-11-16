@@ -1,5 +1,6 @@
 import { LocalTime } from "@/components/activity/LocalTime";
 import { asc, eq } from "drizzle-orm";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { GradingAdvice } from "@/components/items/GradingAdvice";
 import { SoldLinks } from "@/components/items/SoldLinks";
@@ -7,6 +8,7 @@ import { QuickValue } from "@/components/items/QuickValue";
 import { ValueTools } from "@/components/items/ValueTools";
 import { CatalogBlock } from "@/components/catalog/CatalogBlock";
 import { DuplicateNotice } from "@/components/items/DuplicateNotice";
+import { PhotoUpload } from "@/components/items/PhotoUpload";
 import { DeleteItemButton } from "@/components/items/DeleteItemButton";
 import { ItemBadges } from "@/components/items/ItemRow";
 import { ItemForm } from "@/components/items/ItemForm";
@@ -56,6 +58,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   }
   const photos = db.select().from(images).where(eq(images.itemId, id)).orderBy(asc(images.id)).all()
     .sort((a, b) => ROLE_ORDER[a.role] - ROLE_ORDER[b.role]);
+  const hasFront = photos.some((p) => p.role === "front" || p.role === "crop");
+  const hasBack = photos.some((p) => p.role === "back");
   const location = item.locationId == null ? null
     : db.select().from(locations).where(eq(locations.id, item.locationId)).get();
 
@@ -81,15 +85,21 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
         <ul className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-1">
           {photos.map((p) => (
             <li key={p.id} className="w-56 shrink-0 snap-start">
-              <a href={`/api/images/${p.file}`} target="_blank" rel="noopener noreferrer" className="flex min-h-11 flex-col gap-1">
+              <Link href={`/items/${item.id}/photo/${p.id}`} className="flex min-h-11 flex-col gap-1">
                 {/* Plain img: photos come from our own /api/images route. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={`/api/images/${p.thumbFile}`} alt={`${ROLE_NAMES[p.role]} photo of ${item.title}`} className="aspect-[3/4] w-full rounded-xl bg-surface-2 object-cover" />
-                <span className="text-sm text-muted">{ROLE_NAMES[p.role]} (opens full size)</span>
-              </a>
+                <span className="text-sm text-muted">{ROLE_NAMES[p.role]} (tap to zoom, turn or trim)</span>
+              </Link>
             </li>
           ))}
         </ul>
+      ) : null}
+      {!hasBack || !hasFront ? (
+        <div className="flex flex-col gap-2">
+          {!hasFront ? <PhotoUpload itemId={item.id} mode="add" role="front" title="Add a front photo" /> : null}
+          {!hasBack ? <PhotoUpload itemId={item.id} mode="add" role="back" title="Add a back photo" /> : null}
+        </div>
       ) : null}
 
       <header className="flex flex-col gap-2">
