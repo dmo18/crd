@@ -96,7 +96,7 @@ describe("migration 0008", () => {
     expect(created.sort()).toEqual(NEW_TABLES);
     expect(added).toEqual(NEW_ITEM_COLUMNS);
     expect(sql0008()).not.toMatch(/\b(DROP|RENAME|DELETE FROM|UPDATE `|INSERT INTO|PRAGMA|__new_)/i);
-    expect(journal().entries.map((e) => e.idx)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(journal().entries.map((e) => e.idx).slice(0, 9)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
   it("applies to a 0007 database with rows in it and leaves every old row as it was", () => {
@@ -108,9 +108,14 @@ describe("migration 0008", () => {
     const db = createDb(file);
     const raw = (db as unknown as { $client: Database.Database }).$client;
     const nulls = Object.fromEntries(NEW_ITEM_COLUMNS.map((c) => [c, null]));
+    // Columns of later migrations (0009 on) are new and empty too.
+    const laterNulls = (t: string, row: object) => {
+      const known = new Set([...Object.keys(before[t][0] as object), ...(t === "items" ? NEW_ITEM_COLUMNS : [])]);
+      return Object.fromEntries(Object.keys(row).filter((c) => !known.has(c)).map((c) => [c, null]));
+    };
     for (const t of TABLES_WITH_ROWS) {
-      const after = raw.prepare(`select * from ${t} order by rowid`).all();
-      const want = t === "items" ? before[t].map((r) => ({ ...(r as object), ...nulls })) : before[t];
+      const after = raw.prepare(`select * from ${t} order by rowid`).all() as object[];
+      const want = before[t].map((r, i) => ({ ...(r as object), ...(t === "items" ? nulls : {}), ...laterNulls(t, after[i] ?? {}) }));
       expect(after, t).toEqual(want);
     }
     for (const t of NEW_TABLES) expect(raw.prepare(`select count(*) as n from ${t}`).get(), t).toEqual({ n: 0 });
@@ -179,7 +184,7 @@ describe("migration 0008", () => {
     // Starting again finds nothing left to apply and changes nothing.
     raw.close();
     const again = (createDb(file) as unknown as { $client: Database.Database }).$client;
-    expect(again.prepare("select count(*) as n from __drizzle_migrations").get()).toEqual({ n: 9 });
+    expect(again.prepare("select count(*) as n from __drizzle_migrations").get()).toEqual({ n: journal().entries.length });
     expect(again.prepare("select count(*) as n from items").get()).toEqual({ n: 5 });
     again.close();
   });

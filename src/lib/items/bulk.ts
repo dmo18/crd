@@ -11,6 +11,7 @@ import { markOwnerChanges } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
 import { CONDITION_LABELS, RARITY_LABELS, SPORT_LABELS } from "./labels";
 import { liveItem } from "./live";
+import { readRookie, ROOKIE_STATE_LABELS, withRookie } from "./rookie";
 import { ITEM_FLAGS, MISSING_FIELDS, matchingIds, type InventoryFilters } from "./query";
 import { editableFields, itemEditSchema } from "./update";
 
@@ -247,6 +248,16 @@ function planChanges(tx: Tx, rows: Item[], action: BulkAction, ctx: Ctx): Change
       let yearClash = 0;
       for (const row of rows) {
         if (!appliesTo(row, action.field)) continue;
+        if (action.field === "isRookie") {
+          // "Set rookie" is the owner's answer: state yes or no, source owner, with `isRookie` in step (withRookie).
+          const target = checked.value ? "yes" : "no";
+          const shown = readRookie(row).state;
+          if (shown === target) continue;
+          out.push(withTitle(row, withRookie(target, "owner"), {
+            id: row.id, title: row.title, before: shown ? ROOKIE_STATE_LABELS[shown] : EMPTY, after: ROOKIE_STATE_LABELS[target],
+          }));
+          continue;
+        }
         const current = row[col];
         if (action.onlyEmpty && !isEmpty(current)) continue;
         if (current === checked.value) continue;

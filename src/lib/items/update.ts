@@ -6,6 +6,8 @@ import { markOwnerChanges } from "@/lib/catalog/sources";
 import { MAX_QUANTITY } from "@/lib/items/duplicates";
 import { softDeleteItems } from "@/lib/items/bin";
 import { liveItem } from "@/lib/items/live";
+import { readRookie, rookieStateSchema, withRookie } from "@/lib/items/rookie";
+import { serialColumns, serialPartsSchema, splitSerial } from "@/lib/items/serial";
 import { parseDollars } from "@/lib/money";
 import { buildTitle } from "@/lib/title";
 
@@ -88,6 +90,59 @@ export function editableFields(kind: Item["kind"]): readonly string[] {
   return [...COMMON, ...BULK_ONLY];
 }
 
+/**
+ * The new serial and rookie fields a form may send besides `itemEditSchema`.
+ * Left out: the form of today (one serial text, one rookie check box) is used.
+ */
+const ownerExtrasSchema = z.object({
+  serialCopy: z.string().optional(),
+  serialEdition: z.string().optional(),
+  rookieState: z.union([z.literal(""), rookieStateSchema]).optional(),
+});
+
+type ExtrasResult = { ok: true; patch: Partial<Item> } | { ok: false; errors: Record<string, string> };
+
+/**
+ * Keeps the old and the new serial and rookie columns in step when the owner
+ * saves a card (item form, Add by hand):
+ * - Serial: the two boxes when sent, else the one text. A text that splits
+ *   ("045/100", "45 of 100", "/100") fills the parts and is rebuilt as
+ *   "045/100"; one that does not ("1 of 1 promo") is kept whole, parts empty.
+ * - Rookie: written only when the owner changed the answer shown, always with
+ *   source `owner` and through withRookie(), so `isRookie` never disagrees.
+ */
+export function ownerSerialAndRookie(
+  existing: Pick<Item, "isRookie" | "rookieState" | "rookieSource" | "rookieNote"> | null,
+  data: { serialNumber: string | null; isRookie: boolean },
+  input: Record<string, unknown>,
+): ExtrasResult {
+  const extras = ownerExtrasSchema.safeParse({ serialCopy: input.serialCopy, serialEdition: input.serialEdition, rookieState: input.rookieState });
+  if (!extras.success) return { ok: false, errors: { form: "Some fields could not be read. Try again." } };
+  const { serialCopy, serialEdition, rookieState } = extras.data;
+
+  let patch: Partial<Item>;
+  if (serialCopy !== undefined || serialEdition !== undefined) {
+    const parts = serialPartsSchema.safeParse({ serialCopy: serialCopy ?? "", serialEdition: serialEdition ?? "" });
+    if (!parts.success) {
+      const issue = parts.error.issues[0];
+      return { ok: false, errors: { [String(issue?.path[0] ?? "serialEdition")]: issue?.message ?? "Check the serial number." } };
+    }
+    patch = serialColumns(parts.data);
+  } else {
+    const parts = splitSerial(data.serialNumber);
+    patch = parts ? serialColumns(parts) : { serialNumber: data.serialNumber, serialCopy: null, serialEdition: null };
+  }
+
+  const shown = existing ? readRookie(existing).state : null;
+  if (rookieState !== undefined) {
+    if (rookieState !== "" && rookieState !== shown) Object.assign(patch, withRookie(rookieState, "owner"));
+  } else {
+    const was = existing?.isRookie ?? false;
+    if (data.isRookie !== was) Object.assign(patch, withRookie(data.isRookie ? "yes" : "no", "owner"));
+  }
+  return { ok: true, patch };
+}
+
 export function updateItem(id: number, input: unknown, db: Db = getDb()): UpdateResult {
   const existing = db.select().from(items).where(and(eq(items.id, id), liveItem)).get();
   if (!existing) return GONE;
@@ -114,6 +169,13 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
   const patch: Partial<Item> = keepLocation ? {} : { locationId };
   for (const key of editableFields(existing.kind)) {
     (patch as Record<string, unknown>)[key] = (rest as Record<string, unknown>)[key];
+  }
+  if (existing.kind === "card") {
+    const extras = ownerSerialAndRookie(existing, rest, raw);
+    if (!extras.ok) return extras;
+    // The rookie mark changes only through withRookie(); the plain flag from the form never goes in alone.
+    delete patch.isRookie;
+    Object.assign(patch, extras.patch);
   }
   // Every catalog field the owner changed is theirs from now on. `firstSuggestion` is never part of a patch.
   const fieldSources = markOwnerChanges(existing, patch);

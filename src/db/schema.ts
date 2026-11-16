@@ -24,6 +24,7 @@ export const AUDIT_EVENTS = [
   "connection_key_saved", "connection_key_removed", "connection_tested", "connection_switched", "catalog_answers_cleared",
   "catalog_card_added", "catalog_card_linked", "catalog_card_unlinked",
   "catalog_none_of_these", "catalog_lookup_again",
+  "version_chosen", "serial_confirmed", "rookie_set", "photo_added", "photo_edited", "photo_restored", "duplicate_kept_apart",
 ] as const;
 /** Sign-in and account events. The rest are changes to the collection. */
 export const SECURITY_AUDIT_EVENTS = [
@@ -40,6 +41,14 @@ export const CATALOG_SOURCES = ["mycardfolio"] as const;
 export const CATALOG_FIELDS = ["sport", "year", "brand", "setName", "cardNumber", "player", "team", "variation"] as const;
 /** Where the value of one field came from. */
 export const FIELD_SOURCES = ["catalog", "owner", "reading", "key_list", "wikidata"] as const;
+/** The owner's answer to "Which version is it?". Null on an item means never asked. */
+export const VERSION_STATES = ["confirmed", "not_sure"] as const;
+/** Where a chosen version came from. */
+export const VERSION_SOURCES = ["catalog", "known_list", "owner"] as const;
+/** The rookie mark. Null on an item means not recorded (items from before Milestone 11). */
+export const ROOKIE_STATES = ["yes", "no", "unknown", "disputed"] as const;
+/** Where the rookie mark came from. */
+export const ROOKIE_SOURCES = ["owner", "key_list", "catalog", "reading"] as const;
 /** Kinds of stored outside answers. Each kind has its own keeping time (src/lib/outside). */
 export const OUTSIDE_CACHE_KINDS = ["search", "search_empty", "card", "checklist"] as const;
 
@@ -62,6 +71,10 @@ export type CatalogSource = (typeof CATALOG_SOURCES)[number];
 export type CatalogField = (typeof CATALOG_FIELDS)[number];
 export type FieldSource = (typeof FIELD_SOURCES)[number];
 export type OutsideCacheKind = (typeof OUTSIDE_CACHE_KINDS)[number];
+export type VersionState = (typeof VERSION_STATES)[number];
+export type VersionSource = (typeof VERSION_SOURCES)[number];
+export type RookieState = (typeof ROOKIE_STATES)[number];
+export type RookieSource = (typeof ROOKIE_SOURCES)[number];
 
 const now = sql`(unixepoch() * 1000)`;
 const bool = (name: string) => integer(name, { mode: "boolean" }).notNull().default(false);
@@ -188,6 +201,27 @@ export const items = sqliteTable("items", {
   /** JSON: at most 5 slim candidates from the last catalog look up, with the time. */
   catalogCandidates: text("catalog_candidates"),
 
+  // Version, serial parts, rookie mark, kept apart (all null on items from before Milestone 11)
+  /** The owner's answer to "Which version is it?". Null means never asked. */
+  versionState: text("version_state", { enum: VERSION_STATES }),
+  /** Where the chosen version came from. */
+  versionSource: text("version_source", { enum: VERSION_SOURCES }),
+  /** JSON: at most 12 options from the last "Show versions", with the time. Cleared after a choice or after 30 days. */
+  versionOptions: text("version_options"),
+  /** Serial copy number, digits only, leading zeros kept ("045"). See src/lib/items/serial.ts. */
+  serialCopy: text("serial_copy"),
+  /** Serial print run, digits only, no leading zeros ("100"). `serialNumber` is rebuilt from the two parts. */
+  serialEdition: text("serial_edition"),
+  /** JSON: what the scanner read as a serial number (copy, edition, the line, weak). Cleared when the owner answers. */
+  serialSuggested: text("serial_suggested"),
+  /** Rookie mark. `isRookie` is true exactly when this is `yes`; write both with withRookie() (src/lib/items/rookie.ts). Null means not recorded. */
+  rookieState: text("rookie_state", { enum: ROOKIE_STATES }),
+  rookieSource: text("rookie_source", { enum: ROOKIE_SOURCES }),
+  /** The rookie evidence in plain words, at most 200 characters. */
+  rookieNote: text("rookie_note"),
+  /** JSON list of item ids (at most 50) the owner said are separate records, not duplicates. */
+  keptApartFrom: text("kept_apart_from"),
+
   createdAt: ts("created_at").notNull().default(now),
   updatedAt: ts("updated_at").notNull().default(now),
   /**
@@ -231,6 +265,8 @@ export const images = sqliteTable("images", {
   bytes: integer("bytes").notNull(),
   /** Size of the small picture. 0 on rows from before this was recorded. */
   thumbBytes: integer("thumb_bytes").notNull().default(0),
+  /** The photo's file as it was before the owner's first turn or trim (server made name, same folder). Null when never edited. */
+  originalFile: text("original_file"),
   createdAt: ts("created_at").notNull().default(now),
 }, (t) => [index("images_item_idx").on(t.itemId), index("images_scan_idx").on(t.scanId), index("images_work_idx").on(t.workFile)]);
 

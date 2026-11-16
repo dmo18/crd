@@ -4,7 +4,7 @@ import { items, locations, valuations, ITEM_KINDS, type Item, type NewItem } fro
 import { eq } from "drizzle-orm";
 import { sourcesFor } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
-import { editableFields, itemEditSchema, type ItemEditInput } from "./update";
+import { editableFields, itemEditSchema, ownerSerialAndRookie, type ItemEditInput } from "./update";
 
 /**
  * Add by hand. Only one of player, set name or description is needed; every
@@ -42,6 +42,13 @@ export function createItem(kindInput: unknown, input: unknown, db: Db = getDb())
   for (const key of allowed) values[key] = (rest as Record<string, unknown>)[key];
   const has = (k: string) => typeof values[k] === "string" && (values[k] as string).trim() !== "";
   if (!has("player") && !has("setName") && !has("description")) return { ok: false, errors: { form: NEEDS_ONE } };
+  if (kind.data === "card") {
+    // Serial parts and the rookie mark in step with the old columns; a ticked rookie box is the owner's own answer.
+    const extras = ownerSerialAndRookie(null, rest, raw);
+    if (!extras.ok) return extras;
+    delete values.isRookie;
+    Object.assign(values, extras.patch);
+  }
   if (locationId !== null && !db.select({ id: locations.id }).from(locations).where(eq(locations.id, locationId)).get()) {
     return { ok: false, errors: { locationId: "That location no longer exists." } };
   }

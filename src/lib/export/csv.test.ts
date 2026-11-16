@@ -12,6 +12,8 @@ const row = (over: Partial<Item> = {}): Item => ({
   aiNotes: null, estLowCents: null, estHighCents: null, estValueCents: null, valueSource: null, valueBasis: null,
   valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(), deletedAt: null,
   catalogCardId: null, firstSuggestion: null, fieldSources: null, catalogCandidates: null,
+  versionState: null, versionSource: null, versionOptions: null, serialCopy: null, serialEdition: null, serialSuggested: null,
+  rookieState: null, rookieSource: null, rookieNote: null, keptApartFrom: null,
   ...over,
 });
 
