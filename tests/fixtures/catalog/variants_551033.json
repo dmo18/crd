@@ -1,0 +1,20 @@
+{
+  "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only. Body is the JSON-RPC answer; result.content[0].text is itself a JSON string.",
+  "tool": "find_variants",
+  "arguments": {
+    "card_id": "551033"
+  },
+  "elapsed_ms": 816,
+  "response": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"card\": {\n    \"card_id\": \"551033\",\n    \"sport\": \"Baseball\",\n    \"year\": \"1990\",\n    \"product\": \"Topps\",\n    \"set\": \"Base Set\",\n    \"card_number\": \"336\",\n    \"subjects\": [\n      {\n        \"subject_name\": \"Ken Griffey Jr.\",\n        \"team_name\": \"\"\n      }\n    ],\n    \"card_details\": \"\",\n    \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/336-ken-griffey-jr-551033\",\n    \"image_url\": \"https://media.mycardfolio.com/detail/551033.jpg\"\n  },\n  \"variant_count\": 1,\n  \"variants\": [\n    {\n      \"card_id\": \"ebay_f7c14ad64fe5\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"Baseball\",\n      \"card_number\": \"336\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Ken Griffey Jr.\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card, Error Card, Bloody Arm Scar\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-ebay_15c7ea716b/baseball-ebay_925be04a84/336-ken-griffey-jr-ebay_f7c14ad64fe5\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_f7c14ad64fe5.jpg\"\n    }\n  ]\n}"
+        }
+      ]
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  }
+}
