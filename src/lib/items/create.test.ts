@@ -70,12 +70,17 @@ describe("link later and unlink", () => {
     expect(get(r.id).catalogCardId).not.toBeNull();
     expect(JSON.parse(get(r.id).fieldSources!)).toMatchObject({ player: "owner", team: "owner", year: "catalog", cardNumber: "catalog" });
   });
-  it("unlink changes no field", () => {
+  it("unlink changes no field value; the catalog's marks become reading marks, the owner's stay", () => {
     const r = createItem("card", { player: "Junior" }, db);
     if (!r.ok) throw new Error("create");
     linkCatalogCard(r.id, catalog(), db);
-    const before = { ...get(r.id), catalogCardId: null, updatedAt: null };
+    const linked = get(r.id);
+    const before = { ...linked, catalogCardId: null, updatedAt: null, fieldSources: null };
     expect(unlinkCatalogCard(r.id, db).ok).toBe(true);
-    expect({ ...get(r.id), updatedAt: null }).toEqual(before);
+    const after = get(r.id);
+    expect({ ...after, updatedAt: null, fieldSources: null }).toEqual(before);
+    const marks = JSON.parse(after.fieldSources!);
+    expect(marks.player).toBe("owner");
+    expect(Object.entries(marks).filter(([k]) => k !== "player").every(([, v]) => v === "reading")).toBe(true);
   });
 });

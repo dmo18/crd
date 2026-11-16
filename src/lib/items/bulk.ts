@@ -305,7 +305,10 @@ function planChanges(tx: Tx, rows: Item[], action: BulkAction, ctx: Ctx): Change
       for (const row of rows) {
         if (row.status === action.status) continue;
         out.push({
-          id: row.id, title: row.title, patch: { status: action.status }, old: { status: row.status },
+          // Checking an item ends its catalog question; undo puts the candidates back.
+          id: row.id, title: row.title,
+          patch: action.status === "confirmed" && row.catalogCandidates != null ? { status: action.status, catalogCandidates: null } : { status: action.status },
+          old: action.status === "confirmed" && row.catalogCandidates != null ? { status: row.status, catalogCandidates: row.catalogCandidates } : { status: row.status },
           before: label(row.status), after: label(action.status),
         });
       }

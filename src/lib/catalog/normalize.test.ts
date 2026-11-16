@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as old from "@/lib/free/key-cards";
-import { normalizeBrand, normalizeCardNumber, normalizeName, normalizeText } from "./normalize";
+import { normalizeBrand, normalizeCardNumber, normalizeName, normalizeText, printedCardNumber } from "./normalize";
 
 describe("catalog normalize", () => {
   it("gives the same keys as before the move", () => {
@@ -24,6 +24,15 @@ describe("catalog normalize", () => {
     expect(normalizeText("  Traded   &  Rookies! ")).toBe("traded rookies");
     expect(normalizeText("Base|Set")).toBe("base set");
     expect(normalizeText("José")).toBe("jose");
+  });
+
+  it("keeps a printed card number in its printed order", () => {
+    expect(printedCardNumber("11T")).toBe("11T");
+    expect(printedCardNumber("T11")).toBe("T11");
+    expect(printedCardNumber("#0336")).toBe("336");
+    expect(printedCardNumber(" bc-12 ")).toBe("BC12");
+    expect(printedCardNumber("0")).toBe("0");
+    expect(printedCardNumber(null as unknown as string)).toBe("");
   });
 
   it("never throws on missing input", () => {

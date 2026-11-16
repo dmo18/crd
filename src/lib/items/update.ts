@@ -138,7 +138,8 @@ export function updateItem(id: number, input: unknown, db: Db = getDb()): Update
 }
 
 export function confirmItem(id: number, db: Db = getDb()): UpdateResult {
-  const res = db.update(items).set({ status: "confirmed", updatedAt: new Date() }).where(and(eq(items.id, id), liveItem)).run();
+  // Confirming also ends the catalog question: the candidates are cleared.
+  const res = db.update(items).set({ status: "confirmed", catalogCandidates: null, updatedAt: new Date() }).where(and(eq(items.id, id), liveItem)).run();
   return res.changes > 0 ? { ok: true } : GONE;
 }
 

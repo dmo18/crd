@@ -20,8 +20,17 @@ describe("canonicalKey", () => {
     const a = canonicalKey({ ...griffey, cardNumber: "11T" });
     const b = canonicalKey({ ...griffey, cardNumber: "11" });
     expect(a).not.toBe(b);
-    expect(a).toContain("|T11|");
+    expect(a).toContain("|11T|");
     expect(b).toContain("|11|");
+  });
+
+  it("keeps the printed order of the number: \"11T\" and \"T11\" differ", () => {
+    const a = canonicalKey({ ...griffey, cardNumber: "11T" });
+    const b = canonicalKey({ ...griffey, cardNumber: "T11" });
+    expect(a).not.toBe(b);
+    expect(b).toContain("|T11|");
+    expect(canonicalKey({ ...griffey, cardNumber: "U-27" })).toContain("|U27|");
+    expect(canonicalKey({ ...griffey, cardNumber: "098T" })).toContain("|98T|");
   });
 
   it("keeps Tiffany apart from the base card", () => {
