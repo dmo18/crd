@@ -324,8 +324,9 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
         <li>On the server (PuTTY or the console), run the command below. When asked, paste the key, then Enter.</li>
       </ol>
       <div class="cmd"><code id="c-ca">sudo server-ssh-ca set</code><button class="copy" type="button" data-copy="c-ca">Copy</button></div>
-      <p class="see"><b>You should see:</b> open <span class="val">https://appy-ssh.<span data-d></span></span>, sign in with the email code, type your Ubuntu username: a terminal opens in the browser. Use it for every command from now on (paste works normally there).</p>
-      <p class="lead" style="font-size:.9rem">The username is the one you made in step 3 (for example <span class="val">owner</span>), even if your email starts with something else.</p>
+      <p class="note warn"><b>The browser terminal only logs in as the part of your sign-in email before the @</b> (for <span class="val">david.moadab@example.com</span> that is <span class="val">david.moadab</span>). If that is not your Ubuntu username, create that account once. Replace both <span class="val">NAME</span>s with it, then choose a password for it when asked:</p>
+      <div class="cmd"><code id="c-name">sudo useradd -m -s /bin/bash -G sudo NAME &amp;&amp; echo NAME | sudo tee /etc/ssh/principals/NAME &amp;&amp; sudo passwd NAME</code><button class="copy" type="button" data-copy="c-name">Copy</button></div>
+      <p class="see"><b>You should see:</b> open <span class="val">https://appy-ssh.<span data-d></span></span>, sign in with the email code: a terminal opens in the browser with no password. If a form asks for a password or private key instead, the account name does not match; send a photo of <span class="val">sudo journalctl -u ssh -n 15 --no-pager</span>.</p>
       <button class="donebtn" type="button">Done, next step</button>
     </div>
   </section>
@@ -390,23 +391,25 @@ No key yet? Press Enter alone to skip and add it later:</span> <span class="you"
 
   <!-- 12 -->
   <section class="step" data-step="12">
-    <header><div class="num">12</div><div class="head"><h2>Add Card Vault</h2><div class="chips"><span class="chip">Coolify</span><span class="chip">15 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
+    <header><div class="num">12</div><div class="head"><h2>Add Card Vault</h2><div class="chips"><span class="chip">Coolify, GitHub, Cloudflare</span><span class="chip">20 min</span></div><button class="reopen" type="button">Show this step again</button></div></header>
     <div class="body">
+      <p>This uses a read-only <b>deploy key</b>, so it keeps working if you make the repository private later. Deploys only happen when you click Deploy.</p>
       <ol class="do">
-        <li>In Coolify: <span class="ui">Projects</span>, <span class="ui">+ Add</span>, name it <span class="val">Card Vault</span>. Open it, <span class="ui">+ New Resource</span>, <span class="ui">Public Repository</span>.</li>
-        <li>Paste <span class="val">https://github.com/dmo18/crd</span>, click <span class="ui">Check repository</span>. Set <b>Build Pack</b> to <span class="ui">Docker Compose</span>. Continue.</li>
-        <li>On the app's page set the two things in the picture, then <span class="ui">Save</span>.</li>
-        <li>Tab <span class="ui">Environment Variables</span>: add <span class="val">CLIENT_IP_HEADER</span> with the value <span class="val">cf-connecting-ip</span>.</li>
-        <li>Click <span class="ui">Deploy</span> (top right) and wait 5 to 10 minutes.</li>
-        <li>In Cloudflare, tunnel <span class="val">appy</span>, <span class="ui">Routes</span>, <span class="ui">Add route</span>: subdomain <span class="val">cards</span>, path empty, Service URL <span class="val">http://127.0.0.1:80</span>. Do <b>not</b> add a sign-in rule for it: Card Vault has its own password.</li>
+        <li>Coolify, <span class="ui">Keys &amp; Tokens</span>, <span class="ui">+ Add</span>: name <span class="val">github-crd</span>, <span class="ui">Generate new ED25519 key</span>, save. Copy its <b>public key</b> (starts <span class="val">ssh-ed25519</span>).</li>
+        <li>GitHub, the repository, <span class="ui">Settings</span>, <span class="ui">Deploy keys</span>, <span class="ui">Add deploy key</span>: title <span class="val">coolify-appy</span>, paste the key, leave "Allow write access" <b>unticked</b>, <span class="ui">Add key</span>.</li>
+        <li>Coolify, your project, <span class="ui">production</span>, <span class="ui">+ New</span>, <span class="ui">Private Git Repository (with Deploy Key)</span>. Key <span class="val">github-crd</span>, repository <span class="val">git@github.com:dmo18/crd.git</span>, branch <span class="val">main</span>, Build Pack <span class="ui">Docker Compose</span>, Base Directory <span class="val">/</span>, Compose location <span class="val">/docker-compose.yaml</span>. Continue.</li>
+        <li>On the app's page (left menu) set the two things in the picture and save. Then <span class="ui">Environment Variables</span>: add <span class="val">CLIENT_IP_HEADER</span> = <span class="val">cf-connecting-ip</span>.</li>
+        <li>Click <span class="ui">Deploy</span> (top right) and wait 5 to 10 minutes for "Running (healthy)".</li>
+        <li>Cloudflare, tunnel <span class="val">appy</span>, <span class="ui">Routes</span>, <span class="ui">Add route</span>: subdomain <span class="val">cards</span>, path empty, Service URL <span class="val">http://127.0.0.1:80</span>. No sign-in rule for it: Card Vault has its own password.</li>
       </ol>
-      <figure><div class="shot"><div class="shot-bar">Coolify · Card Vault · Configuration</div><div class="shot-body">
-        <div class="f"><span><span class="n">1</span>Domains for cardvault</span><span class="box hit">https://cards.<span data-d></span>:3000</span></div>
+      <figure><div class="shot"><div class="shot-bar">Coolify · Card Vault</div><div class="shot-body">
+        <div class="f"><span><span class="n">1</span>Domains</span><span class="box hit">https://cards.<span data-d></span>:3000</span></div>
         <div class="f"><span><span class="n">2</span>Advanced · Force HTTPS</span><span class="box">Off</span></div>
         <div class="row"><span class="fake ghost">Save</span><span class="fake hit">Deploy</span></div>
-      </div></div><figcaption>The <b>:3000</b> stays in. People still visit the normal address without it.</figcaption></figure>
-      <p class="see"><b>You should see:</b> the status turn green: "Running (healthy)".</p>
-      <p class="lead" style="font-size:.9rem">If it fails, open the <span class="ui">Logs</span> tab, copy the last lines and send them to me.</p>
+      </div></div><figcaption>The <b>:3000</b> stays in Coolify. People visit the normal address without it.</figcaption></figure>
+      <p class="note plain"><b>Why port 80 in the route:</b> it is Coolify's own entrance inside the server. It sends each visit to the right app by its name. Visitors only ever use HTTPS through Cloudflare, and port 80 is closed to the internet and your network. Pointing the route at <span class="val">:3000</span> gives "502": that port only exists inside the app's container.</p>
+      <p class="see"><b>You should see:</b> <span class="val">https://cards.<span data-d></span></span> opens Card Vault's first-time page.</p>
+      <p class="lead" style="font-size:.9rem">If it fails, open <span class="ui">Deployment Logs</span>, copy the last lines and send them to me.</p>
       <button class="donebtn" type="button">Done, next step</button>
     </div>
   </section>
