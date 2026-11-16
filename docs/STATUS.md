@@ -1,5 +1,18 @@
 # Status
 
+## Milestone 11: the exact version (live 2026-11-16, commit 75d3dda)
+- "Which version is it?" on every card: catalog versions plus a short known
+  list (Tiffany, Glossy, Desert Shield, Topps Gold, ...), the owner chooses;
+  "Not sure yet" hides the estimate until chosen; filter in Manage.
+- Serial number and rookie mark are questions the owner confirms; scans
+  only suggest them (a key card list hit still sets rookie, with source).
+- Photos: add a missing side later, turn, trim, zoom, back to original.
+- Duplicates: same, maybe, or keep apart; combine always keeps the older
+  record, moves every photo (none deleted), never combines by itself.
+- Verified: 1281 tests, build, npm audit 0, phone screenshots, live deploy
+  healthy, migration 0009 applied, data intact.
+- Dropped for budget: 11.7 (why a look up waited).
+
 ## Milestone 10: the card catalog (live 2026-11-16, commit 0b19b1d)
 - Search cards (free MyCardfolio catalog, no key), Add by hand, link and
   unlink later; every scan asks the catalog in the background and Review
