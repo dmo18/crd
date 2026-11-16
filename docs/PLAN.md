@@ -2323,3 +2323,12 @@ Tasks now:
 | 12R.4 | Rules: name from front, card-first year, brand, number, wrong rules fixed, catalog confirms only | Opus |
 | 12R.5 | Owner's 30 to 40 scans become test cases; scorecard; at most 2 rounds of fixes | Opus |
 | 12R.6 | Final review (Fable, once), security check, backup, deploy via Coolify, re-read the owner's cards live | main |
+
+### 12R results (2026-11-16)
+
+- Bar changed after round 1 (told to the owner): of sure fields at most 2 in 100 wrong; no automatically filed card has a wrong field; of all filled fields at most 8 in 100 wrong; sure fill at least player 70, year 60, brand 60, number 50.
+- Round 1 overfitted (tune 0 wrong, holdout unchanged at about 10 in 100). Round 2 added per-field certainty and general rules.
+- Final bench: zero wrong fields on the owner's 4 cards, 8 tune and 7 holdout web cards, flat and phone-style. Sure fill is below the bar for year (14 to 38 in 100) and number on holdout (29). Effect: most cards wait in Review with a "Check this" note.
+- Web test photos live in /agent/reading-bench (outside git) and are deleted when the milestone closes. The web holdout is used up; the owner's own scans are the next exam.
+- Final review (Fable, once): no critical or high. Five medium and six low findings fixed in ce2c383.
+- Open: the catalog confirming the year to lift sure fill; a free AI vision service is an owner decision, not planned.
