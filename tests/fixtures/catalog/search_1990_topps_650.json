@@ -1,0 +1,24 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1990 Topps 650",
+  "sport": "Baseball",
+  "year": "1990",
+  "limit": 10
+ },
+ "elapsed_ms": 690,
+ "bytes": 1283,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1990 Topps 650\",\n  \"count\": 2,\n  \"results\": [\n    {\n      \"card_id\": \"551347\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"650\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Mike Witt\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/650-mike-witt-551347\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/551347.jpg\"\n    },\n    {\n      \"card_id\": \"552199\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps Tiffany\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"650\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Mike Witt\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-tiffany-2131/base-set-9181/650-mike-witt-552199\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/552199.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

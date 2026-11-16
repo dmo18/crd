@@ -145,6 +145,18 @@ In `tests/fixtures/catalog/`, as returned by the server, wrapped with the tool n
 - `identify_card_griffey.json`: identify answer including Tiffany.
 Only public card data. No headers, cookies or tokens are stored.
 
+## Checklist probe (task 10.5, 2026-11-16)
+
+Nine real calls by hand (limit was 40), one per 2.5 seconds, User-Agent `CardVault/0.1.0`, script `scripts/catalog-probe.mjs` (hand run only).
+
+- `get_set_checklist` takes only `set_id`. Its own description says "Output is capped at 500 cards". There is no paging: `offset`, `page` and `limit` were sent on purpose and all gave the identical answer (the first 500 cards, 277,184 bytes). So **a set cannot be paged past 500.**
+- The answer has `set` (set_id, set_name, product, sport, year, url), `total_cards` (792), `note` ("Checklist truncated to the first 500 of 792 cards.") and `cards`. Cards come in number order, `1` to `500` (and the rows are the same shape as search rows). So 1990 Topps #501 to #792 are not in the checklist, #336 is.
+- Size and time: about 277 KB (under the gate's 2 MB limit), 0.4 to 1.1 s.
+- The client returns the first 500 and `complete: false`. Matching (10.6) then adds one search by year, brand and number for numbers above 500. That fallback works: "1990 Topps 650" gave Mike Witt (Base Set and Tiffany), "1990 Topps 792" gave Gerald Perry (both), in 0.5 to 0.7 s. The site matches a plain number inside the query. The search answer always lists the Tiffany card too, so the client must keep the variation and let matching prefer the base set.
+- Does "1990 Topps" with limit 50 give the base set id? No. With `sport` and `year` set, all 50 rows were eBay or ing noise, so the client keeps at most 3 (unverified) and no set id comes out. A search with a card number ("1990 Topps 650") returns clean cards whose urls carry the set id (`base-set-9179`, Tiffany `base-set-9181`). "1990 Topps Base Set" returned 50 rows of one other set (47036). So the base set id comes from a clean hit's url (or from `get_card`), not from a broad search.
+- Search `limit` 50 took up to 7 seconds once (6,961 ms) and answered 32 KB. Plan for the 5 s timeout failing sometimes on big limits; use small limits.
+- New recordings in `tests/fixtures/catalog/`: `checklist_9179_first500.json`, `search_1990_topps_sets.json`, `search_1990_topps_650.json`, `search_1990_topps_792.json`.
+
 ## Open points for the next tasks
 
 - Ask the site by message about storing checklists (needed before F05).
