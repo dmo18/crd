@@ -65,10 +65,12 @@ First-time tasks for this loop (do them, ask the owner only for clicks):
 4. Deploys without clicking: ask the owner to enable the API (Coolify,
    Settings) and create a token under Keys & Tokens with deploy rights. Store
    it in `/home/ops-agent/.coolify-token`, mode 600, never in git. Then:
-   `curl -fsS -H "Authorization: Bearer $(cat ~/.coolify-token)" "http://127.0.0.1:8000/api/v1/deploy?uuid=APP_UUID"`
-   The app's uuid is the last part of its page address in Coolify. Check the
-   exact endpoint against Coolify's API docs for the installed version before
-   relying on it.
+   `curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.coolify-token)" "http://127.0.0.1:8000/api/v1/deploy?uuid=APP_UUID"`
+   Coolify 4.7.5: POST, not GET (GET answers "use POST"). Card Vault's uuid
+   is `uxxie2puczalzcb3yxzfw5fe`. Progress:
+   `GET /api/v1/deployments/<deployment_uuid>` (status `finished` or `failed`).
+   Done on 2026-11-16: branch is `live`, API on, token stored (read, deploy).
+   Owner rule: deploy only through Coolify, never with docker by hand.
 
 ## The server
 - "appy": Ubuntu 24.04 on Hyper-V, LAN 10.20.1.12, behind the owner's
