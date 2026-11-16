@@ -62,6 +62,10 @@ export async function removeKeyAction(_prev: ConnectionActionState, formData: Fo
   const form = readForm(formData, sourceForm);
   if (!form || !SOURCES[form.source].needsKey) return NOT_VALID;
   const had = removeKey(getDb(), form.source);
+  if (had === null) {
+    await auditThisRequest("connection_key_removed", "failed", SOURCES[form.source].name);
+    return { ok: false, message: "Could not remove the key. Try again." };
+  }
   await auditThisRequest("connection_key_removed", "ok", SOURCES[form.source].name);
   revalidatePath(PAGE);
   return { ok: true, message: had ? "Key removed." : "There was no key to remove." };
@@ -82,7 +86,10 @@ export async function testConnectionAction(_prev: ConnectionActionState, formDat
     return { ok: false, message: "A test just ran. Wait a few seconds and try again." };
   }
   const result = await outsideCall(form.source, src.testCall, { line: "now", db });
-  if (src.needsKey && (result.ok || result.reason !== "needs_key")) recordKeyTest(db, form.source, result.ok);
+  // "Did not work" is kept only when the site itself answered (an http status).
+  // Off, paused, capped, busy, network trouble or a timeout say nothing about
+  // the key: shown on screen, never stored.
+  if (src.needsKey && (result.ok || result.status !== null)) recordKeyTest(db, form.source, result.ok);
   await auditThisRequest("connection_tested", result.ok ? "ok" : "failed", result.ok ? `${src.name}: works` : `${src.name}: ${result.message}`);
   revalidatePath(PAGE);
   if (result.ok) return { ok: true, message: `Works, answered in ${seconds(result.ms)}.` };

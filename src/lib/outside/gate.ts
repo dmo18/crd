@@ -1,6 +1,6 @@
 import { getDb, type Db } from "@/db";
 import { log } from "@/lib/log";
-import { CACHE_CAP_BYTES, cacheKey, getCached, pruneCache, putCached, type CacheKind } from "./cache";
+import { CACHE_CAP_BYTES, cacheTotalBytes, getCached, pruneCache, putCached, requestKey, type CacheKind } from "./cache";
 import { openKey } from "./keys";
 import { SOURCES, sourceAvailable, type OutsideRequest, type SourceConfig, type SourceId } from "./sources";
 import { bumpUsage, getSourceState, pauseSource, recordError, recordOk, usageOn, utcDay } from "./usage";
@@ -37,8 +37,12 @@ export type Line = "now" | "background";
 export type CallOptions = {
   /** `now`: the owner is looking at a screen. `background`: scans. Default background. */
   line?: Line;
-  /** Use and keep a stored answer. `kindOf` says how to keep the answer, or null to not keep it. */
-  cache?: { args: Record<string, string | number | boolean | null | undefined>; kindOf: (body: string) => CacheKind | null };
+  /**
+   * Use and keep a stored answer. `kindOf` says how to keep the answer, or
+   * null to not keep it. The key is made from the real request (see
+   * `requestKey`); `args` is not used for it and may be left out.
+   */
+  cache?: { args?: Record<string, string | number | boolean | null | undefined>; kindOf: (body: string) => CacheKind | null };
   /** Overrides the source's timeout (a checklist gets 10 s). At most 10 s. */
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -54,9 +58,12 @@ export type OutsideResult =
   | { ok: true; status: number; body: string; fromStore: boolean; ms: number }
   | { ok: false; reason: OutsideFailure; status: number | null; message: string; errorKind: string; retryAt: Date | null };
 
-/** A `now` call that cannot start within this time gives up. */
-export const NOW_WAIT_MS = 8000;
-/** Calls that fail in a row before the source is paused, and for how long. */
+/**
+ * One overall deadline for a `now` call: queue, tries and the waits between
+ * them. After it the owner sees the plain "busy" message.
+ */
+export const NOW_DEADLINE_MS = 12_000;
+/** Failed requests in a row (each try counts) before the source is paused, and for how long. */
 export const FAILS_BEFORE_PAUSE = 3;
 export const FAIL_PAUSE_MS = 10 * 60 * 1000;
 /** Random spread added to each retry wait. */
@@ -97,7 +104,7 @@ const TOOL = /^[A-Za-z0-9_.-]{1,40}$/;
 const PATH = /^\/[A-Za-z0-9._~/-]{0,200}$/;
 
 /** Builds the address from the source's fixed host. Throws on anything unexpected. */
-function buildRequest(src: SourceConfig, req: OutsideRequest): { url: string; init: RequestInit } {
+function buildRequest(src: SourceConfig, req: OutsideRequest): { url: string; init: RequestInit; key: string } {
   const host = req.host ?? src.hosts[0];
   if (!src.hosts.includes(host)) throw new Error("host");
   if (!TOOL.test(req.tool) || !PATH.test(req.path) || req.path.includes("//") || req.path.includes("..")) throw new Error("path");
@@ -112,8 +119,10 @@ function buildRequest(src: SourceConfig, req: OutsideRequest): { url: string; in
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(req.json);
   }
+  // The stored-answer key comes from exactly what is sent.
+  const key = requestKey({ method, host, path: req.path, query: req.query, json: req.json }, src.freeTextFields);
   // Redirects are refused and cookies are never sent or kept.
-  return { url: url.toString(), init: { method, headers, body, redirect: "manual", credentials: "omit", cache: "no-store" } };
+  return { url: url.toString(), init: { method, headers, body, redirect: "manual", credentials: "omit", cache: "no-store" }, key };
 }
 
 /** Retry-After is seconds or an HTTP date; kept between 1 second and 1 hour. */
@@ -347,7 +356,7 @@ export class Gate {
     const fetchImpl = options.fetchImpl ?? this.fetchImpl;
     const startedAll = this.clock.now();
 
-    let built: { url: string; init: RequestInit };
+    let built: { url: string; init: RequestInit; key: string };
     try {
       built = buildRequest(src, request);
     } catch {
@@ -356,6 +365,8 @@ export class Gate {
     if (!sourceAvailable(source) || !getSourceState(db, source).enabled) return fail("off");
     // A source with a key: opened here, inside the server, at call time. It is
     // added to the request only in `attempt`, and never logged or returned.
+    // The opened key lives only in this call's local variables: nothing keeps
+    // it after the call ends (no field, no cache, no module state).
     let secretHeader: Record<string, string> | null = null;
     if (src.needsKey) {
       const k = src.key ? openKey(db, source) : null;
@@ -363,7 +374,7 @@ export class Gate {
       secretHeader = { [src.key.header]: k };
     }
 
-    const key = options.cache ? cacheKey(source, request.tool, options.cache.args) : null;
+    const key = options.cache ? built.key : null;
     if (key) {
       const hit = getCached(db, key, this.clock.now());
       if (hit) {
@@ -372,12 +383,17 @@ export class Gate {
       }
     }
 
+    // `now`: one deadline for everything. `background`: no deadline.
+    const deadline = line === "now" ? startedAll + NOW_DEADLINE_MS : null;
+    const left = () => (deadline === null ? Infinity : deadline - this.clock.now());
+    const safeToRepeat = request.safeToRepeat ?? src.repeatSafeTools.includes(request.tool);
+
     for (let tryNo = 0; ; tryNo++) {
       const before = this.blocked(source, this.clock.now());
       if (before) return before;
 
       const queuedAt = this.clock.now();
-      const got = await this.acquire(source, line, tryNo === 0 && line === "now" ? NOW_WAIT_MS : null);
+      const got = await this.acquire(source, line, deadline === null ? null : Math.max(0, left()));
       const startAt = this.clock.now();
       if (!got) {
         bumpUsage(db, source, startAt, { waitMs: startAt - queuedAt });
@@ -385,19 +401,27 @@ export class Gate {
       }
 
       let result: Attempt;
+      let cut = false;
       try {
         const atStart = this.blocked(source, startAt);
         if (atStart) return atStart;
+        const room = left();
+        if (room <= 0) return fail("busy");
+        // The deadline may shorten this try; a try cut that way ends in "busy".
+        cut = room < timeoutMs;
         this.recentStarts(source).push(startAt);
         bumpUsage(db, source, startAt, { calls: 1, waitMs: startAt - queuedAt });
-        result = await this.attempt(src, built.url, built.init, timeoutMs, fetchImpl, secretHeader);
+        result = await this.attempt(src, built.url, built.init, cut ? room : timeoutMs, fetchImpl, secretHeader);
       } finally {
         this.release();
       }
 
       const now = this.clock.now();
+      const failedTry = result.kind === "timeout" || result.kind === "network" || result.kind === "server";
+      // Any answer from the server (even a 4xx) ends a failure streak; each failed try adds to it.
+      if (!failedTry) this.failStreak.set(source, 0);
+
       if (result.kind === "ok") {
-        this.failStreak.set(source, 0);
         recordOk(db, source, now);
         const kind = options.cache?.kindOf(result.body) ?? null;
         if (key && kind) this.store(key, source, kind, result.body, now);
@@ -412,33 +436,45 @@ export class Gate {
 
       bumpUsage(db, source, now, { errors: 1 });
       const status = "status" in result ? result.status : null;
-      const retryable = result.kind === "timeout" || result.kind === "network" || result.kind === "server";
-      if (retryable && tryNo < src.retryDelaysMs.length) {
-        await this.sleep(src.retryDelaysMs[tryNo] + Math.floor(this.random() * RETRY_SPREAD_MS));
-        continue;
-      }
-
-      recordError(db, source, MESSAGES[result.kind], now);
-      if (result.kind === "redirect" || result.kind === "too_large") {
-        log.warn("outside_refused", { source, kind: request.tool, status, errorKind: ERROR_KINDS[result.kind] });
-      }
-      if (retryable) {
+      const deadlineCut = cut && result.kind === "timeout";
+      let paused = false;
+      if (failedTry && !deadlineCut) {
         const streak = (this.failStreak.get(source) ?? 0) + 1;
         this.failStreak.set(source, streak);
         if (streak >= FAILS_BEFORE_PAUSE) {
           this.failStreak.set(source, 0);
           this.pause(source, request.tool, FAIL_PAUSE_MS, "Three calls failed in a row", status, ERROR_KINDS[result.kind]);
+          paused = true;
         }
+      }
+      if (deadlineCut) return fail("busy");
+
+      if (failedTry && safeToRepeat && !paused && tryNo < src.retryDelaysMs.length) {
+        const waitMs = src.retryDelaysMs[tryNo] + Math.floor(this.random() * RETRY_SPREAD_MS);
+        // A `now` call whose next try could not start before the deadline stops here.
+        if (waitMs >= left()) return fail("busy");
+        await this.sleep(waitMs);
+        continue;
+      }
+
+      if (!paused) recordError(db, source, MESSAGES[result.kind], now);
+      if (result.kind === "redirect" || result.kind === "too_large") {
+        log.warn("outside_refused", { source, kind: request.tool, status, errorKind: ERROR_KINDS[result.kind] });
       }
       return fail(result.kind, status);
     }
   }
 
-  /** Keeps an answer; prunes old ones on write, at most once an hour. */
+  /**
+   * Keeps an answer. Prunes at once when the stored total passes the cap
+   * (checked on every write), and otherwise at most once an hour so expired
+   * answers go too.
+   */
   private store(key: string, source: SourceId, kind: CacheKind, body: string, nowMs: number): void {
     try {
       putCached(this.db, { key, source, kind, body, nowMs });
-      if (this.lastPrune === null || nowMs - this.lastPrune >= PRUNE_EVERY_MS) {
+      const overCap = cacheTotalBytes(this.db) > this.cacheCapBytes;
+      if (overCap || this.lastPrune === null || nowMs - this.lastPrune >= PRUNE_EVERY_MS) {
         this.lastPrune = nowMs;
         pruneCache(this.db, nowMs, this.cacheCapBytes);
       }
@@ -452,8 +488,14 @@ export function createGate(deps: GateDeps): Gate {
   return new Gate(deps);
 }
 
-/** One gate per database: in the app there is one, tests get a fresh one per test database. */
-const gates = new WeakMap<Db, Gate>();
+/**
+ * One gate per database: in the app there is one, tests get a fresh one per
+ * test database. Kept on globalThis next to the database, so a development
+ * hot reload (a new copy of this module) keeps the same queue, pacing and
+ * hour counts instead of starting a second gate.
+ */
+const gateHolder = globalThis as unknown as { __crdGates?: WeakMap<Db, Gate> };
+const gates: WeakMap<Db, Gate> = (gateHolder.__crdGates ??= new WeakMap<Db, Gate>());
 
 export function gateFor(db: Db): Gate {
   let gate = gates.get(db);

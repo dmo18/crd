@@ -41,6 +41,11 @@ export type OutsideRequest = {
   /** Sent as a JSON body (POST only). */
   json?: unknown;
   accept?: string;
+  /**
+   * True when sending this request twice does no harm (a read). Only such a
+   * request gets extra tries. Unset: the source's `repeatSafeTools` decide.
+   */
+  safeToRepeat?: boolean;
 };
 
 export type SourceConfig = {
@@ -70,6 +75,14 @@ export type SourceConfig = {
   pauseOn403: boolean;
   /** A 503 that carries Retry-After means "slow down" (Wikidata's habit). */
   pauseOn503WithRetryAfter: boolean;
+  /**
+   * Field names (in the query or anywhere in the JSON body) that hold free
+   * text such as search words. Only these are lowercased and trimmed for the
+   * stored-answer key; everything else counts exactly as sent.
+   */
+  freeTextFields: readonly string[];
+  /** Tools that only read, so a failed try may be repeated. */
+  repeatSafeTools: readonly string[];
   userAgent: () => string;
   /** One small real call for the Test button. */
   testCall: OutsideRequest;
@@ -114,6 +127,9 @@ export const SOURCES: Record<SourceId, SourceConfig> = {
     defaultPauseMs: 15 * 60 * 1000,
     pauseOn403: true,
     pauseOn503WithRetryAfter: false,
+    freeTextFields: ["query"],
+    // All MCP tools the app uses are reads.
+    repeatSafeTools: ["search_cards", "get_card", "get_set_checklist"],
     userAgent: appUserAgent,
     testCall: {
       tool: "search_cards",
@@ -143,6 +159,8 @@ export const SOURCES: Record<SourceId, SourceConfig> = {
     defaultPauseMs: 60_000,
     pauseOn403: false,
     pauseOn503WithRetryAfter: true,
+    freeTextFields: ["search"],
+    repeatSafeTools: ["wbsearchentities", "sparql"],
     userAgent: wikidataUserAgent,
     testCall: {
       tool: "wbsearchentities",
@@ -167,6 +185,8 @@ export const SOURCES: Record<SourceId, SourceConfig> = {
     defaultPauseMs: 15 * 60 * 1000,
     pauseOn403: false,
     pauseOn503WithRetryAfter: false,
+    freeTextFields: [],
+    repeatSafeTools: ["ping"],
     userAgent: appUserAgent,
     testCall: { tool: "ping", path: "/ping" },
   },

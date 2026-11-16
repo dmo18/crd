@@ -129,7 +129,10 @@ describe("the key flow, and the key appears nowhere", () => {
     const before = await page();
     expect(before).toContain("Key for Demo source");
     expect(before).toMatch(/type="password"/);
-    expect(before).toMatch(/autoComplete="off"|autocomplete="off"/);
+    // Password managers must not offer or keep the key.
+    expect(before).toMatch(/autoComplete="new-password"|autocomplete="new-password"/);
+    expect(before).toContain('data-1p-ignore=""');
+    expect(before).toContain('data-lpignore="true"');
 
     answers.push(await actions.saveKeyAction(empty, form({ source: "demo", key: KEY })));
     expect(answers.at(-1)).toEqual({ ok: true, message: "Key saved. Tap Test to check it." });
@@ -186,6 +189,48 @@ describe("the key flow, and the key appears nowhere", () => {
     expect(auditAndLogs).not.toContain(LAST4);
     expect(auditAndLogs).not.toContain("9z9z");
     for (const e of events) expect(e.detail).toMatch(/^Demo source/);
+  });
+
+  it("Test stores \"did not work\" only when the site answered; network, timeout, busy, paused or off only show on screen", async () => {
+    await actions.saveKeyAction(empty, form({ source: "demo", key: KEY }));
+    const lastResult = () => db.select().from(connectionKeys).get()!.lastTestResult;
+    fakeFetch.mockImplementation(async () => { throw new TypeError("fetch failed"); });
+    expect(await actions.testConnectionAction(empty, form({ source: "demo" }))).toEqual({ ok: false, message: "Could not reach the site." });
+    expect(lastResult()).toBeNull();
+    allowTest();
+    pauseSource(db, "demo", Date.now() + 60_000, "test", Date.now());
+    expect(await actions.testConnectionAction(empty, form({ source: "demo" }))).toMatchObject({ ok: false, message: "The site asked us to slow down. Try again later." });
+    expect(lastResult()).toBeNull();
+    const { setSourceEnabled, clearPause } = await import("./usage");
+    clearPause(db, "demo");
+    setSourceEnabled(db, "demo", false);
+    allowTest();
+    expect(await actions.testConnectionAction(empty, form({ source: "demo" }))).toEqual({ ok: false, message: "This source is switched off." });
+    expect(lastResult()).toBeNull();
+    setSourceEnabled(db, "demo", true);
+    allowTest();
+    fakeFetch.mockImplementation(async () => new Response("denied", { status: 403 }));
+    expect(await actions.testConnectionAction(empty, form({ source: "demo" }))).toEqual({ ok: false, message: "The site refused the request." });
+    expect(lastResult()).toBe("failed");
+  });
+
+  it("a database failure while saving or removing a key gives fixed words and logs only the error kind", async () => {
+    const real = (await import("./keys"));
+    const broken = new Proxy(db, {
+      get(target, prop, recv) {
+        if (prop === "insert" || prop === "delete") {
+          return () => { throw Object.assign(new Error(`Failed query: insert params: ${KEY},${LAST4}`), { name: "DrizzleQueryError" }); };
+        }
+        return Reflect.get(target, prop, recv);
+      },
+    });
+    const saved = real.saveKey(broken, "demo", KEY);
+    expect(saved).toEqual({ ok: false, message: "Could not save the key. Try again." });
+    expect(real.removeKey(broken, "demo")).toBeNull();
+    const all = JSON.stringify([saved, logLines]);
+    expect(all).not.toContain(KEY);
+    expect(all).not.toContain(LAST4);
+    expect(logLines.map((l) => JSON.parse(l).errorKind)).toEqual(["DrizzleQueryError", "DrizzleQueryError"]);
   });
 
   it("a key that cannot be opened shows \"enter again\" and Test makes no call", async () => {

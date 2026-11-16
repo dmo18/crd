@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Db } from "@/db";
 import { connectionKeys } from "@/db/schema";
 import { settingsSecret } from "@/lib/env";
+import { errorKind, log } from "@/lib/log";
 import { SOURCES, type SourceId } from "./sources";
 
 /**
@@ -15,7 +16,9 @@ import { SOURCES, type SourceId } from "./sources";
  * - The 32 byte key comes from HKDF-SHA256 over SETTINGS_KEY (else
  *   SESSION_SECRET), salt `crd-connections-v1`, info `key:<source id>`.
  * - Write only: nothing here returns a key except `openKey`, which only the
- *   gate calls, at call time, inside the server. Nothing here logs.
+ *   gate calls, at call time, inside the server. The only log lines are
+ *   a failed database write, with the error kind alone: a database error's
+ *   message holds the query values (ciphertext, iv, tag, last 4).
  * - A key that cannot be opened (the setting changed, the row was changed)
  *   gives null: "This key must be entered again". Never a crash.
  */
@@ -68,6 +71,8 @@ export function keySchema(source: SourceId) {
 
 export type SaveKeyResult = { ok: true } | { ok: false; message: string };
 
+export const KEY_SAVE_FAILED = "Could not save the key. Try again.";
+
 /** Checks and locks a pasted key, replacing any saved one. */
 export function saveKey(db: Db, source: SourceId, raw: unknown, now = new Date(), secret = settingsSecret()): SaveKeyResult {
   if (!SOURCES[source].needsKey) return { ok: false, message: "This connection does not use a key." };
@@ -76,14 +81,25 @@ export function saveKey(db: Db, source: SourceId, raw: unknown, now = new Date()
   const plain = parsed.data;
   const sealed = sealKey(source, plain, secret);
   const values = { ...sealed, last4: plain.slice(-4), savedAt: now, lastTestAt: null, lastTestResult: null };
-  db.insert(connectionKeys).values({ source, ...values })
-    .onConflictDoUpdate({ target: connectionKeys.source, set: values }).run();
+  try {
+    db.insert(connectionKeys).values({ source, ...values })
+      .onConflictDoUpdate({ target: connectionKeys.source, set: values }).run();
+  } catch (err) {
+    // Never the error itself: its message carries the locked key and last 4.
+    log.error("connection_key_save_failed", { source, errorKind: errorKind(err) });
+    return { ok: false, message: KEY_SAVE_FAILED };
+  }
   return { ok: true };
 }
 
-/** Removes the saved key. True when there was one. */
-export function removeKey(db: Db, source: SourceId): boolean {
-  return db.delete(connectionKeys).where(eq(connectionKeys.source, source)).run().changes > 0;
+/** Removes the saved key. True when there was one, false when not, null when the database failed. */
+export function removeKey(db: Db, source: SourceId): boolean | null {
+  try {
+    return db.delete(connectionKeys).where(eq(connectionKeys.source, source)).run().changes > 0;
+  } catch (err) {
+    log.error("connection_key_remove_failed", { source, errorKind: errorKind(err) });
+    return null;
+  }
 }
 
 /**

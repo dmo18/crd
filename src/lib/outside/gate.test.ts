@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { outsideCache, outsideState, outsideUsage } from "@/db/schema";
 import { setLogSink } from "@/lib/log";
-import { createGate, FAIL_PAUSE_MS, NOW_WAIT_MS, type CallOptions, type Clock } from "./gate";
-import { cacheKey } from "./cache";
+import { createGate, FAIL_PAUSE_MS, gateFor, NOW_DEADLINE_MS, type CallOptions, type Clock } from "./gate";
+import { requestKey } from "./cache";
 import { appUserAgent, SOURCES, type OutsideRequest } from "./sources";
 import { getSourceState, setSourceEnabled, usageOn, utcDay } from "./usage";
 
@@ -48,6 +48,16 @@ const SEARCH: OutsideRequest = {
   tool: "search_cards", path: "/api/mcp", method: "POST", accept: "application/json, text/event-stream",
   json: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "search_cards", arguments: { query: "x", limit: 1 } } },
 };
+
+/** The search request for these words, as MyCardfolio's client sends it. */
+const searchFor = (query: string, limit = 1): OutsideRequest => ({
+  ...SEARCH,
+  json: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "search_cards", arguments: { query, limit } } },
+});
+
+/** A fetch that never answers: each try ends only by its timeout. */
+const hangingFetch = (): FakeFetch =>
+  vi.fn((_u: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_r, rej) => init?.signal?.addEventListener("abort", () => rej(new Error("aborted")))));
 
 type FakeFetch = ReturnType<typeof vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>>;
 
@@ -187,18 +197,63 @@ describe("the two lines", () => {
     expect(order).toEqual(["first", "now", "background"]);
   });
 
-  it("a now call that cannot start within 8 s gives up with a plain message", async () => {
-    let release: () => void = () => undefined;
-    const f: FakeFetch = vi.fn(() => new Promise<Response>((r) => { release = () => r(new Response("{}", { status: 200 })); }));
+  it("a now call has one 12 s deadline for queue and try together, then the plain busy message", async () => {
+    const f = hangingFetch();
     const { gate, clock } = setup(f);
-    const slow = gate.call("mycardfolio", SEARCH, { timeoutMs: 10_000 });
-    await clock.advance(10);
-    const now = gate.call("mycardfolio", SEARCH, { line: "now" });
-    await clock.advance(NOW_WAIT_MS);
+    const slow = gate.call("mycardfolio", { ...SEARCH, safeToRepeat: false }, { timeoutMs: 10_000 });
+    let done = false;
+    const now = gate.call("mycardfolio", SEARCH, { line: "now" }).finally(() => { done = true; });
+    // 10 s in the queue behind the slow call, then its own try is cut at 12 s.
+    await clock.advance(NOW_DEADLINE_MS - 1);
+    expect(done).toBe(false);
+    expect(f).toHaveBeenCalledTimes(2);
+    await clock.advance(1);
     expect(await now).toMatchObject({ ok: false, reason: "busy", message: "The catalog is busy. Try again in a moment." });
-    expect(f).toHaveBeenCalledTimes(1);
-    release();
-    expect((await slow).ok).toBe(true);
+    expect(await slow).toMatchObject({ ok: false, reason: "timeout" });
+  });
+
+  it("a now call that is still waiting in the queue at 12 s gives up without being sent", async () => {
+    const f = hangingFetch();
+    const { gate, clock } = setup(f);
+    // Wikidata holds the slot 10 s; then the first now call takes it until its own deadline.
+    const blocker = gate.call("wikidata", SOURCES.wikidata.testCall, { timeoutMs: 10_000 });
+    const first = gate.call("mycardfolio", SEARCH, { line: "now" });
+    const second = gate.call("mycardfolio", SEARCH, { line: "now" });
+    await clock.advance(NOW_DEADLINE_MS + 1000);
+    expect(await blocker).toMatchObject({ ok: false, reason: "timeout" });
+    expect(await first).toMatchObject({ ok: false, reason: "busy" });
+    expect(await second).toMatchObject({ ok: false, reason: "busy" });
+    // The second one never reached the site.
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
+  it("a now call counts tries and the waits between them in the same 12 s", async () => {
+    const starts: number[] = [];
+    const ref: { c?: FakeClock } = {};
+    const hang = hangingFetch();
+    const f: FakeFetch = vi.fn((u: RequestInfo | URL, init?: RequestInit) => { starts.push(ref.c!.now()); return hang(u, init); });
+    const { gate, clock } = setup(f);
+    ref.c = clock;
+    const t0 = clock.now();
+    let doneAt = 0;
+    const now = gate.call("mycardfolio", SEARCH, { line: "now" }).finally(() => { doneAt = clock.now(); });
+    await clock.advance(60_000);
+    // Try at 0 (5 s), wait 2 s, try at 7 s (5 s): the next wait of 8 s would pass 12 s.
+    expect(starts.map((t) => t - t0)).toEqual([0, 7000]);
+    expect(await now).toMatchObject({ ok: false, reason: "busy", message: "The catalog is busy. Try again in a moment." });
+    expect(doneAt - t0).toBe(NOW_DEADLINE_MS);
+  });
+
+  it("a background call keeps all its tries and waits", async () => {
+    const f = hangingFetch();
+    const { gate, clock } = setup(f);
+    const t0 = clock.now();
+    let doneAt = 0;
+    const p = gate.call("mycardfolio", SEARCH).finally(() => { doneAt = clock.now(); });
+    await clock.advance(60_000);
+    expect(await p).toMatchObject({ ok: false, reason: "timeout" });
+    expect(f).toHaveBeenCalledTimes(3);
+    expect(doneAt - t0).toBe(5000 + 2000 + 5000 + 8000 + 5000);
   });
 });
 
@@ -224,6 +279,24 @@ describe("retry and backoff", () => {
     await clock.advance(60_000);
     expect(await p).toMatchObject({ ok: false, reason: "timeout", errorKind: "Timeout" });
     expect(f).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries only a request that is safe to repeat (MyCardfolio's MCP reads are)", async () => {
+    setLogSink(() => undefined);
+    const run = async (req: OutsideRequest) => {
+      const f: FakeFetch = vi.fn(async () => new Response("oops", { status: 500 }));
+      const { gate, clock } = setup(f);
+      const p = gate.call("mycardfolio", req);
+      await clock.advance(20_000);
+      expect(await p).toMatchObject({ ok: false, reason: "server" });
+      return f.mock.calls.length;
+    };
+    expect(SOURCES.mycardfolio.repeatSafeTools).toEqual(["search_cards", "get_card", "get_set_checklist"]);
+    for (const tool of SOURCES.mycardfolio.repeatSafeTools) expect(await run({ ...SEARCH, tool })).toBe(3);
+    // A tool not on the list, or a request marked not safe, gets one try only.
+    expect(await run({ ...SEARCH, tool: "save_card" })).toBe(1);
+    expect(await run({ ...SEARCH, safeToRepeat: false })).toBe(1);
+    expect(await run({ ...SEARCH, tool: "save_card", safeToRepeat: true })).toBe(3);
   });
 
   it("does not retry other 4xx answers", async () => {
@@ -271,24 +344,57 @@ describe("slow down and pauses", () => {
     expect(getSourceState(db, "mycardfolio").pausedUntil).not.toBeNull();
   });
 
-  it("three failed calls in a row pause the source for 10 minutes", async () => {
+  it("three failed tries in a row pause the source for 10 minutes: each try counts", async () => {
     setLogSink(() => undefined);
     let lastTry = 0;
     const ref: { c?: FakeClock } = {};
     const f: FakeFetch = vi.fn(async () => { lastTry = ref.c!.now(); throw new TypeError("fetch failed"); });
     const { gate, clock, db } = setup(f);
     ref.c = clock;
-    for (let i = 0; i < 3; i++) {
-      const p = gate.call("mycardfolio", SEARCH);
-      await clock.advance(20_000);
-      expect(await p).toMatchObject({ ok: false, reason: "network" });
-    }
-    expect(f).toHaveBeenCalledTimes(9);
+    const p = gate.call("mycardfolio", SEARCH);
+    await clock.advance(20_000);
+    expect(await p).toMatchObject({ ok: false, reason: "network" });
+    expect(f).toHaveBeenCalledTimes(3);
     const state = getSourceState(db, "mycardfolio");
     expect(state.pausedUntil?.getTime()).toBe(lastTry + FAIL_PAUSE_MS);
     expect(state.lastError).toBe("Three calls failed in a row");
     expect(await gate.call("mycardfolio", SEARCH)).toMatchObject({ ok: false, reason: "paused" });
-    expect(f).toHaveBeenCalledTimes(9);
+    expect(f).toHaveBeenCalledTimes(3);
+  });
+
+  it("any answer from the server, even a 4xx, ends the streak; 5xx, timeout and network failures add to it", async () => {
+    setLogSink(() => undefined);
+    // net, 500 (2 in a row), 404 ends it, net, 503 (2), 400 ends it, 502, net (2), net (3: pause).
+    const plan: (number | "net")[] = ["net", 500, 404, "net", 503, 400, 502, "net", "net"];
+    const f: FakeFetch = vi.fn(async () => {
+      const next = plan.shift();
+      if (next === "net") throw new TypeError("fetch failed");
+      return new Response("", { status: next });
+    });
+    const { gate, clock, db } = setup(f);
+    const once: OutsideRequest = { ...SEARCH, safeToRepeat: false };
+    for (let i = 0; i < 8; i++) {
+      const p = gate.call("mycardfolio", once);
+      await clock.advance(2000);
+      await p;
+    }
+    expect(f).toHaveBeenCalledTimes(8);
+    expect(getSourceState(db, "mycardfolio").pausedUntil).toBeNull();
+    const last = gate.call("mycardfolio", once);
+    await clock.advance(2000);
+    expect(await last).toMatchObject({ ok: false, reason: "network" });
+    expect(getSourceState(db, "mycardfolio").pausedUntil).not.toBeNull();
+  });
+
+  it("a timeout adds to the streak too", async () => {
+    setLogSink(() => undefined);
+    const f = hangingFetch();
+    const { gate, clock, db } = setup(f);
+    const p = gate.call("mycardfolio", SEARCH);
+    await clock.advance(60_000);
+    expect(await p).toMatchObject({ ok: false, reason: "timeout" });
+    expect(f).toHaveBeenCalledTimes(3);
+    expect(getSourceState(db, "mycardfolio").lastError).toBe("Three calls failed in a row");
   });
 
   it("a pause survives a restart", async () => {
@@ -306,56 +412,85 @@ describe("slow down and pauses", () => {
 });
 
 describe("stored answers", () => {
-  const cached = (kind: "search" | "search_empty" = "search"): CallOptions => ({ cache: { args: { query: "1990 Topps Griffey", limit: 1 }, kindOf: () => kind } });
+  const keep = (kind: "search" | "search_empty" | "card" = "search"): CallOptions => ({ cache: { kindOf: () => kind } });
 
-  it("uses a stored answer without counting a call", async () => {
+  it("uses a stored answer without counting a call; only the search words are folded", async () => {
     const f = okFetch('{"results":[1]}');
     const { gate, clock, db } = setup(f);
-    const a = await gate.call("mycardfolio", SEARCH, cached());
-    const b = await gate.call("mycardfolio", SEARCH, { cache: { args: { limit: 1, query: "  1990 TOPPS   griffey " }, kindOf: () => "search" } });
+    const a = await gate.call("mycardfolio", searchFor("1990 Topps Griffey"), keep());
+    const b = await gate.call("mycardfolio", searchFor("  1990 TOPPS griffey "), keep());
     expect(a).toMatchObject({ ok: true, fromStore: false });
     expect(b).toMatchObject({ ok: true, fromStore: true, body: '{"results":[1]}' });
     expect(f).toHaveBeenCalledTimes(1);
     expect(usageOn(db, "mycardfolio", today(clock))).toMatchObject({ calls: 1, storeHits: 1 });
   });
 
+  it("keys on the request actually sent, not on cache.args", async () => {
+    const f = okFetch('{"results":[1]}');
+    const { gate, clock } = setup(f);
+    // Same args, different requests (limit 1 and 20): two calls.
+    await gate.call("mycardfolio", searchFor("Griffey", 1), { cache: { args: { query: "Griffey" }, kindOf: () => "search" } });
+    const other = gate.call("mycardfolio", searchFor("Griffey", 20), { cache: { args: { query: "Griffey" }, kindOf: () => "search" } });
+    await clock.advance(2000);
+    expect(await other).toMatchObject({ fromStore: false });
+    expect(f).toHaveBeenCalledTimes(2);
+    // Same request, other args: the stored answer.
+    expect(await gate.call("mycardfolio", searchFor("Griffey", 1), { cache: { args: { anything: "else" }, kindOf: () => "search" } })).toMatchObject({ fromStore: true });
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+
   it("fetches again after the kind's keeping time", async () => {
     const f = okFetch();
     const { gate, clock } = setup(f);
-    await gate.call("mycardfolio", SEARCH, cached("search_empty"));
+    const req = searchFor("nothing here");
+    await gate.call("mycardfolio", req, keep("search_empty"));
     await clock.advance(86_400_000 - 1);
-    expect(await gate.call("mycardfolio", SEARCH, cached("search_empty"))).toMatchObject({ fromStore: true });
+    expect(await gate.call("mycardfolio", req, keep("search_empty"))).toMatchObject({ fromStore: true });
     await clock.advance(1);
-    expect(await gate.call("mycardfolio", SEARCH, cached("search_empty"))).toMatchObject({ fromStore: false });
+    expect(await gate.call("mycardfolio", req, keep("search_empty"))).toMatchObject({ fromStore: false });
     expect(f).toHaveBeenCalledTimes(2);
   });
 
   it("does not keep an answer the caller says not to keep, or a failed one", async () => {
     const { gate, db } = setup(okFetch());
-    await gate.call("mycardfolio", SEARCH, { cache: { args: { q: "a" }, kindOf: () => null } });
+    await gate.call("mycardfolio", searchFor("a"), { cache: { kindOf: () => null } });
     expect(db.select().from(outsideCache).all()).toHaveLength(0);
     const failed = setup(vi.fn(async () => new Response("", { status: 404 })));
-    await failed.gate.call("mycardfolio", SEARCH, cached());
+    await failed.gate.call("mycardfolio", searchFor("a"), keep());
     expect(failed.db.select().from(outsideCache).all()).toHaveLength(0);
   });
 
-  it("prunes the oldest answers past the size cap on write", async () => {
+  it("prunes at once when the stored total passes the cap, the oldest first", async () => {
     const { gate, clock, db } = setup(okFetch("x".repeat(400)), createDb(":memory:"), new FakeClock(), { cacheCapBytes: 1000 });
-    // The first write prunes, then at most once an hour.
     for (const q of ["a", "b", "c"]) {
-      const p = gate.call("mycardfolio", SEARCH, { cache: { args: { q }, kindOf: () => "card" } });
+      const p = gate.call("mycardfolio", searchFor(q), keep("card"));
       await clock.advance(2000);
       await p;
     }
-    expect(db.select().from(outsideCache).all()).toHaveLength(3);
-    await clock.advance(60 * 60 * 1000);
-    await gate.call("mycardfolio", SEARCH, { cache: { args: { q: "d" }, kindOf: () => "card" } });
+    // The third write passed the cap and was pruned on that write, within the same hour.
     const left = db.select().from(outsideCache).all();
-    expect(left).toHaveLength(2);
     expect(left.reduce((n, r) => n + r.bytes, 0)).toBeLessThanOrEqual(1000);
-    // The two oldest ("a", "b") went first; "c" and "d" stay.
-    const keyOf = (q: string) => cacheKey("mycardfolio", "search_cards", { q });
-    expect(left.map((r) => r.key).sort()).toEqual([keyOf("c"), keyOf("d")].sort());
+    const keyOf = (q: string) => requestKey({ method: "POST", host: "mycardfolio.com", path: "/api/mcp", json: searchFor(q).json }, ["query"]);
+    expect(left.map((r) => r.key).sort()).toEqual([keyOf("b"), keyOf("c")].sort());
+  });
+
+  it("under the cap, prunes expired answers at most once an hour", async () => {
+    const { gate, clock, db } = setup(okFetch("x"));
+    const put = async (q: string) => {
+      const p = gate.call("mycardfolio", searchFor(q), keep());
+      await clock.advance(2000);
+      await p;
+    };
+    await put("a");
+    // An answer that is already out of date, as if kept from long ago.
+    db.insert(outsideCache).values({ key: "old", source: "mycardfolio", kind: "search", body: "o", fetchedAt: new Date(0), expiresAt: new Date(clock.now() - 1), bytes: 1 }).run();
+    await put("b");
+    expect(db.select().from(outsideCache).all().map((r) => r.key)).toContain("old");
+    await clock.advance(60 * 60 * 1000);
+    await put("c");
+    const keys = db.select().from(outsideCache).all().map((r) => r.key);
+    expect(keys).not.toContain("old");
+    expect(keys).toHaveLength(3);
   });
 });
 
@@ -364,7 +499,7 @@ describe("answer limits", () => {
     setLogSink(() => undefined);
     const big = "x".repeat(2 * 1024 * 1024 + 1);
     const { gate, db } = setup(vi.fn(async () => new Response(big, { status: 200 })));
-    expect(await gate.call("mycardfolio", SEARCH, { cache: { args: { q: "big" }, kindOf: () => "search" } })).toMatchObject({ ok: false, reason: "too_large" });
+    expect(await gate.call("mycardfolio", SEARCH, { cache: { kindOf: () => "search" } })).toMatchObject({ ok: false, reason: "too_large" });
     expect(db.select().from(outsideCache).all()).toHaveLength(0);
     const declared = setup(vi.fn(async () => new Response("small", { status: 200, headers: { "Content-Length": String(3 * 1024 * 1024) } })));
     expect(await declared.gate.call("mycardfolio", SEARCH)).toMatchObject({ ok: false, reason: "too_large" });
@@ -385,9 +520,9 @@ describe("the owner's switch", () => {
   it("a switched off source makes no call and gives no stored answer", async () => {
     const f = okFetch();
     const { gate, db } = setup(f);
-    await gate.call("mycardfolio", SEARCH, { cache: { args: { q: "a" }, kindOf: () => "search" } });
+    await gate.call("mycardfolio", SEARCH, { cache: { kindOf: () => "search" } });
     setSourceEnabled(db, "mycardfolio", false);
-    expect(await gate.call("mycardfolio", SEARCH, { cache: { args: { q: "a" }, kindOf: () => "search" } })).toMatchObject({ ok: false, reason: "off" });
+    expect(await gate.call("mycardfolio", SEARCH, { cache: { kindOf: () => "search" } })).toMatchObject({ ok: false, reason: "off" });
     expect(await gate.call("mycardfolio", SEARCH, { line: "now" })).toMatchObject({ ok: false, reason: "off" });
     expect(f).toHaveBeenCalledTimes(1);
     expect(db.select().from(outsideState).get()?.enabled).toBe(false);
@@ -426,7 +561,69 @@ describe("logs", () => {
   });
 });
 
+describe("one gate per database", () => {
+  it("lives on globalThis next to the database, so a reloaded module keeps the same gate", async () => {
+    const db = createDb(":memory:");
+    const first = gateFor(db);
+    expect(gateFor(db)).toBe(first);
+    vi.resetModules();
+    const reloaded = await import("./gate");
+    expect(reloaded.gateFor).not.toBe(gateFor);
+    expect(reloaded.gateFor(db)).toBe(first);
+    expect((globalThis as unknown as { __crdGates?: WeakMap<Db, unknown> }).__crdGates?.get(db)).toBe(first);
+    expect(gateFor(createDb(":memory:"))).not.toBe(first);
+  });
+});
+
+/**
+ * Lines that could reach an outside address without the gate: `fetch(`,
+ * `.fetch(` (unless to the app's own "/..." address), any `fetchImpl(`,
+ * and imports of node:http, node:https or undici.
+ */
+function outsideFetchLines(text: string): number[] {
+  const found: number[] = [];
+  text.split("\n").forEach((line, i) => {
+    if (/^\s*(\*|\/\/)/.test(line)) return;
+    let bad = false;
+    for (const m of line.matchAll(/\bfetch\(([^)]*)/g)) {
+      if (!/^[`"']\//.test(m[1].trim())) bad = true;
+    }
+    if (/\bfetchImpl\(/.test(line)) bad = true;
+    if (/(\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'](node:)?(https?|undici)(\/[^"']*)?["']/.test(line)) bad = true;
+    if (bad) found.push(i + 1);
+  });
+  return found;
+}
+
 describe("no other outside fetch in src", () => {
+  it("the check flags every way out it knows", () => {
+    const flagged = [
+      'await fetch("https://x.example/")',
+      "await fetch(url)",
+      "await deps.fetch(url, init)",
+      "await window.fetch(`https://x`)",
+      "const r = await fetchImpl(url)",
+      "await this.fetchImpl(\"/api/x\")",
+      'import https from "node:https";',
+      'import { request } from "node:http";',
+      'import http from "http";',
+      'import { fetch as f } from "undici";',
+      'import { Agent } from "undici/types";',
+      'const h = await import("node:https");',
+      'const u = require("undici");',
+    ];
+    for (const line of flagged) expect(outsideFetchLines(line), line).toEqual([1]);
+    const fine = [
+      'await fetch("/api/scans")',
+      "await deps.fetch(`/api/scans/${id}`)",
+      'import fs from "node:fs";',
+      'import { z } from "zod";',
+      "// fetch(url) in a comment",
+      "fetchImpl?: typeof fetch;",
+    ];
+    for (const line of fine) expect(outsideFetchLines(line), line).toEqual([]);
+  });
+
   it("only the gate calls fetch for an outside address", () => {
     const root = path.resolve(__dirname, "../..");
     const allowed = new Set([
@@ -447,17 +644,12 @@ describe("no other outside fetch in src", () => {
     for (const file of files) {
       const rel = path.relative(root, file).split(path.sep).join("/");
       if (allowed.has(rel)) continue;
-      fs.readFileSync(file, "utf8").split("\n").forEach((line, i) => {
-        if (/^\s*(\*|\/\/)/.test(line)) return;
-        // Calls to the app's own server ("/api/...") are fine; so is the
-        // browser store's pass-through of those calls.
-        for (const m of line.matchAll(/\bfetch\(([^)]*)/g)) {
-          const arg = m[1].trim();
-          if (/^[`"']\//.test(arg)) continue;
-          if (rel === "components/items/scan-store.ts" && arg === "input, init") continue;
-          offenders.push(`${rel}:${i + 1}`);
-        }
-      });
+      const lines = fs.readFileSync(file, "utf8").split("\n");
+      for (const n of outsideFetchLines(lines.join("\n"))) {
+        // The browser store's pass-through of calls to the app's own server.
+        if (rel === "components/items/scan-store.ts" && /\bfetch\(input, init\)/.test(lines[n - 1])) continue;
+        offenders.push(`${rel}:${n}`);
+      }
     }
     expect(offenders).toEqual([]);
     expect(files.length).toBeGreaterThan(50);

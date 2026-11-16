@@ -72,7 +72,8 @@ export function KeyForm({ source, name, hint, replacing }: { source: string; nam
       <Field label={replacing ? `New key for ${name}` : `Key for ${name}`} hint={hint} htmlFor={id}>
         <input
           id={id} name="key" type="password" required minLength={16} maxLength={200}
-          autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+          autoComplete="new-password" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+          data-1p-ignore="" data-lpignore="true"
           className={INPUT_CLASS}
         />
       </Field>

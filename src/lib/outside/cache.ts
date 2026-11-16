@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, gt, lte, sum } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lte, sum } from "drizzle-orm";
 import type { Db } from "@/db";
 import { outsideCache, type OUTSIDE_CACHE_KINDS } from "@/db/schema";
 import type { SourceId } from "./sources";
@@ -25,17 +25,48 @@ export const CACHE_KEEP_MS: Record<CacheKind, number> = {
 /** Total size of all stored answers; the oldest go first beyond it. */
 export const CACHE_CAP_BYTES = 50 * 1024 * 1024;
 
-type Args = Record<string, string | number | boolean | null | undefined>;
+/** The parts of a request that decide its answer. */
+export type KeyedRequest = {
+  method: string;
+  host: string;
+  path: string;
+  query?: Record<string, string>;
+  /** The JSON body as sent (before JSON.stringify), or undefined for none. */
+  json?: unknown;
+};
 
-function normalizeArg(v: Args[string]): string | number | boolean | null {
-  if (typeof v === "string") return v.normalize("NFC").trim().toLowerCase().replace(/\s+/g, " ");
-  return v ?? null;
+/** Lowercased and trimmed: only for the named free-text fields (search words). */
+function foldText(v: string): string {
+  return v.trim().toLowerCase();
 }
 
-/** SHA-256 of source, tool and normalized arguments (key order and spacing do not matter). */
-export function cacheKey(source: SourceId, tool: string, args: Args): string {
-  const norm = Object.keys(args).sort().filter((k) => args[k] !== undefined).map((k) => [k, normalizeArg(args[k])]);
-  return createHash("sha256").update(JSON.stringify([source, tool, norm])).digest("hex");
+/** A copy of `value` with every string under a named field folded, at any depth. */
+function foldFields(value: unknown, fields: ReadonlySet<string>): unknown {
+  if (Array.isArray(value)) return value.map((v) => foldFields(v, fields));
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = fields.has(k) && typeof v === "string" ? foldText(v) : foldFields(v, fields);
+  }
+  return out;
+}
+
+/**
+ * SHA-256 of the real request: method, host, path, the query sorted by name,
+ * and the JSON body exactly as sent. Only the named free-text fields (for
+ * example the search words) are lowercased and trimmed first, so "Griffey"
+ * and " griffey" share one stored answer; every other difference (a limit, a
+ * set id, a year) gives a different key.
+ */
+export function requestKey(req: KeyedRequest, freeTextFields: readonly string[] = []): string {
+  const fields = new Set(freeTextFields);
+  const query = Object.entries(req.query ?? {})
+    .map(([k, v]): [string, string] => [k, fields.has(k) ? foldText(v) : v])
+    .sort(([a, x], [b, y]) => (a < b ? -1 : a > b ? 1 : x < y ? -1 : x > y ? 1 : 0));
+  const body = req.json === undefined ? null : JSON.stringify(foldFields(req.json, fields));
+  return createHash("sha256")
+    .update(JSON.stringify([req.method.toUpperCase(), req.host.toLowerCase(), req.path, query, body]))
+    .digest("hex");
 }
 
 /** The stored answer, or null when there is none or it is too old. */
@@ -54,19 +85,34 @@ export function putCached(db: Db, entry: { key: string; source: SourceId; kind: 
     .onConflictDoUpdate({ target: outsideCache.key, set: values }).run();
 }
 
-/** Deletes expired answers, then the oldest until the total is under the cap. Returns rows removed. */
+/** Bytes of all stored answers together. */
+export function cacheTotalBytes(db: Db): number {
+  return Number(db.select({ total: sum(outsideCache.bytes) }).from(outsideCache).get()?.total ?? 0);
+}
+
+/**
+ * Deletes expired answers, then the oldest until the total is under the cap.
+ * All deletes run in one transaction: either all of them happen or none.
+ * Returns rows removed.
+ */
 export function pruneCache(db: Db, nowMs: number, capBytes = CACHE_CAP_BYTES): number {
-  let removed = db.delete(outsideCache).where(lte(outsideCache.expiresAt, new Date(nowMs))).run().changes;
-  let total = Number(db.select({ total: sum(outsideCache.bytes) }).from(outsideCache).get()?.total ?? 0);
-  if (total <= capBytes) return removed;
-  const rows = db.select({ key: outsideCache.key, bytes: outsideCache.bytes }).from(outsideCache)
-    .orderBy(asc(outsideCache.fetchedAt), asc(outsideCache.key)).all();
-  for (const r of rows) {
-    if (total <= capBytes) break;
-    removed += db.delete(outsideCache).where(eq(outsideCache.key, r.key)).run().changes;
-    total -= r.bytes;
-  }
-  return removed;
+  return db.transaction((tx) => {
+    let removed = tx.delete(outsideCache).where(lte(outsideCache.expiresAt, new Date(nowMs))).run().changes;
+    let total = Number(tx.select({ total: sum(outsideCache.bytes) }).from(outsideCache).get()?.total ?? 0);
+    if (total <= capBytes) return removed;
+    const rows = tx.select({ key: outsideCache.key, bytes: outsideCache.bytes }).from(outsideCache)
+      .orderBy(asc(outsideCache.fetchedAt), asc(outsideCache.key)).all();
+    const doomed: string[] = [];
+    for (const r of rows) {
+      if (total <= capBytes) break;
+      doomed.push(r.key);
+      total -= r.bytes;
+    }
+    for (let i = 0; i < doomed.length; i += 500) {
+      removed += tx.delete(outsideCache).where(inArray(outsideCache.key, doomed.slice(i, i + 500))).run().changes;
+    }
+    return removed;
+  });
 }
 
 /** "Clear stored answers" for one source. Returns rows removed. */
