@@ -1468,6 +1468,32 @@ the designs above.
 - Fetch scanner: `//host` is not the app's own address; also flag node:net,
   node:tls, WebSocket and EventSource; one negative test for hyphen numbers.
 
+**10.6 review decisions (settled 2026-11-16, main session; done in 10.6c by Fable)**
+- "No other card fits" counts only over a COMPLETE set. When a checklist is
+  cut short (1990 Topps: 500 of 792), a name found in it is confirmed by one
+  exact search "year brand <full corrected name>" (limit 10): sure only when
+  that search returns exactly one clean card of that player in that set that
+  is not a subset, variation or insert, and its number does not disagree.
+  Otherwise candidates only.
+- The set key includes the sport; memory rows and learned set ids are
+  filtered by sport; nothing carries across sports. Memory is per scan plus
+  stored answers, never a global map that outlives a scan.
+- Subset cards (All-Star, Record Breaker, Salute, Team Leaders, Checklist,
+  Highlights, Turn Back the Clock, Future Stars, Draft Pick, Prospects) are
+  candidates only unless the read number agrees.
+- A prefix counts as a fit only for initials or a read under 3 letters;
+  otherwise exact or close spelling ("Ken" never fits "Kent").
+- Budget counts every network try: the gate reports tries for each call and
+  lookup adds them; catalog calls from a scan use at most one retry.
+- A variation (Tiffany or any other) is never sure, even when read; it is
+  offered as a candidate (design rule kept).
+- A "busy" answer stops catalog calls for the rest of that scan.
+- When a whole checklist in memory gave no sure card, do not spend more
+  searches on that card except the single confirm search above.
+- Griffey target (10.10): with the number cut off, "Ken Griffey, J" reaches
+  #336 through the checklist plus the confirm search; if the confirm search
+  shows more than one clean base card, it stays a top candidate in Review.
+
 **10.7 Search cards screen and "Add to my collection"** (Sonnet)
 - Files: `src/app/(app)/search/page.tsx`, `src/components/catalog/*`,
   `src/lib/catalog/actions.ts` (+ test), `src/app/(app)/more/page.tsx`,
