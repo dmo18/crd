@@ -82,6 +82,18 @@ describe("queueReducer", () => {
   });
 });
 
+describe("a photo refused for good", () => {
+  const refused = () => run([add(1), { type: "sending", key: 1 }, { type: "uploadFailed", key: 1, message: "Too large.", failure: "final" }]);
+  it("does not keep the leave warning on", () => {
+    const s = refused();
+    expect(s.entries[0].status).toBe("failed");
+    expect(hasUnsaved(s)).toBe(false);
+  });
+  it("counts as finished, so a full list can drop it", () => {
+    expect(isFinished(refused().entries[0])).toBe(true);
+  });
+});
+
 describe("full list drops only finished entries", () => {
   const saved = (k: number): QueueAction[] => [add(k), { type: "sending", key: k }, { type: "uploaded", key: k, scanId: k, at: 0 }];
   const fill = (n: number) => Array.from({ length: n }, (_, i) => saved(i + 1)).flat();

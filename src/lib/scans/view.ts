@@ -125,7 +125,8 @@ export function scanViews(scanIds: number[], db: Db = getDb(), order: number[] =
 /** The most recent scans, newest first, for the rapid-fire queue list. */
 export function recentScans(limit = 20, db: Db = getDb(), order: number[] = []): ScanView[] {
   const rows = db.select({ id: scans.id }).from(scans).orderBy(desc(scans.id)).limit(Math.min(Math.max(limit, 1), 50)).all();
-  return rows.map((r) => getScanView(r.id, db, order)).filter((v): v is ScanView => v !== null);
+  // One batched read (a few queries) instead of several queries per scan.
+  return scanViews(rows.map((r) => r.id), db, order).sort((a, b) => b.id - a.id);
 }
 
 /** Photos that belong to the scan as a whole (the uncropped originals). */

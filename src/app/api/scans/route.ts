@@ -34,7 +34,9 @@ export async function POST(request: Request) {
   try {
     form = await request.formData();
   } catch {
-    return bad("The photos did not arrive. Try again.");
+    // Usually a body cut short by a weak connection. 408 tells the page to
+    // send the photo again (same clientKey, so never a duplicate).
+    return bad("The photos did not arrive. Try again.", 408);
   }
 
   const text = (name: string) => {

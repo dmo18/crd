@@ -208,8 +208,10 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
  * entry that is not yet saved, still being read, or that only timed out on
  * the page (the server may still finish it).
  */
-export function isFinished(e: Pick<QueueEntry, "status" | "scanId" | "scan">): boolean {
+export function isFinished(e: Pick<QueueEntry, "status" | "scanId" | "scan" | "failure">): boolean {
   if (e.status === "done") return true;
+  // Refused for good (400, 413, 415): nothing left to save or wait for.
+  if (e.status === "failed" && e.failure === "final") return true;
   return e.status === "failed" && e.scanId !== null && e.scan?.status === "failed";
 }
 
@@ -303,7 +305,7 @@ export function listFull(state: QueueState): boolean {
 
 /** True while any photo is not yet safely on the server: the leave warning is on. */
 export function hasUnsaved(state: QueueState): boolean {
-  return state.entries.some((e) => e.scanId === null && e.status !== "done");
+  return state.entries.some((e) => e.scanId === null && e.status !== "done" && e.failure !== "final");
 }
 
 export const SIGN_OUT_QUESTION = "Some photos are not saved yet. Sign out anyway and lose them?";

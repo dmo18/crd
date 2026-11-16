@@ -60,6 +60,16 @@ describe("POST /api/scans clientKey", () => {
     expect(db.select().from(scans).all()).toHaveLength(0);
   });
 
+  it("a body cut short is a 408, so the page sends it again", async () => {
+    const res = await POST(new Request("http://localhost/api/scans", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=x" },
+      body: "--x\r\nContent-Disposition: form-data; name=\"mode\"\r\n\r\nsing",
+    }));
+    expect(res.status).toBe(408);
+    expect(db.select().from(scans).all()).toHaveLength(0);
+  });
+
   it("a blank key counts as no key", async () => {
     expect((await send({ clientKey: "  " })).status).toBe(201);
   });
