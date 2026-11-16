@@ -16,7 +16,7 @@ import {
 import { cardTilt, findCardBoxes } from "./find-cards";
 import { keyCardsFor, matchKeyCard, normalizeBrand, normalizeName, type KeyCard } from "./key-cards";
 import { getTextReader, type OcrResult, type ReadOptions, type TextReader } from "./ocr";
-import { parseCardText, parseProductText, type ParsedCard } from "./parse";
+import { parseCardText, parseProductText, teamFromList, type ParsedCard } from "./parse";
 import { lookupPlayer, type PlayerFacts } from "./wikidata";
 
 /**
@@ -295,6 +295,15 @@ export class FreeRecognizer implements Recognizer {
     return null;
   }
 
+  /** Wikidata facts for a known player name; null on any trouble. */
+  private async factsFor(name: string, parsed: ParsedCard): Promise<PlayerFacts | null> {
+    try {
+      return await this.lookup(name, { sport: parsed.sport, year: parsed.year });
+    } catch {
+      return null;
+    }
+  }
+
   private async cardFromText(
     front: OcrResult | null,
     back: OcrResult | null,
@@ -323,6 +332,18 @@ export class FreeRecognizer implements Recognizer {
     const facts = found?.facts ?? null;
 
     const notes = [...parsed.evidence];
+    // 3. A team hint (not sure from the text alone) is written only when the
+    // player's team list on Wikidata has it. A key card skipped step 2, so its
+    // player is looked up here, and only when there is a hint to check.
+    let team = parsed.team;
+    if (!team && parsed.teamHint) {
+      const teamFacts = facts ?? (key ? await this.factsFor(key.player, parsed) : null);
+      const confirmed = teamFacts ? teamFromList(parsed.teamHint, parsed.teamHintSport, teamFacts.sports, teamFacts.teams) : null;
+      if (confirmed) {
+        team = confirmed;
+        notes.push(`Team confirmed on Wikidata: ${confirmed}.`);
+      }
+    }
     // Values read from the card always win; the list and Wikidata only fill gaps.
     const readPlayer = found?.read ?? parsed.playerCandidates[0] ?? null;
     let player = readPlayer;
@@ -340,7 +361,7 @@ export class FreeRecognizer implements Recognizer {
       setName: key && setIsJustBrand ? key.setName : parsed.setName,
       cardNumber: key ? key.cardNumber : parsed.cardNumber,
       player,
-      team: parsed.team,
+      team,
       variation: null,
       isRookie: key?.isRookie ?? false,
       isError: false,

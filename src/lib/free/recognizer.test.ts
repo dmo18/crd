@@ -51,6 +51,45 @@ describe("FreeRecognizer with fake parts", () => {
     expect(item.notes).toMatch(/Wikidata/);
   });
 
+  it("writes a team hint only when the player's Wikidata team list has it (10.10)", async () => {
+    const text = "NO. 99\nFRANK THOMAS\nFrank was the White Sox top pick in the 1989 draft.\n© 1990 SCORE";
+    const run = async (facts: PlayerFacts | null) => {
+      const r = new FreeRecognizer({ reader: reader({ 3: text }), lookup: async () => facts });
+      return (await r.recognize({ mode: "single", photos: [photo(3)] }))[0];
+    };
+    // The team stands only in a sentence: a hint.
+    const none = await run(null);
+    expect(none.team).toBeNull();
+    expect(none.notes).toMatch(/Maybe team Chicago White Sox/);
+    const confirmed = await run(thomasFacts);
+    expect(confirmed.team).toBe("Chicago White Sox");
+    expect(confirmed.notes).toMatch(/Team confirmed on Wikidata: Chicago White Sox/);
+    // A team list without it, or another sport: not written.
+    expect((await run({ ...thomasFacts, teams: ["Oakland Athletics"] })).team).toBeNull();
+    expect((await run({ ...thomasFacts, sports: ["football"] })).team).toBeNull();
+  });
+
+  it("H1 end to end: a lowercase bio word and a misread front team write no team", async () => {
+    const r = new FreeRecognizer({
+      reader: reader({ 1: "GREGG OLSON\nMARMNERS", 2: "NO. 723\nHis two sons are twins and both play ball.\n© 1989 THE UPPER DECK CO." }),
+      lookup: async () => ({ ...thomasFacts, name: "Gregg Olson", teams: ["Baltimore Orioles"] }),
+    });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
+    expect(item.team).toBeNull();
+    expect(item.notes).not.toMatch(/Twins/);
+  });
+
+  it("a key card looks the player up only to check a team hint", async () => {
+    let lookups = 0;
+    const r = new FreeRecognizer({
+      reader: reader({ 1: "FRANK THOMAS\nFrank was the White Sox top pick in the 1989 draft.", 2: "NO. 414\nFRANK THOMAS\nFIRST BASE\n© 1990 THE TOPPS COMPANY, INC." }),
+      lookup: async () => { lookups++; return thomasFacts; },
+    });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
+    expect(item).toMatchObject({ player: "Frank Thomas", cardNumber: "414", team: "Chicago White Sox", isRookie: true });
+    expect(lookups).toBe(1);
+  });
+
   it("still files a card it cannot read, for the owner to fill in", async () => {
     const r = new FreeRecognizer({ reader: reader({}), lookup: async () => null });
     const [item] = await r.recognize({ mode: "single", photos: [photo(9)] });

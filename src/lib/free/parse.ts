@@ -22,7 +22,15 @@ export type ParsedCard = {
    * from ..."): a first name hint, never a player name on its own.
    */
   firstNameHint: string | null;
+  /** Only when read for sure: one team, exactly, in capitals, on a team line. */
   team: string | null;
+  /**
+   * A team reading that is not sure enough to write (a close spelling, a
+   * team in a sentence, or two teams read). Shown to the owner as a
+   * suggestion; the recognizer writes it only when Wikidata confirms it.
+   */
+  teamHint: string | null;
+  teamHintSport: Sport | null;
   sport: Sport | null;
   position: string | null;
   /** From a graded holder (slab) label. */
@@ -91,6 +99,8 @@ function cleanRaw(s: string): string {
     .replace(/\(\s*[cCeE]\s*\)|[\u00a9\u00ae]/g, " \u00a9 ")
     .replace(/@(?=\s*[0-9OoIlSsg|]{4})/g, " \u00a9 ")
     .replace(/\s+/g, " ")
+    // A small l inside a word in capitals is a capital I misread ("MARlNERS", "GRlFFEY").
+    .replace(/\b[A-Zl]{3,}\b/g, (w) => (w.includes("l") && (w.match(/[A-Z]/g)?.length ?? 0) >= 2 ? w.replace(/l/g, "I") : w))
     .trim();
 }
 
@@ -231,8 +241,7 @@ function hasBrandWord(lz: string): boolean {
  * A row: season, then up to 3 club words in capitals and only numbers after
  * them, or 3 or more numbers. A header is not a row: a brand name after the
  * season ("1989 UPPER DECK") never counts, and a row with the club but no
- * numbers counts only with a two digit season ("89 MARINERS", the left half
- * of a row the reader split), never with a full year ("1989 MONTHLY").
+ * numbers (the left half of a row the reader split) must pass clubOnly.
  */
 function isStatRow(l: Line): boolean {
   const t = l.tokens;
@@ -248,8 +257,37 @@ function isStatRow(l: Line): boolean {
   }
   if (k === 0 || letters < 3 || rest[0].replace(/[^A-Z]/g, "") in POS_TOKENS) return false;
   const after = rest.slice(k);
-  if (after.length === 0) return /^'?\d{2}(?:-\d{2})?$/.test(t[0]);
+  if (after.length === 0) return clubOnly(rest);
   return after.every(isNumber);
+}
+
+/** Words of card headers and checklists that are never a club: "88 ROOKIE", "87 DRAFT PICK", "1989 MONTHLY". */
+const NOT_CLUB = new Set(["MONTHLY", "SCOREBOARD", "SPRING", "TRAINING", "PLAYOFF", "PLAYOFFS", "POSTSEASON", "STATS", "STATISTICS"]);
+/** First words of two word club names ("SN BERNARDINO", "EL PASO", "NEW BRITAIN"). */
+const PLACE_PREFIX = new Set([
+  "SN", "SAN", "SANTA", "ST", "STE", "FT", "FORT", "PORT", "EL", "LA", "LAS", "LOS", "NEW", "SALT", "WEST", "EAST",
+  "NORTH", "SOUTH", "GRAND", "CEDAR", "LITTLE", "GLENS", "PALM", "BATON", "CORPUS", "KANE", "QUAD", "TRI", "RANCHO",
+  "WINSTON", "COLORADO", "OKLAHOMA", "KANSAS", "IOWA", "BOWIE", "WEST", "RED", "WHITE", "BLUE", "SPRINGFIELD",
+]);
+
+/**
+ * A row with the club and no numbers (the reader split the row; the
+ * numbers are on their own lines): one club word, or two when the first is a
+ * place word ("SN BERNARDINO") or they are a city or team ("NEW YORK", "RED
+ * SOX"). No card header words ("88 ROOKIE", "87 DRAFT PICK", "1989
+ * MONTHLY") and no checklist names ("56 JOHN SMITH"). Two or four digit
+ * seasons both count ("89 MARINERS", "1989 MARINERS").
+ */
+function clubOnly(words: string[]): boolean {
+  if (words.length > 2) return false;
+  const keys = words.map((w) => w.replace(/[^A-Z]/g, ""));
+  const nick = (k: string) => NICK_GROUPS.some((g) => g.key.replace(/[^A-Z0-9]/g, "") === k);
+  for (const k of keys) {
+    if (NOT_CLUB.has(k) || (STOP_WORDS.has(k) && !nick(k)) || k === "STARS") return false;
+  }
+  if (keys.length === 1) return true;
+  const both = keys.join(" ");
+  return PLACE_PREFIX.has(keys[0]) || CITY_KEYS.has(normalizeName(both)) || NICK_GROUPS.some((g) => g.key === both);
 }
 
 function yearFromTable(lines: Line[]): YearFind | null {
@@ -641,17 +679,19 @@ function excludedNick(key: string, before: string, after: string): boolean {
 type TeamFind = { team: string; sport: Sport | null; ambiguous: boolean; line: Line; /** Read with one letter wrong or missing. */ fuzzy: boolean };
 
 /**
- * Close spellings of team nicknames ("MARMNERS" for Mariners). Kept narrow on
- * purpose, because surnames and plain words sit one letter away from many
- * nicknames (Brewer, Brown, Rookies, Capital):
+ * Close spellings of team nicknames ("MARMNERS" for Mariners). Since 10.10
+ * a close spelling is only ever a hint, never written as the team. Kept
+ * narrow on purpose, because surnames and plain words sit one letter away
+ * from many nicknames (Brewer, Brown, Falcone, Pilates):
  * - only one word nicknames of 6 or more letters, and the read word must be
  *   in capitals, 6 or more letters, and start with the same letter;
- * - one letter wrong (same length), or one letter left out, but never one of
- *   the last two letters: that would be the singular ("BREWER", "GIANT") or
- *   another plain word ("MARINES", "RANGES", "CHARGES"). No added letters;
+ * - one letter wrong (same length) where the two letters look alike to the
+ *   text reader (I and M, E and F, O and Q, C and G), never the last letter;
+ *   or one letter left out, but never one of the last two letters ("BREWER",
+ *   "MARINES"). No added letters;
  * - never a word from FUZZY_STOP, never a word on a line that gave a player
  *   name candidate, and only when exactly one nickname is that close;
- * - a close spelling counts half, and only when no team was read exactly.
+ * - only when no team was read exactly.
  */
 const FUZZY_MIN_LETTERS = 6;
 const FUZZY_WEIGHT = 0.5;
@@ -667,20 +707,30 @@ const FUZZY_STOP = new Set([
   // Surnames and places.
   "PHILLIPS", "MARTINS", "MARINS", "MERLINS", "RODGERS", "GRAVES", "SPARKS", "BROWNE", "GRANTS", "ANGELO", "ANGELA",
   "INDIANA", "PARKERS", "BAKERS", "WALKERS", "POWERS", "ROGERS", "RIDERS", "ROYALE", "CANADIANS", "MARINES",
+  "FALCONE", "ANGELL", "DEVINS", "RADERS",
   // Plain words.
   "MINERS", "MAKERS", "TAKERS", "DINERS", "LINERS", "LASERS", "LAYERS", "PAPERS", "TIMERS", "PICKERS", "PACKETS",
   "RACKETS", "ROCKERS", "POCKETS", "RINGERS", "DANGERS", "CHANGERS", "CHARTERS", "CHARGES", "RANGES", "DODGES",
   "BLAZES", "WHALES", "STEALERS", "PISTOLS", "PITONS", "KNOCKS", "BRAINS", "BRAKES", "BRACES", "BREWERY", "ANGERS",
   "SHARES", "SHARPS", "SHANKS", "FRAMES", "FLAKES", "FLARES", "FLIERS", "FOYERS", "SABLES", "CROWNS", "BALLETS",
-  "BILLETS", "LIGHTING",
+  "BILLETS", "LIGHTING", "PILATES", "CHARMERS", "FRYERS", "PAGERS", "SHACKS",
 ]);
 
-/** True when the read word is the nickname with one letter wrong, or with one letter (not one of the last two) left out. */
+/** Letters the text reader mixes up in capitals: a wrong letter counts only inside one group. */
+const LOOK_ALIKE = ["ILTJ", "MNHWI", "OQDCGU", "EF", "UV", "KX", "PB", "RK"];
+
+function lookAlike(a: string, b: string): boolean {
+  return LOOK_ALIKE.some((g) => g.includes(a) && g.includes(b));
+}
+
+/** True when the read word is the nickname with one look alike letter wrong (not the last), or one letter (not one of the last two) left out. */
 function closeSpelling(word: string, nick: string): boolean {
   if (word === nick || word[0] !== nick[0]) return false;
   let i = 0;
   while (i < word.length && word[i] === nick[i]) i++;
-  if (word.length === nick.length) return word.slice(i + 1) === nick.slice(i + 1);
+  if (word.length === nick.length) {
+    return i < word.length - 1 && lookAlike(word[i], nick[i]) && word.slice(i + 1) === nick.slice(i + 1);
+  }
   if (word.length !== nick.length - 1) return false;
   return word.slice(i) === nick.slice(i + 1) && i < nick.length - 2;
 }
@@ -695,9 +745,64 @@ function fuzzyNick(word: string): NickGroup | null {
   return hits.size === 1 ? [...hits][0] : null;
 }
 
+/**
+ * Nicknames that are also plain words or names ("TOPPS STARS", "BRINGS THE
+ * HEAT", "JEFF KINGS", "LSU TIGERS"). They count only on a team line (see
+ * teamLine), never as a hint from other text.
+ */
+const PLAIN_NICKS = new Set([
+  "STARS", "BEARS", "MAGIC", "HEAT", "BILLS", "KINGS", "JETS", "TIGERS", "SUNS", "JAZZ", "NETS", "BLUES", "GIANTS",
+  "SAINTS", "LIGHTNING", "FLAMES", "DEVILS", "LIONS", "RAMS", "SHARKS", "SPURS", "BUCKS", "CHIEFS", "ROYALS",
+  "ANGELS", "BRAVES", "REDS", "CUBS", "TWINS", "PANTHERS", "EAGLES", "HAWKS", "CAPITALS", "BULLETS", "ROCKETS",
+  "PISTONS", "WARRIORS", "CLIPPERS", "SENATORS", "PENGUINS", "WHALERS", "OILERS", "FLYERS", "AVALANCHE", "SABRES",
+  "ATHLETICS", "INDIANS", "BROWNS", "PACKERS", "STEELERS", "CHARGERS", "RAIDERS", "VIKINGS", "COWBOYS", "BRONCOS",
+  "PATRIOTS", "RANGERS", "PIRATES", "CARDINALS", "COLTS", "JAGUARS", "DOLPHINS", "GRIZZLIES", "HORNETS", "BULLS",
+  "ROCKIES", "MARLINS", "EXPOS", "ASTROS", "PADRES", "ISLANDERS", "CANUCKS", "NORDIQUES", "FALCONS", "BENGALS",
+  "SAINTS", "BUCCANEERS", "SEAHAWKS", "MAVERICKS", "NUGGETS", "PACERS", "CELTICS", "LAKERS",
+]);
+
+/** Words that may stand on a team line beside the team: positions (the position lists come later in this file). */
+const TEAM_LINE_WORDS = () => new Set([
+  ...Object.keys(POS_TOKENS), ...Object.keys(SINGLE_POS), "PITCHER", "CATCHER", "OUTFIELD", "OUTFIELDER", "INFIELD",
+  "INFIELDER", "SHORTSTOP", "FIRST", "SECOND", "THIRD", "BASE", "BASEMAN", "DESIGNATED", "HITTER", "QUARTERBACK",
+  "RUNNING", "BACK", "WIDE", "RECEIVER", "TIGHT", "END", "LINEBACKER", "CORNERBACK", "DEFENSIVE", "SAFETY", "TACKLE",
+  "KICKER", "PUNTER", "LEFT", "RIGHT", "WING", "DEFENSEMAN", "GOALIE", "GOALTENDER", "GUARD", "FORWARD", "CENTER",
+]);
+
+const CITY_RES_ALL = new Map<string, RegExp>(TEAMS.map((t) => [t.city, new RegExp(`\\b${phraseRe(t.city)}\\b`, "g")]));
+
+/** The read nickname is in capitals or starts each word with one ("MARINERS", "Mariners"), not "twins". */
+function capitalized(raw: string): boolean {
+  const words = raw.split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => /^[A-Z0-9]/.test(w));
+}
+
+/**
+ * A team line: besides the team (with or without its city) only positions,
+ * numbers and marks ("SEATTLE MARINERS OF", "OUTFIELD MARINERS", "BULLS
+ * GUARD", a stat row "89 YANKEES 127 455 61"). Not "TOPPS STARS", "JEFF
+ * KINGS", "KINGS MOUNTAIN" or "A MAGIC MOMENT".
+ */
+let teamLineWords: Set<string> | null = null;
+
+function teamLine(l: Line, start: number, end: number, group: NickGroup): boolean {
+  const words = (teamLineWords ??= TEAM_LINE_WORDS());
+  let rest = upper(`${l.raw.slice(0, start)} ${l.raw.slice(end)}`);
+  for (const t of group.entries) rest = rest.replace(CITY_RES_ALL.get(t.city)!, " ");
+  return rest
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, ""))
+    .filter(Boolean)
+    .every((w) => /^'?[\d.,%#'/-]+$/.test(w) || words.has(w));
+}
+
 type TeamScore = { score: number; line: Line };
 type TeamRow = { group: NickGroup; season: number; y: number };
 type TeamTally = { scores: Map<NickGroup, TeamScore>; lastRow: TeamRow | null };
+
+function newTally(): TeamTally {
+  return { scores: new Map(), lastRow: null };
+}
 
 function tallyTeam(tally: TeamTally, group: NickGroup, l: Line) {
   const cur = tally.scores.get(group) ?? { score: 0, line: l };
@@ -711,60 +816,31 @@ function tallyTeam(tally: TeamTally, group: NickGroup, l: Line) {
   }
 }
 
-/** nameLines: the lines a player name candidate was read from; no close spelling is looked for there. */
-function findTeam(lines: Line[], year: number | null, sportHint: Sport | null, nameLines: ReadonlySet<Line>): TeamFind | null {
-  const exact: TeamTally = { scores: new Map(), lastRow: null };
-  const close: TeamTally = { scores: new Map(), lastRow: null };
-  for (const l of lines) {
-    let work = l.lz;
-    for (const v of VARIANTS) {
-      v.re.lastIndex = 0;
-      let m: RegExpExecArray | null;
-      while ((m = v.re.exec(work)) !== null) {
-        const start = m.index;
-        const end = start + m[0].length;
-        if (!excludedNick(v.group.key, l.lz.slice(0, start), l.lz.slice(end))) tallyTeam(exact, v.group, l);
-        work = work.slice(0, start) + " ".repeat(end - start) + work.slice(end);
-        v.re.lastIndex = end;
-      }
-    }
-    if (nameLines.has(l)) continue;
-    // Whole words in capitals that missed a nickname by one letter.
-    const word = /[A-Z]+/g;
-    let m: RegExpExecArray | null;
-    while ((m = word.exec(work)) !== null) {
-      if (l.raw.slice(m.index, m.index + m[0].length) !== m[0]) continue;
-      const group = fuzzyNick(m[0]);
-      if (group) tallyTeam(close, group, l);
-    }
-  }
-  // A close spelling counts only when no team was read exactly, and then half.
-  const fuzzy = exact.scores.size === 0;
-  const tally = fuzzy ? close : exact;
-  const weight = fuzzy ? FUZZY_WEIGHT : 1;
+/** The best scored nickname of a tally, or null. */
+function bestOf(tally: TeamTally, lines: Line[]): { group: NickGroup; line: Line } | null {
   const scores = tally.scores;
   if (tally.lastRow) {
     const cur = scores.get(tally.lastRow.group);
     if (cur) cur.score += 5;
   }
-  if (scores.size === 0) return null;
   const all = lines.map((l) => l.lz).join("\n");
-  const cityHit = (t: TeamDef) => CITY_RES.get(t.city)?.test(all) ?? false;
-
-  let bestGroup: NickGroup | null = null;
-  let best = -1;
-  let bestLine: Line | null = null;
+  let best: { group: NickGroup; line: Line } | null = null;
+  let top = -1;
   for (const [g, s] of scores) {
-    const total = s.score * weight + (g.entries.some(cityHit) ? 2 : 0);
-    if (total > best) {
-      best = total;
-      bestGroup = g;
-      bestLine = s.line;
+    const total = s.score + (g.entries.some((t) => CITY_RES.get(t.city)?.test(all) ?? false) ? 2 : 0);
+    if (total > top) {
+      top = total;
+      best = { group: g, line: s.line };
     }
   }
-  if (!bestGroup || !bestLine) return null;
+  return best;
+}
 
-  let entries = bestGroup.entries;
+/** The team a nickname stands for, settled by the city read, the year and the sport clues. */
+function resolveTeam(group: NickGroup, line: Line, lines: Line[], year: number | null, sportHint: Sport | null, fuzzy: boolean): TeamFind {
+  const all = lines.map((l) => l.lz).join("\n");
+  const cityHit = (t: TeamDef) => CITY_RES.get(t.city)?.test(all) ?? false;
+  let entries = group.entries;
   if (year != null) {
     const inYear = entries.filter((t) => year >= t.from - 1 && year <= t.to + 1);
     if (inYear.length > 0) entries = inYear;
@@ -776,12 +852,81 @@ function findTeam(lines: Line[], year: number | null, sportHint: Sport | null, n
     const hinted = entries.filter((t) => t.sport === sportHint);
     if (hinted.length > 0) entries = hinted;
   }
-  if (new Set(entries.map((t) => t.sport)).size > 1) {
-    return { team: bestGroup.display, sport: null, ambiguous: true, line: bestLine, fuzzy };
-  }
+  if (new Set(entries.map((t) => t.sport)).size > 1) return { team: group.display, sport: null, ambiguous: true, line, fuzzy };
   let pick = entries[entries.length - 1];
   if (year != null) pick = entries.find((t) => year >= t.from && year <= t.to) ?? pick;
-  return { team: `${pick.city} ${pick.nick}`, sport: pick.sport, ambiguous: false, line: bestLine, fuzzy };
+  return { team: `${pick.city} ${pick.nick}`, sport: pick.sport, ambiguous: false, line, fuzzy };
+}
+
+/**
+ * Team reading (10.10). Text alone is a weak clue, so:
+ * - `team` (written into the item) only when one nickname was read exactly,
+ *   in capitals, on a team line that is not a sentence, and no other team
+ *   was read anywhere on the card (exactly in capitals, or a close spelling);
+ * - otherwise the best reading is only a `hint`: an exact nickname in
+ *   capitals elsewhere (not a plain word nickname off a team line, not on a
+ *   name line), else a close spelling. The recognizer writes a hint only
+ *   when the player's Wikidata team list has it.
+ * Nicknames in lower case ("the twins", "He bears down") are ignored.
+ * A hint whose sport differs from the position read is dropped.
+ */
+function findTeam(
+  lines: Line[],
+  year: number | null,
+  sportHint: Sport | null,
+  nameLines: ReadonlySet<Line>,
+  position: PosFind | null,
+): { team: TeamFind | null; hint: TeamFind | null } {
+  const strong = newTally();
+  const exact = newTally();
+  const close = newTally();
+  const read = new Set<NickGroup>();
+  for (const l of lines) {
+    let work = l.lz;
+    const sentence = isSentence(l);
+    for (const v of VARIANTS) {
+      v.re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = v.re.exec(work)) !== null) {
+        const start = m.index;
+        const end = start + m[0].length;
+        work = work.slice(0, start) + " ".repeat(end - start) + work.slice(end);
+        v.re.lastIndex = end;
+        if (excludedNick(v.group.key, l.lz.slice(0, start), l.lz.slice(end))) continue;
+        if (!capitalized(l.raw.slice(start, end))) continue;
+        const onTeamLine = teamLine(l, start, end, v.group);
+        if (!onTeamLine && (PLAIN_NICKS.has(v.group.key) || nameLines.has(l))) continue;
+        read.add(v.group);
+        tallyTeam(exact, v.group, l);
+        if (onTeamLine && !sentence) tallyTeam(strong, v.group, l);
+      }
+    }
+    if (nameLines.has(l)) continue;
+    // Whole words in capitals that missed a nickname by one letter.
+    const word = /[A-Z]+/g;
+    let m: RegExpExecArray | null;
+    while ((m = word.exec(work)) !== null) {
+      if (l.raw.slice(m.index, m.index + m[0].length) !== m[0]) continue;
+      const group = fuzzyNick(m[0]);
+      if (group) {
+        read.add(group);
+        tallyTeam(close, group, l);
+      }
+    }
+  }
+  if (read.size === 1 && strong.scores.size === 1) {
+    const [group] = [...strong.scores.keys()];
+    return { team: resolveTeam(group, strong.scores.get(group)!.line, lines, year, sportHint, false), hint: null };
+  }
+  const fuzzy = exact.scores.size === 0;
+  const best = bestOf(fuzzy ? close : exact, lines);
+  if (!best) return { team: null, hint: null };
+  const hint = resolveTeam(best.group, best.line, lines, year, sportHint ?? position?.sport ?? null, fuzzy);
+  // "COWBQYS" with the baseball position SS: not a hint.
+  const sports = new Set(best.group.entries.map((t) => t.sport));
+  if (position?.sport && !sports.has(position.sport)) return { team: null, hint: null };
+  if (position?.sport && hint.sport && hint.sport !== position.sport) return { team: null, hint: null };
+  return { team: null, hint };
 }
 
 // ---------------------------------------------------------------------------
@@ -1301,6 +1446,8 @@ function emptyCard(): ParsedCard {
     playerCandidates: [],
     firstNameHint: null,
     team: null,
+    teamHint: null,
+    teamHintSport: null,
     sport: null,
     position: null,
     grader: null,
@@ -1390,15 +1537,20 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
     vote(votes, pos.sport, 2);
     ev.push(`Read position: ${pos.position}`);
   }
-  const team = findTeam([...front, ...back], out.year, winner(votes), players.nameLines);
+  const { team, hint } = findTeam([...front, ...back], out.year, winner(votes), players.nameLines, pos);
   if (team) {
     out.team = team.team;
     if (team.ambiguous) ev.push(`Read team name ${team.team}, but it is used in more than one sport`);
     else {
-      // A team read from a close spelling says half as much about the sport.
-      vote(votes, team.sport, team.fuzzy ? 3 * FUZZY_WEIGHT : 3);
+      vote(votes, team.sport, 3);
       ev.push(`Read team: ${team.team}`);
     }
+  } else if (hint) {
+    out.teamHint = hint.team;
+    out.teamHintSport = hint.sport;
+    // A hint says half as much about the sport as a team read for sure.
+    vote(votes, hint.sport, 3 * FUZZY_WEIGHT);
+    ev.push(`Maybe team ${hint.team} (not sure, check it)`);
   }
   out.sport = winner(votes);
 
@@ -1554,4 +1706,29 @@ function parseProductInner(lines: Line[]): ParsedProduct {
   if (out.containerType) ev.push(`Read container: ${out.containerType}`);
   else if (out.estCount != null) ev.push(`Read ${out.estCount} cards`);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Team hints and a player's team list
+
+/**
+ * The entry of `teams` (a player's teams from Wikidata, "Seattle Mariners")
+ * that is the hinted team: same nickname, and the hint's sport is one of
+ * the player's sports. Null when the list does not have it.
+ */
+export function teamFromList(hint: string, hintSport: Sport | null, sports: readonly Sport[], teams: readonly string[]): string | null {
+  if (hintSport && sports.length > 0 && !sports.includes(hintSport)) return null;
+  const key = normalizeName(hint);
+  const exact = teams.find((t) => normalizeName(t) === key);
+  if (exact) return exact;
+  // The nickname at the end of the hint, longest first ("Red Sox", not "Sox").
+  const group = [...NICK_GROUPS]
+    .sort((a, b) => b.display.length - a.display.length)
+    .find((g) => key === normalizeName(g.display) || key.endsWith(` ${normalizeName(g.display)}`));
+  if (!group) return null;
+  const nick = normalizeName(group.display);
+  return teams.find((t) => {
+    const n = normalizeName(t);
+    return n === nick || n.endsWith(` ${nick}`);
+  }) ?? null;
 }

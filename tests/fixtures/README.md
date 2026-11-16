@@ -18,3 +18,12 @@ photos, so parsing tests run fast and exactly. Record it again after a change
 to the reader with:
 
     UPDATE_OCR=1 npx vitest run src/lib/free/ocr.test.ts
+
+## catalog/
+
+Recorded answers of the MyCardfolio catalog (public card data only, see the
+`note` in each file), read by `tests/helpers/fake-catalog.ts`. The Griffey
+end to end test (`griffey.test.ts`) answers the search "1990 Ken Griffey Jr."
+(no brand is read from the photos) with the recorded answer to "1990 Topps
+Ken Griffey Jr.". The Wikidata facts for Ken Griffey Jr. in that test are
+written by hand, not recorded; tests never call Wikidata.

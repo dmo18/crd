@@ -41,6 +41,12 @@ const carter: PlayerFacts = {
   teams: ["San Diego Padres"], careerStart: 1983, careerEnd: 1998, hallOfFame: false, birthYear: 1960,
 };
 
+/** Since 10.10 the close spelling "MARMNERS" is only a hint; Wikidata's team list confirms it. */
+const griffeyJr: PlayerFacts = {
+  name: "Ken Griffey Jr.", wikidataId: "Q7", description: "American baseball player", sports: ["baseball"],
+  teams: ["Seattle Mariners", "Cincinnati Reds", "Chicago White Sox"], careerStart: 1989, careerEnd: 2010, hallOfFame: true, birthYear: 1969,
+};
+
 const CASES: Case[] = [
   {
     name: "1980 Topps #140 Rich Gale is not the Ray Bourque hockey card",
@@ -353,6 +359,7 @@ const CASES: Case[] = [
       ["Ken graduated from Moeller (Cincinnati) High School", 0.56, 0.15, 0.7, 0.04, 0.96],
       ["in 1987. He played 3 years of football and 4 years", 0.62, 0.15, 0.7, 0.04, 0.95],
     ],
+    facts: griffeyJr,
     check: (i) => {
       expect(i.player).toBe("Ken Griffey Jr.");
       expect(i).toMatchObject({ year: 1990, team: "Seattle Mariners", sport: "baseball", cardNumber: null });

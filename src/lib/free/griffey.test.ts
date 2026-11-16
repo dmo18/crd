@@ -1,61 +1,135 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { RecognizedItem } from "@/lib/recognition/types";
+import type { Candidate } from "@/lib/catalog/match";
+import type { RecognitionPhoto, RecognizedItem } from "@/lib/recognition/types";
 import { buildTitle } from "@/lib/title";
+import { FakeCatalog, GRIFFEY_SEARCH, RECORDED } from "../../../tests/helpers/fake-catalog";
 import { fixturePhotos, GRIFFEY, recordedOcr } from "../../../tests/helpers/ocr-fixture";
-import { closeTextReader } from "./ocr";
+import { closeTextReader, type TextReader } from "./ocr";
 import { parseCardText } from "./parse";
 import { FreeRecognizer } from "./recognizer";
+import type { PlayerFacts } from "./wikidata";
 
 /**
  * The 1990 Topps #336 Ken Griffey Jr. card the free reader first failed on,
- * read end to end from the owner's two photos with the real text reader.
- * No network: the Wikidata lookup is faked to find nothing.
+ * from the owner's two photos. No network anywhere.
  *
- * Target for Milestone 9 (docs/ROADMAP.md section 4): sport, year, brand,
- * team, and no wrong names. The full name "Ken Griffey Jr." and the number
- * 336 come with the card catalog in Milestone 10. The photo of the back is
- * cropped so the number is cut off, so the number is empty or 336, never
- * another number.
+ * Target (docs/PLAN.md, Milestone 10, "Part C finished through the catalog",
+ * with automatic filling off since the fifth 10.6 review): sport baseball,
+ * year 1990, team Mariners, no sentence words in the title or player, card
+ * number empty or 336, and 1990 Topps #336 Ken Griffey Jr. FIRST in the
+ * catalog suggestions in Review (a suggestion, not filled). The brand Topps
+ * is not read from these photos (script logo, tiny copyright print), so the
+ * brand is Topps or empty.
  *
- * The real reader does not return the same letters on every run (the name
- * can come back as "Criffey"), so the end to end part checks only the fields
- * that are stable. The exact name words are checked on the recorded text.
+ * The team is read only as "89 MARMNERS", a close spelling, so it is a hint;
+ * the player's team list on Wikidata confirms it.
  */
 
 /** Words from the bio, the stat table and misread scraps that must never end up in a name. */
 const NOT_NAME = /graduated|moeller|cincinnati|high school|played|football|baseball|player|year|bellingham|bernardino|vermont|tug|atau/i;
 
-let item: RecognizedItem;
-let title: string;
+/** The Wikidata facts row for Ken Griffey Jr. (faked here; the online lookup is never called in tests). */
+const GRIFFEY_FACTS: PlayerFacts = {
+  name: "Ken Griffey Jr.", wikidataId: "Q737296", description: "American baseball player (born 1969)", sports: ["baseball"],
+  teams: ["Seattle Mariners", "Cincinnati Reds", "Chicago White Sox"], careerStart: 1989, careerEnd: 2010, hallOfFame: true, birthYear: 1969,
+};
 
-beforeAll(async () => {
-  const recognizer = new FreeRecognizer({ lookup: async () => null });
-  const started = Date.now();
-  [item] = await recognizer.recognize({ mode: "single", photos: fixturePhotos(GRIFFEY) });
-  console.log(`Griffey scan took ${((Date.now() - started) / 1000).toFixed(1)} s`);
-  title = buildTitle(item);
-}, 120_000);
+/** The recorded text of both photos, served by the photo's first byte (1 front, 2 back). */
+function recordedReader(): TextReader {
+  const { front, back } = recordedOcr(GRIFFEY);
+  return { read: async (image: Buffer) => (image[0] === 1 ? front : back) };
+}
+const PHOTOS: RecognitionPhoto[] = [
+  { role: "front", data: Buffer.from([1]), width: 554, height: 1200 },
+  { role: "back", data: Buffer.from([2]), width: 1200, height: 554 },
+];
 
-afterAll(async () => {
-  await closeTextReader();
+/**
+ * The catalog from the recorded answers. No brand is read, so the look up
+ * searches "1990 Ken Griffey Jr."; it is answered with the recorded answer
+ * to "1990 Topps Ken Griffey Jr.", the closest recording we hold.
+ */
+function griffeyCatalog() {
+  return new FakeCatalog({ searches: { ...RECORDED, "1990 ken griffey jr.": GRIFFEY_SEARCH } });
+}
+
+function checkStableFields(item: RecognizedItem) {
+  expect(item.sport).toBe("baseball");
+  expect(item.year).toBe(1990);
+  expect([null, "336"]).toContain(item.cardNumber);
+  expect([null, "Topps"]).toContain(item.brand);
+  expect(buildTitle(item)).not.toMatch(NOT_NAME);
+  expect(item.player ?? "").not.toMatch(NOT_NAME);
+}
+
+describe("1990 Topps Ken Griffey Jr., recorded text, catalog and facts, end to end", () => {
+  let item: RecognizedItem;
+  let lookups: string[];
+  let catalog: FakeCatalog;
+
+  beforeAll(async () => {
+    lookups = [];
+    catalog = griffeyCatalog();
+    const r = new FreeRecognizer({
+      reader: recordedReader(),
+      lookup: async (name) => { lookups.push(name); return name === "Ken Griffey Jr." ? GRIFFEY_FACTS : null; },
+      catalog,
+    });
+    [item] = await r.recognize({ mode: "single", photos: PHOTOS });
+  });
+
+  it("reads sport, year, number, brand and no sentence words", () => checkStableFields(item));
+  it("reads the full name Ken Griffey Jr.", () => expect(item.player).toBe("Ken Griffey Jr."));
+  it("has the team Mariners, confirmed by the player's team list", () => {
+    expect(item.team ?? "").toContain("Mariners");
+    expect(item.notes).toMatch(/Team confirmed on Wikidata: Seattle Mariners/);
+    expect(lookups).toEqual(["Ken Griffey Jr."]);
+  });
+  it("puts 1990 Topps #336 Ken Griffey Jr. first in the catalog suggestions, without filling it", () => {
+    expect(item.catalog?.status).toBe("candidates");
+    const first = (item.catalog as { candidates: Candidate[] }).candidates[0];
+    expect(first).toMatchObject({ sourceId: "551033", year: 1990, brand: "Topps", cardNumber: "336", player: "Ken Griffey Jr.", variation: null });
+    // Automatic filling is off: the number stays as read (cut off on the photo).
+    expect(item.cardNumber).toBeNull();
+    expect(catalog.calls.length).toBeGreaterThan(0);
+  });
+  it("never offers the Tiffany card or Ken Griffey Sr. first", () => {
+    const first = (item.catalog as { candidates: Candidate[] }).candidates[0];
+    expect(first.player).not.toMatch(/Sr/);
+    expect(first.variation ?? "").not.toMatch(/tiffany/i);
+  });
 });
 
-describe("1990 Topps Ken Griffey Jr., read end to end", () => {
-  it("reads the sport", () => expect(item.sport).toBe("baseball"));
-  it("reads the year from the stat table", () => expect(item.year).toBe(1990));
-  it("reads the team", () => expect(item.team ?? "").toContain("Mariners"));
-  it("never reads a wrong card number", () => expect([null, "336"]).toContain(item.cardNumber));
-  it("takes no name from a sentence", () => {
-    expect(title).not.toMatch(NOT_NAME);
-    expect(item.player ?? "").not.toMatch(NOT_NAME);
+describe("1990 Topps Ken Griffey Jr., recorded text, catalog off", () => {
+  it("still gives a Griffey name, year 1990, no wrong number and no wrong team", async () => {
+    const r = new FreeRecognizer({ reader: recordedReader(), lookup: async () => null });
+    const [item] = await r.recognize({ mode: "single", photos: PHOTOS });
+    checkStableFields(item);
+    expect(item.player ?? "").toMatch(/Griffey/);
+    expect(item.catalog).toBeUndefined();
+    // Without facts the close spelling is not confirmed: no team, a hint in the notes.
+    expect(item.team).toBeNull();
+    expect(item.notes).toMatch(/Maybe team Seattle Mariners/);
   });
-  // Not reached with these photos: TOPPS is printed only as the script logo
-  // and in tiny print by the right edge, and neither is read. Confidence
-  // needs the brand to reach 0.5. Open question for the owner, see STATUS.md.
-  it.todo("reads the brand Topps");
-  it.todo("is sure enough to show, even if it waits in Review (confidence 0.5)");
-  it.todo("reads the full name Ken Griffey Jr. every time (Milestone 10, card catalog)");
-  it.todo("fills the card number 336 (Milestone 10, card catalog)");
+});
+
+describe("1990 Topps Ken Griffey Jr., read from the photos with the real text reader", () => {
+  let item: RecognizedItem;
+
+  beforeAll(async () => {
+    const recognizer = new FreeRecognizer({ lookup: async (name) => (/griffey/i.test(name) ? GRIFFEY_FACTS : null) });
+    const started = Date.now();
+    [item] = await recognizer.recognize({ mode: "single", photos: fixturePhotos(GRIFFEY) });
+    console.log(`Griffey scan took ${((Date.now() - started) / 1000).toFixed(1)} s`);
+  }, 120_000);
+
+  afterAll(async () => {
+    await closeTextReader();
+  });
+
+  it("reads sport, year, number, brand and no sentence words", () => checkStableFields(item));
+  // The real reader does not return the same letters every run ("Criffey"), so the team is Mariners or empty, never another.
+  it("never writes a wrong team", () => expect([null, "Seattle Mariners"]).toContain(item.team));
 });
 
 describe("1990 Topps Ken Griffey Jr., parsing the recorded text", () => {
@@ -72,8 +146,9 @@ describe("1990 Topps Ken Griffey Jr., parsing the recorded text", () => {
 
   it("keeps Ken from the bio only as a first name hint", () => expect(parsed.firstNameHint).toBe("Ken"));
 
-  it("reads team, year, sport and position", () => {
-    expect(parsed.team ?? "").toContain("Mariners");
+  it("reads year, sport and position, and the team only as a hint", () => {
+    expect(parsed.team).toBeNull();
+    expect(parsed.teamHint).toBe("Seattle Mariners");
     expect(parsed.year).toBe(1990);
     expect(parsed.sport).toBe("baseball");
     expect(parsed.position).toBe("OF");

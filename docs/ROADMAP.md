@@ -55,6 +55,8 @@ particles, header years, the Griffey fixture) and makes team and brand come
 from the catalog card, with text team matching only as a weak hint that
 the catalog must confirm. The second review's list (H1, M1 to M4, L1, L2)
 becomes that task's test list.
+Update (task 10.10): merged into work/m10; the list is a named test each
+and passes; text teams are hints unless sure or confirmed by Wikidata.
 
 ## 1. The 29 kept features against today's app
 

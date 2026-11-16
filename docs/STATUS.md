@@ -1,6 +1,29 @@
 # Status
 
 ## Milestone 10: the card catalog (in progress, branch work/m10)
+- 10.10 done: branch work/m9c merged (reading passes, sentence rule, name
+  particles, header years, Griffey fixture kept). Team from text is now a
+  weak hint. The team is written only when one nickname is read exactly, in
+  capitals, on a team line (the team, its city, positions, numbers) that is
+  not a sentence, and no other team is read; or when the hint is in the
+  player's Wikidata team list (a key card player is looked up only for
+  that). Otherwise the notes say "Maybe team X (not sure, check it)". Close
+  spellings are only hints; they need look alike letters (I and M, E and F,
+  O and Q), never the last letter, and a position of another sport drops
+  them. Lowercase nicknames ("the twins") are ignored; plain word
+  nicknames (STARS, KINGS, HEAT, TIGERS) count only on a team line. A small
+  l in a word in capitals is read as I. Split stat rows with the club and no
+  numbers: four digit years count too; card words ("88 ROOKIE", "87 DRAFT
+  PICK", "1989 MONTHLY") and checklist names ("56 JOHN SMITH") do not.
+  The second review's list (H1, M1 to M4, L1, L2) is a named test each in
+  `parse.test.ts`. Griffey end to end (recorded text, recorded catalog
+  answers, Wikidata facts written by hand): Ken Griffey Jr., baseball,
+  1990, Seattle Mariners (confirmed by the team list), no number, no brand,
+  and 1990 Topps #336 (551033) first in the suggestions, not filled. With
+  the real reader the whole Griffey scan took 13 to 15 s (3 runs, all
+  green). Not done here: the "Did you mean" team chip in Review (the hint is
+  in the notes only, a chip needs a stored field and a migration), and the
+  container memory after one scan (needs the live container).
 - 10.6 matching (`src/lib/catalog/match.ts`, `lookup.ts`): timing on this
   server after 10.6d (median of 7 runs): a full look up on an 800 row
   checklist in memory with 5 spellings about 7 ms (limit 20 ms); judging
