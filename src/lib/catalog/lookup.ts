@@ -230,12 +230,20 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
     // Base set ids come only from a clean, verified Base Set card of the read
     // sport, read from its url (the probe: a broad search gives none; a
     // Tiffany or insert card is another set).
+    // A set id already known for the scan is kept. When one answer shows two
+    // different clean sets for a year and brand not known yet, no base set is
+    // learned ("" marks the conflict), so nothing of it can be sure.
+    const seen = new Map<string, Set<string>>();
     for (const c of cards) {
       if (c.verified && c.sourceSetId && c.year && c.brand && !c.variation && !c.setName && sportFits(c) && setIdFromUrl(c.url) === c.sourceSetId) {
         const k = keyOf({ year: c.year, brand: c.brand });
-        if (!setIds.has(k)) setIds.set(k, c.sourceSetId);
+        if (setIds.has(k)) continue;
+        const ids = seen.get(k) ?? new Set<string>();
+        ids.add(c.sourceSetId);
+        seen.set(k, ids);
       }
     }
+    for (const [k, ids] of seen) setIds.set(k, ids.size === 1 ? [...ids][0] : "");
     return cards;
   }
 
@@ -267,7 +275,13 @@ export async function lookupCard(read: LookupRead, line: Line, options: LookupOp
   // The sets to try: two possible brands, or one brand in the year and the year before.
   const targets: Target[] = r.brands.map((brand) => ({ year, brand })).slice(0, MAX_SETS);
   if (targets.length < MAX_SETS && r.yearFromStats) targets.push({ year: year - 1, brand: r.brands[0] });
-  const knownSetId = (t: Target) => setIds.get(keyOf(t)) ?? (sport ? memory.setIdFor(keyOf(t)) : null);
+  const knownSetId = (t: Target) => {
+    const learned = setIds.get(keyOf(t));
+    // A conflict between searches: only a checklist already held for this
+    // scan can still say which set is the base set.
+    if (learned === "") return sport ? memory.setIdFor(keyOf(t)) : null;
+    return learned ?? (sport ? memory.setIdFor(keyOf(t)) : null);
+  };
   /**
    * A sure card needs sport, year and brand read and must come from a known
    * base set of the sets tried. Looked up at each judging: searches teach set ids.

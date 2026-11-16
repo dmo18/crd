@@ -721,6 +721,12 @@ describe("third review: sure needs sport, year, brand, the known base set and an
       const b = await lookupCard(read({ names: ["Gerald Perry"], cardNumber: "792" }), "background", both.o);
       expect(b).toMatchObject({ sure: { sourceId: real792.sourceId, sourceSetId: "9179" }, sureBy: "number" });
     });
+    it("cold start: two clean sets claim the same year and brand, so nothing is sure", async () => {
+      const s = setup({ searches: { "1990 topps 792": [clone792, real792] } });
+      const r = await lookupCard(read({ names: ["Gerald Perry"], cardNumber: "792" }), "background", s.o);
+      expect(r).toMatchObject({ sure: null, sureBy: null });
+      expect(r.candidates.map((c) => c.sourceId)).toEqual(expect.arrayContaining(["999792", real792.sourceId]));
+    });
     it("a step 1 answer from the second set is never sure when the base set is known; the checklist card is", async () => {
       const clone336: CatalogCard = { ...griffey, sourceId: "999336", sourceSetId: "9999", url: griffey.url.replace("base-set-9179", "base-set-9999").replace("551033", "999336") };
       const s = setup({ searches: { "1990 topps ken griffey jr.": [clone336] } });
