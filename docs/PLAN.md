@@ -1454,6 +1454,20 @@ the designs above.
   (800 names, 5 spellings, under 50 ms) run on the server and noted in
   STATUS.md; noise rows are never matched by close spelling.
 
+**10.6 decisions (settled 2026-11-16, main session; done in 10.6b)**
+- Finding a base set id on a cold start: search "year brand 1" with limit 5,
+  and if no clean Base Set card comes back, "year brand 2"; take the set id
+  from a clean, verified Base Set result's url. At most 2 calls, inside the
+  card's budget. Learned set ids are kept for the scan and come back from
+  stored search answers later.
+- Prune goes down to 90% of the cap, and the stored total is kept as a
+  running number in the gate (checked every write, recomputed hourly).
+- A search answer counts as "nothing found" only when count is 0 and
+  results is empty; rows that are all unusable give failed (not stored).
+- The Accept header is part of the stored-answer key.
+- Fetch scanner: `//host` is not the app's own address; also flag node:net,
+  node:tls, WebSocket and EventSource; one negative test for hyphen numbers.
+
 **10.7 Search cards screen and "Add to my collection"** (Sonnet)
 - Files: `src/app/(app)/search/page.tsx`, `src/components/catalog/*`,
   `src/lib/catalog/actions.ts` (+ test), `src/app/(app)/more/page.tsx`,
