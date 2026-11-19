@@ -17,6 +17,7 @@ import {
 export const POLL_MS = STATUS_POLL_MS;
 /** After this many "not signed in" answers in a row the page stops asking. */
 export const SIGNED_OUT_AFTER = 3;
+const PENDING_KEY = "crd:pending-sends";
 export const SAVED_EVENT = "crd:scan-saved";
 const GONE_MESSAGE = "This photo is no longer on the page. Take it again.";
 
@@ -36,7 +37,23 @@ export type ScanStoreDeps = {
   /** Calls `fn` each time the tab is shown or hidden. */
   onVisibilityChange: (fn: () => void) => void;
   uploadTimeoutMs?: number;
+  /**
+   * Remembers, across a page reload, which photos were sent but not yet confirmed
+   * saved. A repeat of the same photo then reuses its clientKey, so the server
+   * returns the scan it already has instead of making a second one.
+   */
+  pending?: { read: () => Record<string, PendingSend>; write: (all: Record<string, PendingSend>) => void };
 };
+
+export type PendingSend = { clientKey: string; at: number };
+/** A remembered send is forgotten after this long. */
+export const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
+
+/** Names one scan by its mode and photos (name and size), for finding a repeat after a reload. */
+export function sendFingerprint(job: { mode: string; front?: File; back?: File; source: File[] }): string {
+  const files = [job.front, job.back, ...job.source].filter((f): f is File => !!f);
+  return `${job.mode}|${files.map((f) => `${f.name}:${f.size}`).join(",")}`;
+}
 
 /** What the pill needs: the latest counts, and whether the store is already asking on a timer. */
 export type SharedStatus = { counts: StatusCounts | null; polling: boolean; signedOut: boolean };
@@ -66,6 +83,7 @@ export function createScanStore(deps: ScanStoreDeps): ScanStore {
   const listeners = new Set<() => void>();
   const jobs = new Map<number, ScanJob>();
   const previews = new Map<number, string>();
+  const fingerprints = new Map<number, string>();
   let asking = false;
   let nextKey = 1;
   let pollTimer: unknown = null;
@@ -110,6 +128,7 @@ export function createScanStore(deps: ScanStoreDeps): ScanStore {
     later: (fn, ms) => void deps.setTimeout(fn, ms),
     now: deps.now,
     onSaved: (key) => {
+      forgetPending(key);
       // The server has the photos: let go of the files, keep the preview until it is read.
       const job = jobs.get(key);
       if (job) jobs.set(key, { ...job, front: undefined, back: undefined, source: [] });
@@ -172,12 +191,40 @@ export function createScanStore(deps: ScanStoreDeps): ScanStore {
     }
   }
 
+  function forgetPending(key: number) {
+    const fp = fingerprints.get(key);
+    fingerprints.delete(key);
+    if (fp === undefined || !deps.pending) return;
+    const all = deps.pending.read();
+    if (fp in all) {
+      delete all[fp];
+      deps.pending.write(all);
+    }
+  }
+
+  /** The clientKey for a new scan: one remembered from before a reload for the same photos, else a fresh one. */
+  function clientKeyFor(job: Omit<ScanJob, "clientKey">, key: number): string {
+    const fp = sendFingerprint(job);
+    const live = [...fingerprints.values()].includes(fp);
+    fingerprints.set(key, fp);
+    if (!deps.pending) return deps.randomUUID();
+    const all = deps.pending.read();
+    const old = all[fp];
+    const fresh = old !== undefined && deps.now() - old.at < PENDING_MAX_AGE_MS && !live;
+    const clientKey = fresh ? old.clientKey : deps.randomUUID();
+    // Two copies on one page are two scans on purpose; only a repeat after a reload shares a key.
+    if (!live) all[fp] = { clientKey, at: fresh ? old.at : deps.now() };
+    for (const k of Object.keys(all)) if (deps.now() - all[k].at >= PENDING_MAX_AGE_MS) delete all[k];
+    deps.pending.write(all);
+    return clientKey;
+  }
+
   function enqueue(job: Omit<ScanJob, "clientKey">, preview: Blob, name: string): boolean {
     // Full list: forget the oldest finished entry (its scan is safe on the server). Nothing unsaved is ever dropped.
     if (atCap(state)) dispatch({ type: "makeRoom" });
     if (atCap(state)) return false;
     const key = nextKey++;
-    const clientKey = deps.randomUUID();
+    const clientKey = clientKeyFor(job, key);
     const url = deps.createObjectURL(preview);
     jobs.set(key, { ...job, clientKey });
     previews.set(key, url);
@@ -234,6 +281,23 @@ export function browserDeps(): ScanStoreDeps {
     createObjectURL: (file) => URL.createObjectURL(file),
     revokeObjectURL: (url) => URL.revokeObjectURL(url),
     randomUUID: () => crypto.randomUUID(),
+    pending: {
+      read: () => {
+        try {
+          const v = JSON.parse(localStorage.getItem(PENDING_KEY) ?? "{}") as unknown;
+          return v && typeof v === "object" ? (v as Record<string, PendingSend>) : {};
+        } catch {
+          return {};
+        }
+      },
+      write: (all) => {
+        try {
+          localStorage.setItem(PENDING_KEY, JSON.stringify(all));
+        } catch {
+          // Storage can be blocked; a repeat after a reload then gets a new key, as before.
+        }
+      },
+    },
     notifySaved: () => window.dispatchEvent(new Event(SAVED_EVENT)),
     // The store is also made once while the page is built on the server, where there is no document.
     isVisible: () => typeof document !== "undefined" && document.visibilityState === "visible",

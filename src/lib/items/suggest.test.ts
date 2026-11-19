@@ -242,7 +242,7 @@ describe("the question shows only when there is evidence", () => {
     expect(view({ isRookie: true })).toBeNull();
     expect(view(withRookie("yes", "owner"))).toBeNull();
     expect(rookieAsk({ kind: "sealed", isRookie: false, rookieState: null, rookieSource: "reading", rookieNote: "x", rarityNotes: null })).toBeNull();
-    expect(view({ rookieSource: "reading", rookieNote: "The AI reader thinks this is a rookie card. Check it before relying on it" })).toMatchObject({ current: null });
+    expect(view({ rookieSource: "reading", rookieNote: "The reader thinks this is a rookie card. Check it before relying on it" })).toMatchObject({ current: null });
   });
 });
 

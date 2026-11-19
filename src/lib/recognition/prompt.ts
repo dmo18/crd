@@ -34,7 +34,7 @@ Condition
 
 Value
 - Give a realistic low to high range in whole US cents for ONE unit in the visible condition, based on typical recent sold prices as far as you know them. Be conservative: asking prices are higher than what things sell for. Most 1986 to 1993 base cards are worth a few cents.
-- estimate.basis is one plain sentence that says it is an AI estimate and names the main thing driving the value, for example "AI estimate based on typical sold prices for raw copies; the rookie status drives the value."
+- estimate.basis is one plain sentence that says it is an estimate by the app and names the main thing driving the value, for example "Estimate by the app based on typical sold prices for raw copies; the rookie status drives the value."
 - Set estimate to null when you truly cannot say.
 
 Safety

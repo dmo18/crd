@@ -73,7 +73,7 @@ export default async function Home() {
         {mode === "free" && hl.noValue > 0 ? (
           <Notice tone="accent">
             <Link href="/items?value=none&sort=newest" className="flex min-h-11 items-center font-semibold">
-              {plural(hl.noValue, "item needs", "items need")} a value. Start with rookies and Hall of Famers.
+              {plural(hl.noValue, "item needs", "items need")} a value. Tap to see them. Check Review for anything the reader was not sure of.
             </Link>
           </Notice>
         ) : null}

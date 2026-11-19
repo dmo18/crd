@@ -94,7 +94,7 @@ describe("revalueItem", () => {
   it("returns plain messages when it cannot value", async () => {
     const item = add();
     expect(await revalueItem(999, { db, source: fixed(null) })).toEqual({ ok: false, error: "This item no longer exists." });
-    expect(await revalueItem(item.id, { db, source: fixed(null) })).toEqual({ ok: false, error: "The AI could not put a value on this one." });
+    expect(await revalueItem(item.id, { db, source: fixed(null) })).toEqual({ ok: false, error: "The reader could not put a value on this one." });
     const broken = await revalueItem(item.id, { db, source: fixed(new Error("internal /path detail")) });
     expect(broken.ok === false && !broken.error.includes("/path")).toBe(true);
     expect(db.select().from(valuations).all()).toHaveLength(0);
@@ -124,10 +124,15 @@ describe("snapshots", () => {
 });
 
 describe("grading advice", () => {
-  const base = { kind: "card" as const, grader: null, grade: null, condition: "near_mint" as const, worthGrading: true, manualValueCents: null, estValueCents: 5000 };
+  const base = { kind: "card" as const, grader: null, grade: null, condition: "near_mint" as const, worthGrading: true, manualValueCents: null, estValueCents: 5000, estHighCents: 6000, valueSource: "ai_estimate" as const };
   it("is honest about cheap, worn and already graded cards", () => {
     expect(gradingAdvice(base)?.text).toMatch(/^Could be worth grading/);
-    expect(gradingAdvice({ ...base, estValueCents: 150 })?.text).toMatch(/^Not worth grading/);
+    expect(gradingAdvice({ ...base, estValueCents: 150, estHighCents: 300 })?.text).toMatch(/^Not worth grading/);
+    // One typed price, or a sample figure, is not enough to say it.
+    expect(gradingAdvice({ ...base, estValueCents: null, estHighCents: null, valueSource: null, manualValueCents: 150 })).toBeNull();
+    expect(gradingAdvice({ ...base, estValueCents: 150, estHighCents: 300, valueSource: "sample" })).toBeNull();
+    expect(gradingAdvice({ ...base, estValueCents: 150, estHighCents: null })).toBeNull();
+    expect(gradingAdvice({ ...base, estValueCents: 150, estHighCents: 300, manualValueCents: 150 })?.text).toMatch(/^Not worth grading/);
     expect(gradingAdvice({ ...base, condition: "good" })?.text).toMatch(/^Probably not worth grading/);
     expect(gradingAdvice({ ...base, grader: "PSA", grade: "9" })).toBeNull();
     expect(gradingAdvice({ ...base, kind: "sealed" })).toBeNull();

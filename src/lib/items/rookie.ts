@@ -63,7 +63,7 @@ export function readRookie(item: Pick<Item, "isRookie" | "rookieState" | "rookie
 export const KEY_LIST_NOTE = "On the built-in key card list";
 export const KEY_LIST_REPRINT_NOTE = "On the built-in key card list, but the card says REPRINT, so it is a later copy";
 export const ROOKIE_WORD_NOTE = "The word ROOKIE is on the card. That alone does not make it the rookie card (it may be an All-Star Rookie cup or a Rated Rookie of a later year)";
-export const AI_ROOKIE_NOTE = "The AI reader thinks this is a rookie card. Check it before relying on it";
+export const AI_ROOKIE_NOTE = "The reader thinks this is a rookie card. Check it before relying on it";
 
 export type EvidenceLine = { text: string; source: "key_list" | "catalog" | "reading" };
 export type RookieEvidence = { lines: EvidenceLine[]; suggested: RookieState | null };

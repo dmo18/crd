@@ -12,7 +12,7 @@ export function getRecognizer(): Recognizer {
   // Free reading looks each card up in the catalog afterwards (switched off on Connections: no calls).
   if (mode === "free") return new FreeRecognizer({ catalog: getCatalog() });
   if (!env().ANTHROPIC_API_KEY) {
-    throw new RecognitionError("AI recognition is not set up yet. Add the API key in settings.");
+    throw new RecognitionError("Paid reading is not set up yet. Add the API key in settings.");
   }
   return new AnthropicRecognizer();
 }

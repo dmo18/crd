@@ -301,7 +301,7 @@ describe("getRecognizer in anthropic mode", () => {
     process.env.RECOGNITION_MODE = "anthropic";
     process.env.ANTHROPIC_API_KEY = "";
     resetEnvCache();
-    expect(() => getRecognizer()).toThrow("AI recognition is not set up yet. Add the API key in settings.");
+    expect(() => getRecognizer()).toThrow("Paid reading is not set up yet. Add the API key in settings.");
   });
 
   it("returns the AI recognizer when a key is set, without calling it", () => {

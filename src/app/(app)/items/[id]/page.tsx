@@ -18,7 +18,7 @@ import { images, items, locations, type Item } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
-import { checkLine, confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
+import { checkLine, confidenceLabel, valueSourceLabel } from "@/lib/items/labels";
 import { fieldsToCheck } from "@/lib/catalog/sources";
 import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
@@ -84,7 +84,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   const location = item.locationId == null ? null
     : db.select().from(locations).where(eq(locations.id, item.locationId)).get();
 
-  const { cents: value, waitingForVersion } = shownValue(item);
+  const { cents: value, waitingForVersion, ownersValue } = shownValue(item);
   const estimateHidden = item.versionState === "not_sure";
   const mode = recognitionMode();
   const hasLinks = soldListingLinks(item).length > 0;
@@ -102,7 +102,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   } else if (item.gradingNotes) {
     notes.push(["Grading", item.gradingNotes]);
   }
-  if (item.aiNotes) notes.push(["Other notes from the AI", item.aiNotes]);
+  if (item.aiNotes) notes.push(["Other notes from the reader", item.aiNotes]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -141,7 +141,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
       {item.status === "needs_review" ? (
         <div className="flex flex-col gap-3">
           <Notice tone="warn">
-            The AI was not sure about this one. Check the details, fix anything wrong, then confirm.
+            The reader was not sure about this one. Check the details, fix anything wrong, then confirm.
             {checkText ? <> {checkText} They are marked Check this below.</> : null}
           </Notice>
           <form action={confirmItemAction}>
@@ -156,9 +156,9 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
         {waitingForVersion ? null : <p className="text-3xl font-bold">{formatCents(value)}</p>}
         {waitingForVersion ? <p className="text-sm font-semibold">{CHOOSE_VERSION_LINE}</p> : null}
         {value == null && !waitingForVersion ? <p className="text-sm">Use Find the value below.</p> : null}
-        {value != null && !estimateHidden && hasRange ? <p className="text-sm">Range: {formatCents(item.estLowCents)} to {formatCents(item.estHighCents)}</p> : null}
-        {source && !waitingForVersion ? <p className="text-sm text-muted">Source: {VALUE_SOURCE_LABELS[source]}</p> : null}
-        {item.valueBasis && !estimateHidden ? <p className="text-sm">{item.valueBasis}</p> : null}
+        {value != null && !estimateHidden && !ownersValue && hasRange ? <p className="text-sm">Range: {formatCents(item.estLowCents)} to {formatCents(item.estHighCents)}</p> : null}
+        {source && !waitingForVersion ? <p className="text-sm text-muted">Source: {valueSourceLabel(item.manualValueCents, item.valueSource)}</p> : null}
+        {item.valueBasis && !estimateHidden && !ownersValue ? <p className="text-sm">{item.valueBasis}</p> : null}
         <p className="pt-1 text-xs text-muted">Estimates are a guide, not an appraisal.</p>
         {mode === "free" ? null : <ValueTools itemId={item.id} />}
       </Card>
@@ -185,7 +185,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       {notes.length > 0 ? (
         <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">What the AI noticed</h2>
+          <h2 className="text-lg font-semibold">What the reader noticed</h2>
           {notes.map(([label, body]) => (
             <div key={label}>
               <h3 className="text-sm font-semibold">{label}</h3>

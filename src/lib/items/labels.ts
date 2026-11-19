@@ -58,11 +58,17 @@ export const SEAL_LABELS: Record<SealState, string> = {
 };
 
 export const VALUE_SOURCE_LABELS = {
-  ai_estimate: "AI estimate",
+  ai_estimate: "App estimate",
   sample: "Sample data",
   manual: "Your value",
   price_feed: "Price guide",
 } as const;
+
+/** Plain name for a stored value origin; the owner's own figure wins over any estimate. */
+export function valueSourceLabel(manualValueCents: number | null, origin: keyof typeof VALUE_SOURCE_LABELS | null): string {
+  if (manualValueCents != null) return VALUE_SOURCE_LABELS.manual;
+  return origin ? VALUE_SOURCE_LABELS[origin] : "";
+}
 
 /** e.g. 0.93 becomes "93% sure". */
 export function confidenceLabel(c: number | null): string {

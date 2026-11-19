@@ -13,8 +13,11 @@ const PRODUCT_LABELS: Record<string, string> = {
 export function buildTitle(f: TitleFields): string {
   const years = f.year ? (f.yearEnd && f.yearEnd !== f.year ? `${f.year}-${f.yearEnd}` : `${f.year}`) : null;
   // Skip the set name when it only repeats the brand.
-  const set = f.setName && f.setName.toLowerCase() !== (f.brand ?? "").toLowerCase() ? f.setName : null;
-  const base = [years, f.brand, set].filter(Boolean).join(" ");
+  const brand = (f.brand ?? "").trim();
+  const set = f.setName && f.setName.toLowerCase() !== brand.toLowerCase() ? f.setName : null;
+  // A set name that already starts with the brand ("Upper Deck Exclusives") is not prefixed again.
+  const setHasBrand = !!set && brand !== "" && (set.toLowerCase() === brand.toLowerCase() || set.toLowerCase().startsWith(`${brand.toLowerCase()} `));
+  const base = [years, setHasBrand ? null : f.brand, set].filter(Boolean).join(" ");
   let title: string;
   if (f.kind === "sealed") {
     const product = PRODUCT_LABELS[f.productType ?? "other"] ?? "sealed product";

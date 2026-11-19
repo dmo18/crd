@@ -12,7 +12,9 @@ type ValueFacts = Pick<Item, "manualValueCents" | "estValueCents" | "versionStat
  * own figure is always shown. A card never asked (null state) shows its value
  * as before. Stored values and totals are not touched.
  */
-export function shownValue(item: ValueFacts): { cents: number | null; waitingForVersion: boolean } {
+export function shownValue(item: ValueFacts): { cents: number | null; waitingForVersion: boolean; ownersValue: boolean } {
   const waitingForVersion = item.versionState === "not_sure" && item.manualValueCents == null;
-  return { cents: waitingForVersion ? null : effectiveValueCents(item), waitingForVersion };
+  const cents = waitingForVersion ? null : effectiveValueCents(item);
+  // True only when the figure shown is the one the owner typed.
+  return { cents, waitingForVersion, ownersValue: cents != null && item.manualValueCents != null };
 }

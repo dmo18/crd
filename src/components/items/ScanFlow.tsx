@@ -20,7 +20,7 @@ const BUTTON_LABEL = "inline-flex min-h-11 w-full cursor-pointer items-center ju
 
 const MODES: { value: Choice; title: string; text: string }[] = [
   { value: "single", title: "One card", text: "Front photo, and a back photo if you have one. The back makes it more accurate." },
-  { value: "multi", title: "Many cards in one photo", text: "Lay cards flat, not overlapping. Up to about 9 per photo works best. You can add a second photo of their backs, laid out any way." },
+  { value: "multi", title: "Many cards in one photo", text: "Lay cards flat, not overlapping. Up to about 9 per photo works best. The first photo shows the fronts. You can add a second photo of their backs, laid out any way." },
   { value: "sealed", title: "Sealed pack or box", text: "Never open it. Photograph the front, plus the seal or back if you can." },
   { value: "bulk", title: "Bulk lot", text: "Photograph the box or stack and its label. You get a count estimate and a list of cards worth pulling out." },
   { value: "rapid", title: "One card, fronts only, many in a row", text: "Take a photo and it is saved at once. Take the next one right away." },

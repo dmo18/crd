@@ -153,11 +153,11 @@ describe("processScan", () => {
 
   it("records a safe message on failure and hides internal errors", async () => {
     const a = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
-    await processScan(a.scanId, { db, recognizer: fake(new RecognitionError("The AI service is busy. Try again in a minute.")) });
+    await processScan(a.scanId, { db, recognizer: fake(new RecognitionError("The paid reading service is busy. Try again in a minute.")) });
     const b = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
     await processScan(b.scanId, { db, recognizer: fake(new Error("secret internal detail /var/lib/x")) });
     const [first, second] = db.select().from(scans).all();
-    expect(first).toMatchObject({ status: "failed", error: "The AI service is busy. Try again in a minute." });
+    expect(first).toMatchObject({ status: "failed", error: "The paid reading service is busy. Try again in a minute." });
     expect(second.status).toBe("failed");
     expect(second.error).not.toContain("secret");
     expect(db.select().from(items).all()).toHaveLength(0);

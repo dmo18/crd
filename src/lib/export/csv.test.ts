@@ -71,9 +71,22 @@ describe("itemsToCsv", () => {
     expect(at("Estimate low (USD)")).toBe("10.00");
     expect(at("Estimate high (USD)")).toBe("15.00");
     expect(at("Your value (USD)")).toBe("20.00");
-    expect(at("Value source")).toBe("manual");
+    expect(at("Value source")).toBe("Your value");
     expect(at("Added (ISO date)")).toBe("2026-03-04");
     expect(lines[1]).not.toContain("$");
+  });
+
+  it("leaves Rookie blank when unknown and writes No only for an answer", () => {
+    const rookie = (over: Partial<Item>) => {
+      const lines = parse(itemsToCsv([row(over)], new Map()));
+      return lines[1].split(",")[lines[0].split(",").indexOf("Rookie")];
+    };
+    expect(rookie({ isRookie: false, rookieState: null })).toBe("");
+    expect(rookie({ isRookie: false, rookieState: "unknown" })).toBe("");
+    expect(rookie({ isRookie: false, rookieState: "disputed" })).toBe("");
+    expect(rookie({ isRookie: false, rookieState: "no", rookieSource: "owner" })).toBe("No");
+    expect(rookie({ isRookie: true, rookieState: "yes", rookieSource: "owner" })).toBe("Yes");
+    expect(rookie({ isRookie: true, rookieState: null })).toBe("Yes");
   });
 
   it("writes Yes/No flags and the location name", () => {
