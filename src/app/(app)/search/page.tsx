@@ -5,6 +5,7 @@ import { getDb } from "@/db";
 import { items, SPORTS } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { liveItem } from "@/lib/items/live";
+import { searchWords } from "@/lib/catalog/find";
 
 export const metadata = { title: "Search cards" };
 
@@ -28,7 +29,8 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     } else if (item && item.kind === "card") {
       itemId = item.id;
       itemTitle = item.title;
-      if (!text) text = [item.year, item.brand, item.player].filter(Boolean).join(" ").slice(0, 80);
+      // Year, product, number and player, as the look up asks (S1a rule E).
+      if (!text) text = searchWords(item);
       if (!sport && item.sport) sport = item.sport;
       if (!year && item.year) year = String(item.year);
     }

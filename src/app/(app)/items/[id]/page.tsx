@@ -20,6 +20,7 @@ import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
 import { checkLine, confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
 import { fieldsToCheck } from "@/lib/catalog/sources";
+import { linkedFacts } from "@/lib/catalog/pick";
 import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
 import { recognitionMode } from "@/lib/env";
@@ -38,9 +39,10 @@ const ROLE_NAMES = { front: "Front", back: "Back", crop: "Close-up", source: "Or
 const ROLE_ORDER = { crop: 0, front: 1, back: 2, source: 3 } as const;
 
 /** The two questions a scan leaves: serial number and rookie card. They show only when there is something to answer. */
-function AskBlock({ item }: { item: Item }) {
+function AskBlock({ item, catalogRookie }: { item: Item; catalogRookie: boolean }) {
   const serial = parseSuggestion(item.serialSuggested);
-  const rookie = rookieAsk(item);
+  // A clean catalog entry that marks it a rookie card is only a suggestion in the question (S1a rule F).
+  const rookie = rookieAsk(item, catalogRookie ? ["RC"] : []);
   if (!serial && !rookie) return null;
   return (
     <section className="flex flex-col gap-3" aria-label="Questions about this card">
@@ -102,7 +104,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   } else if (item.gradingNotes) {
     notes.push(["Grading", item.gradingNotes]);
   }
-  if (item.aiNotes) notes.push(["Other notes from the AI", item.aiNotes]);
+  if (item.aiNotes) notes.push(["Other notes from the scanner", item.aiNotes]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -141,7 +143,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
       {item.status === "needs_review" ? (
         <div className="flex flex-col gap-3">
           <Notice tone="warn">
-            The AI was not sure about this one. Check the details, fix anything wrong, then confirm.
+            The scanner was not sure about this one. Check the details, fix anything wrong, then confirm.
             {checkText ? <> {checkText} They are marked Check this below.</> : null}
           </Notice>
           <form action={confirmItemAction}>
@@ -185,7 +187,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       {notes.length > 0 ? (
         <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold">What the AI noticed</h2>
+          <h2 className="text-lg font-semibold">What the scanner noticed</h2>
           {notes.map(([label, body]) => (
             <div key={label}>
               <h3 className="text-sm font-semibold">{label}</h3>
@@ -206,7 +208,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       {item.kind === "card" ? <VersionPicker itemId={item.id} title={item.title} view={versionView(item)} /> : null}
 
-      {item.kind === "card" ? <AskBlock item={item} /> : null}
+      {item.kind === "card" ? <AskBlock item={item} catalogRookie={linkedFacts(item, db)?.rookie ?? false} /> : null}
 
       <CatalogBlock item={item} />
 
