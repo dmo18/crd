@@ -192,7 +192,7 @@ export function offerCandidates(read: FindRead, cards: readonly CatalogCard[]): 
     const numDiff = num != null && cardNum != null && cardNum !== num;
     if (yearDiff && !unsureOf(read, "year")) continue;
     if (numDiff && !unsureOf(read, "cardNumber")) continue;
-    const key = `${c.year ?? ""}|${normalizeBrand(`${c.brand ?? ""}${c.variation ?? ""}`)}|${normalizeText(c.setName ?? "")}|${cardNum ?? ""}|${normalizeName(c.player ?? "")}`;
+    const key = `${c.sport ?? ""}|${c.year ?? ""}|${normalizeBrand(`${c.brand ?? ""}${c.variation ?? ""}`)}|${normalizeText(c.setName ?? "")}|${cardNum ?? ""}|${normalizeName(c.player ?? "")}`;
     if (seenKeys.has(key)) continue;
     seenIds.add(c.sourceId);
     seenKeys.add(key);

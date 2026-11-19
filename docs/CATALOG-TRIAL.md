@@ -186,3 +186,23 @@ Ten real calls by hand (limit was 20), 2.6 seconds apart, User-Agent `CardVault/
 - 1986 Fleer #57 Michael Jordan (basketball): four eBay listings, no clean entry. So for basketball the known list and "Another version" carry the choice.
 
 What follows for the app: the search "year brand number surname" lists the base card and its product lines (Tiffany, Glossy, Desert Shield, Gold, Electric Diamond) as clean entries. Error variants and grading listings are never clean, so they never become options. No O-Pee-Chee, Gold Rush or Silver Signature entry came up in these ten cards; those stay on the known list only.
+
+## S1a recordings (2026-11-19)
+
+Eleven real calls by hand (limit was 25), User-Agent `CardVault/0.1.0`,
+script `scripts/catalog-probe.mjs`, limit 10 unless noted. Recordings:
+`tests/fixtures/catalog/s1a_*.json`.
+- "1992 Donruss 101 Milacki" (Baseball, 1992): one clean card, 2310072.
+- "1990 Upper Deck 355 Ricci" and "1990 Upper Deck Ricci" (Hockey, 1990),
+  and the same without sport: nothing. The catalog does not have 1990-91
+  Upper Deck #355 Mike Ricci (as the trial found for Upper Deck hockey).
+- "2021 Prizm SG-4 Acuna" (Baseball, 2021): two eBay listings of the Prizm
+  Stained Glass SG-4 Ronald Acuna Jr. The product is filed as "Prizm", not
+  "Panini". No clean entry.
+- "Haslett" (Football): Jim Haslett 1981 Topps #173, 1982 #29, 1985 #204,
+  1986 #392. "1982 Topps 29" gave only Haslett, "1982 Topps 2" (limit 5)
+  Dan Fouts. "Topps Rushing Leaders" (Football): clean entries named
+  "RUSHING LEADERS", for example 1984 Topps #204, the same number as
+  Haslett's 1985 card.
+- "Fleer Hardaway" (Basketball): Anfernee and Tim Hardaway mixed, one
+  listing whose product is "1997 Tim Hardaway", years like "1996-97".
