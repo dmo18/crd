@@ -109,7 +109,8 @@ export function pickCandidateIn(
       } else if (name && sourceOf(item, "variation") !== "owner") {
         // Empty or only read by the scanner: the owner's tap writes the version name, as chooseVersion does.
         const marks = parseFieldSources(after.fieldSources) ?? {};
-        marks.variation = "owner";
+        // A link the app made by itself names the version from the catalog, not from the owner.
+        marks.variation = auto === false ? "owner" : "catalog";
         patch.variation = name;
         patch.fieldSources = JSON.stringify(marks);
         patch.title = buildTitle({ ...after, variation: name });

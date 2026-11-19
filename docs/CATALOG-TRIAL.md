@@ -189,7 +189,7 @@ What follows for the app: the search "year brand number surname" lists the base 
 
 ## S1a recordings (2026-11-19)
 
-Eleven real calls by hand (limit was 25), User-Agent `CardVault/0.1.0`,
+Ten real calls by hand (limit was 25), User-Agent `CardVault/0.1.0`,
 script `scripts/catalog-probe.mjs`, limit 10 unless noted. Recordings:
 `tests/fixtures/catalog/s1a_*.json`.
 - "1992 Donruss 101 Milacki" (Baseball, 1992): one clean card, 2310072.
