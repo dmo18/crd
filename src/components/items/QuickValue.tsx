@@ -7,13 +7,13 @@ import { quickValueAction, type QuickValueState } from "@/lib/items/quick-value-
 const START: QuickValueState = { saved: false, error: null };
 
 /** One box to type the sold price you saw, and a button to save it as this item's value. */
-export function QuickValue({ itemId, help }: { itemId: number; help?: string }) {
+export function QuickValue({ itemId, help, label = "Price you saw" }: { itemId: number; help?: string; label?: string }) {
   const [state, action, pending] = useActionState(quickValueAction, START);
   return (
     <form action={action} className="flex flex-col gap-2">
       <input type="hidden" name="id" value={itemId} />
       {help ? <p className="text-sm">{help}</p> : null}
-      <Field label="Price you saw" htmlFor={`qv-${itemId}`}>
+      <Field label={label} htmlFor={`qv-${itemId}`}>
         <input id={`qv-${itemId}`} name="price" type="text" inputMode="decimal" placeholder="12.50"
           autoComplete="off" maxLength={14} required className={INPUT_CLASS} />
       </Field>

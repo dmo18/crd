@@ -3,8 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { GradingAdvice } from "@/components/items/GradingAdvice";
-import { SoldLinks } from "@/components/items/SoldLinks";
-import { QuickValue } from "@/components/items/QuickValue";
+import { PriceLinks } from "@/components/items/PriceLinks";
 import { ValueTools } from "@/components/items/ValueTools";
 import { CatalogBlock } from "@/components/catalog/CatalogBlock";
 import { DuplicateNotice } from "@/components/items/DuplicateNotice";
@@ -20,7 +19,6 @@ import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
 import { checkLine, confidenceLabel, VALUE_SOURCE_LABELS } from "@/lib/items/labels";
 import { fieldsToCheck } from "@/lib/catalog/sources";
-import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
 import { recognitionMode } from "@/lib/env";
 import { VersionPicker } from "@/components/catalog/VersionPicker";
@@ -87,9 +85,9 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   const { cents: value, waitingForVersion } = shownValue(item);
   const estimateHidden = item.versionState === "not_sure";
   const mode = recognitionMode();
-  const hasLinks = soldListingLinks(item).length > 0;
   const source = item.manualValueCents != null ? "manual" : item.valueSource;
-  const hasRange = item.estLowCents != null && item.estHighCents != null;
+  // The range and basis belong to the estimate: hidden when the owner's own value is shown.
+  const hasRange = source !== "manual" && item.estLowCents != null && item.estHighCents != null;
   const pulls = parsePullList(item.pullList);
   // Fields the reader was not sure of, still as it read them.
   const toCheck = item.kind === "card" ? fieldsToCheck(item) : [];
@@ -158,28 +156,13 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
         {value == null && !waitingForVersion ? <p className="text-sm">Use Find the value below.</p> : null}
         {value != null && !estimateHidden && hasRange ? <p className="text-sm">Range: {formatCents(item.estLowCents)} to {formatCents(item.estHighCents)}</p> : null}
         {source && !waitingForVersion ? <p className="text-sm text-muted">Source: {VALUE_SOURCE_LABELS[source]}</p> : null}
-        {item.valueBasis && !estimateHidden ? <p className="text-sm">{item.valueBasis}</p> : null}
+        {item.valueBasis && !estimateHidden && source !== "manual" ?<p className="text-sm">{item.valueBasis}</p> : null}
         <p className="pt-1 text-xs text-muted">Estimates are a guide, not an appraisal.</p>
         {mode === "free" ? null : <ValueTools itemId={item.id} />}
       </Card>
 
       <GradingAdvice item={item} />
-      <Card className="flex flex-col gap-3">
-        <h2 className="text-lg font-semibold">Find the value</h2>
-        {hasLinks ? (
-          <>
-            <ol className="list-none text-sm text-muted">
-              <li>1. Tap a sold listings link.</li>
-              <li>2. Look at recent sold prices for the same card in similar condition.</li>
-              <li>3. Type a typical price here.</li>
-            </ol>
-            <SoldLinks item={item} />
-            <QuickValue itemId={item.id} />
-          </>
-        ) : (
-          <QuickValue itemId={item.id} help="Enter what you think the whole lot is worth." />
-        )}
-      </Card>
+      <PriceLinks item={item} />
 
       {item.kind === "sealed" ? <Notice tone="accent">Keep it sealed. Sealed product is usually worth more unopened.</Notice> : null}
 
