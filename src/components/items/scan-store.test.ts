@@ -269,3 +269,52 @@ describe("scan store (the list shared by every page)", () => {
     });
   });
 });
+
+describe("a repeat after the page was closed", () => {
+  const file = (name: string, size: number) => new File([new Uint8Array(size)], name, { type: "image/jpeg" });
+  const sendJob = { mode: "single", hint: "", locationId: "", front: file("IMG_1.jpg", 10), source: [] as File[] };
+  type Memory = Record<string, { clientKey: string; at: number }>;
+  const memoryStore = () => {
+    let memory: Memory = {};
+    return { read: () => structuredClone(memory), write: (all: Memory) => { memory = structuredClone(all); } };
+  };
+  const hang = () => new Promise<Response>(() => {});
+
+  it("reuses the key of a photo that was sent but never confirmed, so no second scan is made", async () => {
+    const pending = memoryStore();
+    const keys: string[] = [];
+    // The first page: the photo reaches the server but the answer never comes back (page closed).
+    const b1 = fakeBrowser(async (_u, init) => { keys.push((init.body as FormData).get("clientKey") as string); return hang(); });
+    createScanStore({ ...b1.deps, pending }).enqueue(sendJob, photo(), "One card");
+    await vi.waitFor(() => expect(keys).toHaveLength(1));
+
+    // The page is loaded again and the owner picks the same photo.
+    const b2 = fakeBrowser(async (_u, init) => { keys.push((init.body as FormData).get("clientKey") as string); return Response.json({ scanId: 3 }, { status: 201 }); });
+    const store2 = createScanStore({ ...b2.deps, randomUUID: () => "11111111-1111-4111-8111-111111111111", pending });
+    store2.enqueue(sendJob, photo(), "One card");
+    await vi.waitFor(() => expect(store2.getState().entries[0].status).toBe("reading"));
+    expect(keys[1]).toBe(keys[0]);
+
+    // Once the server has confirmed it, the same photo taken on purpose again is a new scan.
+    store2.enqueue(sendJob, photo(), "One card");
+    await vi.waitFor(() => expect(keys).toHaveLength(3));
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("makes two scans of the same photo on one page, and forgets a remembered send after 30 minutes", async () => {
+    const pending = memoryStore();
+    const keys: string[] = [];
+    const b = fakeBrowser(async (_u, init) => { keys.push((init.body as FormData).get("clientKey") as string); return hang(); });
+    let n = 0;
+    const store = createScanStore({ ...b.deps, randomUUID: () => `00000000-0000-4000-8000-00000000000${++n}`, pending });
+    store.enqueue(sendJob, photo(), "One card");
+    store.enqueue(sendJob, photo(), "One card");
+    await vi.waitFor(() => expect(new Set(keys).size).toBe(2));
+
+    const b2 = fakeBrowser(async (_u, init) => { keys.push((init.body as FormData).get("clientKey") as string); return hang(); });
+    b2.setClock(31 * 60 * 1000);
+    createScanStore({ ...b2.deps, randomUUID: () => "22222222-2222-4222-8222-222222222222", pending }).enqueue(sendJob, photo(), "One card");
+    await vi.waitFor(() => expect(keys).toHaveLength(3));
+    expect(keys[2]).toBe("22222222-2222-4222-8222-222222222222");
+  });
+});
