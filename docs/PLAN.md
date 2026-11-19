@@ -2332,3 +2332,13 @@ Tasks now:
 - Web test photos live in /agent/reading-bench (outside git) and are deleted when the milestone closes. The web holdout is used up; the owner's own scans are the next exam.
 - Final review (Fable, once): no critical or high. Five medium and six low findings fixed in ce2c383.
 - Open: the catalog confirming the year to lift sure fill; a free AI vision service is an owner decision, not planned.
+
+### 12R.7 many cards in one photo (2026-11-19, branch work/reading-multi)
+
+Owner's try (one photo of two fronts, one of their backs) gave three items, one wrong. Now:
+- Each card is cut out along its own outline, the rest of the photo blanked, turned upright and read like a single card. The finder gained a step for a table lit unevenly.
+- Fronts and backs in different photos are paired one to one by the front's surname on the back (heading, text, given name; maker and team agree or disagree). Equal fits pair nothing. A pair reads like a single scan with both sides; its back crop is kept as the card's back photo.
+- A side left alone in a scan with fronts and backs: note "Only one side of this card was matched..." and Review. A lone back counts only with a name. Fronts only: as before.
+- Result on the owner's photos (real reader): two cards. Billy Mills #24, sport other, front and back; year and brand blank (the "1991 Impel" line is too small to read in this photo). Tim Hardaway 1993 Fleer #65 basketball, front and back; player, year, number unsure. Both wait in Review.
+- Time: 36 s for the two cards on a quiet server (fronts 3 to 6 s, backs 11 to 14 s), 88 s while other work ran. Nine cards with backs: about 2.5 minutes quiet (estimate, not measured).
+- Bench on single cards unchanged (same output as before on all three sets, zero wrong).

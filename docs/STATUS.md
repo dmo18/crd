@@ -5,6 +5,24 @@
 - Bench: zero wrong fields on all 19 test cards; sure fill for year and number is under the bar, so most cards wait in Review with a "Check this" note.
 - Next: the owner scans 10 to 15 of his own cards as the real exam; then delete /agent/reading-bench.
 - Server note: disk use grew from 19G to 32G of 61G during image builds (Docker build cache).
+- 12R.7 (branch work/reading-multi, not deployed): many cards in one photo.
+  Each card found is cut out along its own outline (the rest blanked, so a
+  neighbour's text cannot reach it), turned upright and read like a single
+  card (same passes; corners only when its text looks like a back). A
+  table lit unevenly is handled by a new finder step (table colour fitted as
+  a smooth surface, joined cards shrunk apart, glare without print dropped).
+  Fronts and backs in different photos are paired one to one when the
+  front's surname is on the back as a name (heading, given name, maker and
+  team add or take away); a tie pairs nothing. A pair reads like a single
+  scan and keeps its back crop as the card's back photo (role back). A side
+  left alone in a scan with fronts and backs gets "Only one side of this
+  card was matched..." and waits in Review; a lone back needs a name. A scan
+  of fronts only reads as before. Rules: a front name read without its space
+  and first name ("NMHARDAWAY") takes the back's large name with that
+  surname (unsure); "Athletics" alone no longer votes for baseball (it is
+  track and field on Olympic cards: the lone Mills back was called baseball
+  through the Oakland Athletics hint). Scan screen says a second photo of
+  the backs may be added. Result on the owner's photos: see 12R.7 in PLAN.
 - 12R.2 done (not deployed): tesseract.js is gone. The text reader is now
   RapidOCR (PP-OCR models on onnxruntime) in a Python worker the app starts
   in the same container (ocr/worker.py, src/lib/free/ocr-worker.ts). One
