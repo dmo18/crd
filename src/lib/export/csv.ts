@@ -1,4 +1,5 @@
 import type { Item } from "@/db/schema";
+import { readRookie } from "@/lib/items/rookie";
 
 type Cell = string | number | boolean | Date | null | undefined;
 /** Text cells get the formula guard; money and counts the code formats itself do not. */
@@ -7,6 +8,11 @@ type Col = { header: string; get: (r: Item, locations: Map<number, string>) => {
 const text = (v: Cell) => ({ v, kind: "text" as const });
 const raw = (v: Cell) => ({ v, kind: "raw" as const });
 const yesNo = (b: boolean | null) => text(b == null ? "" : b ? "Yes" : "No");
+/** Rookie is Yes or No only when it was answered or confirmed; "Not sure", "Disputed" and not recorded stay blank. */
+const rookieCell = (r: Item) => {
+  const { state } = readRookie(r);
+  return yesNo(state === "yes" ? true : state === "no" ? false : null);
+};
 const dollars = (cents: number | null | undefined) => raw(cents == null ? "" : (cents / 100).toFixed(2));
 const count = (n: number | null | undefined) => raw(n == null ? "" : String(n));
 
@@ -26,7 +32,7 @@ const COLUMNS: Col[] = [
   { header: "Player", get: (r) => text(r.player) },
   { header: "Team", get: (r) => text(r.team) },
   { header: "Variation", get: (r) => text(r.variation) },
-  { header: "Rookie", get: (r) => yesNo(r.isRookie) },
+  { header: "Rookie", get: (r) => rookieCell(r) },
   { header: "Error", get: (r) => yesNo(r.isError) },
   { header: "Parallel", get: (r) => yesNo(r.isParallel) },
   { header: "Insert", get: (r) => yesNo(r.isInsert) },

@@ -76,6 +76,19 @@ describe("itemsToCsv", () => {
     expect(lines[1]).not.toContain("$");
   });
 
+  it("leaves Rookie blank when unknown and writes No only for an answer", () => {
+    const rookie = (over: Partial<Item>) => {
+      const lines = parse(itemsToCsv([row(over)], new Map()));
+      return lines[1].split(",")[lines[0].split(",").indexOf("Rookie")];
+    };
+    expect(rookie({ isRookie: false, rookieState: null })).toBe("");
+    expect(rookie({ isRookie: false, rookieState: "unknown" })).toBe("");
+    expect(rookie({ isRookie: false, rookieState: "disputed" })).toBe("");
+    expect(rookie({ isRookie: false, rookieState: "no", rookieSource: "owner" })).toBe("No");
+    expect(rookie({ isRookie: true, rookieState: "yes", rookieSource: "owner" })).toBe("Yes");
+    expect(rookie({ isRookie: true, rookieState: null })).toBe("Yes");
+  });
+
   it("writes Yes/No flags and the location name", () => {
     const lines = parse(itemsToCsv([row({ isRookie: true, locationId: 5 })], new Map([[5, "Box 1"]])));
     const header = lines[0].split(",");
