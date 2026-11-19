@@ -313,6 +313,23 @@ export async function lookupPlayer(name: string, opts: LookupOptions = {}): Prom
 const QUIET_ERRORS = new Set(["Paused", "Off"]);
 
 /**
+ * The stored facts for a player, never calling out: null when nothing is
+ * stored (or the stored answer was a miss or is too old). Used by the price
+ * guide, which must stay free of outside calls.
+ */
+export function storedPlayerFacts(name: string, opts: { sport?: Sport | null; year?: number | null; db?: Db; now?: Date } = {}): PlayerFacts | null {
+  try {
+    if (!normalizeName(name)) return null;
+    const sport = opts.sport ?? null;
+    const cached = readCache(opts.db ?? getDb(), cacheKey(name, sport), opts.now ?? new Date());
+    if (!cached) return null;
+    return rankCandidates(cached, { name, sport, year: opts.year ?? null })[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * undefined means "not cached or too old"; null means a cached miss.
  * Rows from before candidates were cached hold a single object and are fetched again.
  */

@@ -61,7 +61,8 @@ export const VALUE_SOURCE_LABELS = {
   ai_estimate: "AI estimate",
   sample: "Sample data",
   manual: "Your value",
-  price_feed: "Price guide",
+  price_feed: "Price feed",
+  price_guide: "Price guide (rough)",
 } as const;
 
 /** e.g. 0.93 becomes "93% sure". */
