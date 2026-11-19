@@ -8,7 +8,7 @@ import { getDb } from "@/db";
 import { auditThisRequest, requestContext } from "@/lib/audit/request";
 import { itemLabel } from "@/lib/audit/subjects";
 import { MAX_STORED_CANDIDATES } from "@/lib/catalog/candidates";
-import { dismissCandidates, lookUpAgain, NOT_ON_LIST, pickCandidate, takeCatalogValues } from "@/lib/catalog/pick";
+import { dismissCandidates, lookUpAgain, lookUpAgainLine, NOT_ON_LIST, pickCandidate, takeCatalogValues } from "@/lib/catalog/pick";
 import { keepApart, mergeInto } from "./duplicates";
 import { deleteFailedScans } from "./remove";
 import { confirmItem, deleteItem } from "./update";
@@ -126,6 +126,7 @@ export async function dismissCandidatesAction(formData: FormData): Promise<void>
   const who = await requestContext();
   dismissCandidates(id.data, getDb(), who);
   refresh();
+  revalidatePath(`/items/${id.data}`);
 }
 
 /** "Look up again" with the item's fields of the moment. Once per 10 seconds per item. */
@@ -136,7 +137,7 @@ export async function lookUpAgainAction(_prev: CatalogActionState, formData: For
   const r = await lookUpAgain(id.data, { who: await requestContext() });
   if (!r.ok) return { message: r.error };
   refresh();
-  if (r.found > 0) return { message: r.found === 1 ? "Found 1 possible card." : `Found ${r.found} possible cards.` };
-  if (r.notChecked) return { message: null };
-  return { message: "Nothing found in the catalog. Check the year, brand and player, then try again." };
+  revalidatePath(`/items/${id.data}`);
+  if (r.matched) await auditThisRequest("catalog_card_linked", "ok", `${itemLabel(id.data)} is ${r.matched}, matched by the app`);
+  return { message: lookUpAgainLine(r) };
 }

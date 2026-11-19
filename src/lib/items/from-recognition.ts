@@ -43,7 +43,8 @@ export function itemFromRecognition(
   const serialSuggestion = suggestion ? JSON.stringify(suggestion) : null;
   const cat = isCard ? r.catalog : undefined;
   let catalogCandidates: string | null = null;
-  if (cat?.status === "candidates") catalogCandidates = serializeCatalog({ status: "candidates", items: cat.candidates }, ctx.now);
+  // A verified match is stored as the first candidate; the scan then links it (src/lib/scans/process.ts).
+  if (cat?.status === "candidates" || cat?.status === "matched") catalogCandidates = serializeCatalog({ status: "candidates", items: cat.candidates }, ctx.now);
   else if (cat?.status === "none") catalogCandidates = serializeCatalog({ status: "none" }, ctx.now);
   else if (cat?.status === "not_checked") catalogCandidates = serializeCatalog({ status: "not_checked", reason: cat.reason }, ctx.now);
   return {

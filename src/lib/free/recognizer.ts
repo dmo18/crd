@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import type { Sport } from "@/db/schema";
-import { createScanBudget, lookupCard, lookupConfidence, type LookupResult } from "@/lib/catalog/lookup";
+import { findCard, type FindResult } from "@/lib/catalog/find";
+import { createScanBudget, lookupConfidence, type LookupResult } from "@/lib/catalog/lookup";
 import type { Catalog } from "@/lib/catalog/types";
 import { errorKind, log } from "@/lib/log";
 import { checkPhotoCount } from "@/lib/recognition/limits";
@@ -130,6 +131,33 @@ export function catalogPart(result: LookupResult, readingConfidence: number, aut
   return { status: "none" };
 }
 
+/**
+ * The S1a look up's answer as the catalog part of a recognized card: exactly
+ * one verified match is linked when the item is filed (status `matched`,
+ * the match first); anything else is a list for the owner's tap.
+ */
+export function findPart(result: FindResult): RecognizedCatalog {
+  if (result.match) return { status: "matched", candidates: result.candidates };
+  if (result.candidates.length > 0) return { status: "candidates", candidates: result.candidates };
+  if (result.stopped) return { status: "not_checked", reason: result.stopped };
+  return { status: "none" };
+}
+
+/** Fields the set's checklist filled or confirmed (rule D), written on the read card with their certainty. */
+export function applyFills(item: RecognizedItem, result: Pick<FindResult, "fills" | "notes">): void {
+  if (result.fills.length === 0 && result.notes.length === 0) return;
+  const certainty: FieldCertainty = { ...(item.evidence?.certainty ?? {}) };
+  for (const fill of result.fills) {
+    const now = item[fill.field];
+    // Only a blank is filled; an equal value is only confirmed. A read value is never replaced.
+    if (now != null && now !== "" && String(now) !== fill.value) continue;
+    item[fill.field] = fill.value;
+    certainty[fill.field] = fill.sure ? "sure" : "unsure";
+  }
+  item.evidence = { ...(item.evidence ?? {}), certainty };
+  if (result.notes.length > 0) item.notes = [item.notes, ...result.notes].filter(Boolean).join(" ").slice(0, 600);
+}
+
 function clamp01(n: number) {
   return Math.min(1, Math.max(0, n));
 }
@@ -219,15 +247,19 @@ export class FreeRecognizer implements Recognizer {
         continue;
       }
       try {
-        const result = await within(lookupCard({
-          year: item.year, yearFromStats, brands: item.brand ? [item.brand] : [], sport: item.sport, names, cardNumber: item.cardNumber,
+        const certainty = item.evidence?.certainty ?? {};
+        const result = await within(findCard({
+          sport: item.sport, year: item.year, yearFromStats, brand: item.brand, setName: item.setName, cardNumber: item.cardNumber,
+          player: item.player ?? names[0] ?? null, team: item.team,
+          unsure: CERTAIN_FIELDS.filter((f) => item[f] != null && item[f] !== "" && certainty[f] !== "sure"),
         }, "background", { catalog: gate, scan }), left);
         if (result === TIMED_OUT) {
           late = true;
           gate.stop();
           item.catalog = { status: "not_checked", reason: "time" };
         } else {
-          item.catalog = catalogPart(result, item.confidence);
+          applyFills(item, result);
+          item.catalog = findPart(result);
         }
       } catch {
         item.catalog = { status: "not_checked", reason: "failed" };

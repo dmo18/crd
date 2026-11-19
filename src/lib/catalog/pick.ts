@@ -1,20 +1,20 @@
 import { and, eq, isNull } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
-import { catalogCards, catalogSources, type CatalogField, type Item, items } from "@/db/schema";
+import { CATALOG_FIELDS, catalogCards, catalogSources, type CatalogField, type Item, items } from "@/db/schema";
 import { countAuditSince, recordAudit } from "@/lib/audit/store";
 import { itemLabel } from "@/lib/audit/subjects";
 import { liveItem } from "@/lib/items/live";
-import { REVIEW_THRESHOLD } from "@/lib/recognition/types";
+import { CERTAIN_FIELDS, REVIEW_THRESHOLD } from "@/lib/recognition/types";
 import { applyCatalogCard, type CatalogDifference } from "./apply";
-import { candidateCard, parseCatalog, serializeCatalog, type NotCheckedReason } from "./candidates";
+import { candidateCard, parseCatalog, serializeCatalog, type LinkedInfo, type NotCheckedReason, type StoredCandidate } from "./candidates";
 import { sourceUrl } from "./clean";
 import { cardLine } from "./line";
-import { lookupCard } from "./lookup";
+import { findCard } from "./find";
 import { getCatalog } from "./provider";
 import { saveCatalogCardIn } from "./store";
 import type { Catalog, CatalogCard } from "./types";
 import { normalizeText } from "./normalize";
-import { parseFieldSources, sourceOf } from "./sources";
+import { fieldsToCheck, isFilled, parseFieldSources, sourceOf } from "./sources";
 import { buildTitle } from "@/lib/title";
 import { catalogVersionName, hasSeveralVersions, isVersionRow } from "./versions";
 
@@ -69,13 +69,24 @@ export type PickResult =
  * choose "Use the catalog's values" or keep the scanner's.
  */
 export function pickCandidate(itemId: number, position: number, sourceId: string, db: Db = getDb(), now: Date = new Date()): PickResult {
-  return db.transaction((tx): PickResult => {
+  return db.transaction((tx): PickResult => pickCandidateIn(tx as unknown as Db, itemId, position, sourceId, now), { behavior: "immediate" });
+}
+
+/**
+ * The same inside a caller's transaction. `auto`: the app links a verified
+ * match by itself (S1a rule C); the list is kept with the link so Undo can
+ * bring it back and the item page can show what the catalog knows.
+ */
+export function pickCandidateIn(
+  tx: Db, itemId: number, position: number, sourceId: string, now: Date = new Date(), auto: LinkedInfo["before"] | false = false,
+): PickResult {
+  {
     const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
     if (!item) return { ok: false, error: GONE };
     if (item.kind !== "card") return { ok: false, error: NOT_A_CARD };
     if (item.catalogCardId != null) return { ok: false, error: ALREADY_LINKED };
     const stored = parseCatalog(item.catalogCandidates, now);
-    const chosen = stored?.status === "candidates" && Number.isInteger(position) && position >= 0 ? stored.items[position] : undefined;
+    const chosen = (stored?.status === "candidates" || stored?.status === "linked") && Number.isInteger(position) && position >= 0 ? stored.items[position] : undefined;
     // The list may have changed since the owner looked at it: the card shown must still be at that place.
     if (!chosen || chosen.sourceId !== sourceId) return { ok: false, error: NOT_ON_LIST };
     const card = candidateCard(chosen);
@@ -110,10 +121,82 @@ export function pickCandidate(itemId: number, position: number, sourceId: string
       }
     }
     const confirmed = differences.length === 0;
+    // The list stays with the link (status `linked`): the item page shows what the catalog knows, Unlink brings the list back.
+    const kept = serializeCatalog({ status: "linked", items: stored!.items, linked: { position, auto: auto !== false, before: auto || null } }, now);
+    let extra: Partial<Item> = {};
+    if (auto !== false) {
+      // The catalog is the second, independent sign for the fields it agrees on:
+      // they count as confirmed (marked `catalog`), so "Check this" goes away.
+      // Unlink marks them `reading` again, and their "Check this" comes back.
+      const after = { ...item, ...patch } as Item;
+      const marks = parseFieldSources(after.fieldSources) ?? {};
+      let changed = false;
+      for (const f of CONFIRMED_BY_MATCH) {
+        if (marks[f] === "reading" && isFilled(after[f]) && sameValue(after[f], row[f])) { marks[f] = "catalog"; changed = true; }
+      }
+      if (changed) extra = { fieldSources: JSON.stringify(marks) };
+      if (confirmed) extra.confidence = Math.max(item.confidence ?? 0, REVIEW_THRESHOLD);
+    }
     tx.update(items).set({
-      ...patch, ...version, catalogCandidates: null, ...(confirmed ? { status: "confirmed" as const } : {}), updatedAt: now,
+      ...patch, ...version, ...extra, catalogCandidates: kept, ...(confirmed ? { status: "confirmed" as const } : {}), updatedAt: now,
     }).where(and(eq(items.id, itemId), liveItem)).run();
     return { ok: true, line: cardLine(row), differences, confirmed };
+  }
+}
+
+/** The fields a verified match confirms (S1a rule C). */
+export const CONFIRMED_BY_MATCH = ["year", "brand", "cardNumber", "player"] as const satisfies readonly CatalogField[];
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return typeof a === "string" && typeof b === "string" ? a.trim().toLowerCase() === b.trim().toLowerCase() : a === b;
+}
+
+/**
+ * S1a rule C: a scan or "Look up again" found exactly one verified match,
+ * stored first in the item's list. Linked as "This is my card" would, inside
+ * the caller's transaction, remembering the status and confidence before so
+ * Undo can put them back. False when it could not be linked (the list stays).
+ */
+export function autoLinkIn(tx: Db, itemId: number, now: Date = new Date()): boolean {
+  const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
+  if (!item || item.kind !== "card" || item.catalogCardId != null) return false;
+  const stored = parseCatalog(item.catalogCandidates, now);
+  const first = stored?.status === "candidates" ? stored.items[0] : undefined;
+  if (!first) return false;
+  const before = { status: item.status === "confirmed" ? "confirmed" as const : "needs_review" as const, confidence: item.confidence };
+  return pickCandidateIn(tx, itemId, 0, first.sourceId, now, before).ok;
+}
+
+/**
+ * Undo of a link the app made by itself, and Unlink: the link goes, the list
+ * comes back to pick from, the catalog's marks become `reading` (so "Check
+ * this" shows again). After an automatic link, the status and confidence
+ * the item had before come back too.
+ */
+export function undoLink(itemId: number, db: Db = getDb(), now: Date = new Date()): { ok: boolean } {
+  return db.transaction((tx) => {
+    const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
+    if (!item) return { ok: false };
+    // Not linked (any more): nothing to undo, as the plain Unlink always was.
+    if (item.catalogCardId == null) return { ok: true };
+    const stored = parseCatalog(item.catalogCandidates, now);
+    const patch: Partial<Item> = { catalogCardId: null, updatedAt: now };
+    const marks = parseFieldSources(item.fieldSources);
+    if (marks) {
+      let changed = false;
+      for (const f of CATALOG_FIELDS) if (marks[f] === "catalog") { marks[f] = "reading"; changed = true; }
+      if (changed) patch.fieldSources = JSON.stringify(marks);
+    }
+    if (stored?.status === "linked") {
+      patch.catalogCandidates = stored.items.length > 0 ? serializeCatalog({ status: "candidates", items: stored.items }, new Date(stored.at)) : null;
+      const before = stored.linked?.auto ? stored.linked.before : null;
+      if (before) {
+        patch.status = before.status;
+        patch.confidence = before.confidence;
+      }
+    }
+    const res = tx.update(items).set(patch).where(and(eq(items.id, itemId), liveItem)).run();
+    return { ok: res.changes > 0 };
   }, { behavior: "immediate" });
 }
 
@@ -166,7 +249,7 @@ export function resetLookupLimitForTests(): void {
 }
 
 export type LookupAgainResult =
-  | { ok: true; found: number; notChecked: NotCheckedReason | null }
+  | { ok: true; found: number; notChecked: NotCheckedReason | null; matched?: string | null }
   | { ok: false; error: string };
 
 /**
@@ -194,14 +277,16 @@ export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Cat
   let stored: string;
   let found = 0;
   let notChecked: NotCheckedReason | null = null;
+  let matched: string | null = null;
   try {
-    const r = await lookupCard({
-      year: item.year, brands: item.brand ? [item.brand] : [], sport: item.sport,
-      names: item.player ? [item.player] : [], cardNumber: item.cardNumber,
+    // The item's fields of the moment. A field the reader was not sure of (and nobody changed) counts as unsure.
+    const r = await findCard({
+      sport: item.sport, year: item.year, brand: item.brand, setName: item.setName, cardNumber: item.cardNumber,
+      player: item.player, team: item.team, unsure: fieldsToCheck(item).filter((f): f is (typeof CERTAIN_FIELDS)[number] => (CERTAIN_FIELDS as readonly string[]).includes(f)),
     }, "now", { catalog: deps.catalog ?? getCatalog() });
-    const list = r.sure ? [r.sure, ...r.candidates.filter((c) => c.sourceId !== r.sure!.sourceId)] : r.candidates;
-    found = list.length;
-    if (found > 0) stored = serializeCatalog({ status: "candidates", items: list }, now());
+    found = r.candidates.length;
+    if (r.match) matched = cardLine(r.match);
+    if (found > 0) stored = serializeCatalog({ status: "candidates", items: r.candidates }, now());
     else if (r.stopped) {
       notChecked = r.stopped;
       stored = serializeCatalog({ status: "not_checked", reason: r.stopped }, now());
@@ -214,10 +299,23 @@ export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Cat
   return db.transaction((tx): LookupAgainResult => {
     const res = tx.update(items).set({ catalogCandidates: stored })
       .where(and(eq(items.id, itemId), liveItem, isNull(items.catalogCardId))).run();
-    if (res.changes > 0) return { ok: true, found, notChecked };
+    if (res.changes > 0) {
+      // Exactly one verified match: linked as at a scan (S1a rule C), with Undo on the item page.
+      if (matched && !autoLinkIn(tx as unknown as Db, itemId, now())) matched = null;
+      return { ok: true, found, notChecked, ...(matched ? { matched } : {}) };
+    }
     const now2 = tx.select({ link: items.catalogCardId }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
     return { ok: false, error: now2 ? ALREADY_LINKED : GONE };
   }, { behavior: "immediate" });
+}
+
+/** The plain result line of "Look up again" (S1a rule G). */
+export function lookUpAgainLine(r: LookupAgainResult): string {
+  if (!r.ok) return r.error;
+  if (r.matched) return `Matched to the catalog: ${r.matched}.`;
+  if (r.found > 0) return r.found === 1 ? "Found 1 possible card." : `Found ${r.found} possible cards.`;
+  if (r.notChecked) return r.notChecked === "off" ? "The card catalog is switched off." : "The catalog did not answer. Try again later.";
+  return "None found in the catalog. Check the year, brand and player, then try again.";
 }
 
 /** What Review shows for one item: the catalog's part, in plain data for the screen. */
@@ -226,7 +324,8 @@ export type ReviewCatalogView = {
   linked: { line: string; url: string | null; differences: { label: string; read: string; catalog: string }[] } | null;
   status: "candidates" | "none" | "not_checked" | null;
   reason: NotCheckedReason | null;
-  candidates: { position: number; sourceId: string; line: string; verified: boolean; url: string | null }[];
+  /** `differs`: how it differs from what the card reads, in plain words. */
+  candidates: { position: number; sourceId: string; line: string; verified: boolean; url: string | null; differs: string | null }[];
   /** "Look up again" is offered: a card with a player or a number and no link. */
   canLookUp: boolean;
   /** The candidates hold more than one version of the same card: "Choose the version" is offered. */
@@ -254,10 +353,64 @@ export function reviewCatalogView(item: Item, db: Db = getDb(), now: Date = new 
   const stored = item.catalogCardId == null ? parseCatalog(item.catalogCandidates, now) : null;
   return {
     linked,
-    status: stored?.status ?? null,
+    // A list kept from a link that is gone is a list to pick from again.
+    status: stored?.status === "linked" ? "candidates" : stored?.status ?? null,
     reason: stored?.reason ?? null,
-    candidates: (stored?.items ?? []).map((c, position) => ({ position, sourceId: c.sourceId, line: cardLine(c), verified: c.verified, url: sourceUrl(c.url) })),
+    candidates: (stored?.items ?? []).map((c, position) => ({
+      position, sourceId: c.sourceId, line: cardLine(c), verified: c.verified, url: sourceUrl(c.url), differs: c.differs ?? null,
+    })),
     canLookUp: item.catalogCardId == null && Boolean(item.player?.trim() || item.cardNumber?.trim()),
     severalVersions: hasSeveralVersions(stored?.items ?? []),
+  };
+}
+
+/** What the item page shows about its linked catalog card (S1a rule F). */
+export type LinkedFacts = {
+  line: string;
+  /** The app linked it by itself (a verified match): "Matched to the catalog" with Undo. */
+  auto: boolean;
+  setName: string | null;
+  cardNumber: string | null;
+  team: string | null;
+  /** The catalog's card details text, such as rookie or variation wording. */
+  details: string | null;
+  /** "Open in the catalog". */
+  url: string | null;
+  verified: boolean;
+  /** A clean entry marks it a rookie card (RC or "Rookie" wording): offered as a suggestion only. */
+  rookie: boolean;
+  /** Fields the catalog confirmed after a verified match. */
+  confirmed: CatalogField[];
+};
+
+const ROOKIE_WORDING = /\bRC\b|\brookie\b/i;
+
+/** A clean catalog entry's own words mark it a rookie card. Listings are never trusted for this. */
+export function catalogSaysRookie(c: Pick<StoredCandidate, "verified" | "details" | "setName">): boolean {
+  return c.verified && (ROOKIE_WORDING.test(c.details ?? "") || ROOKIE_WORDING.test(c.setName ?? ""));
+}
+
+export function linkedFacts(item: Item, db: Db = getDb(), now: Date = new Date()): LinkedFacts | null {
+  if (item.kind !== "card" || item.catalogCardId == null) return null;
+  const row = db.select().from(catalogCards).where(eq(catalogCards.id, item.catalogCardId)).get();
+  if (!row) return null;
+  const src = db.select({ url: catalogSources.url, sourceId: catalogSources.sourceId }).from(catalogSources).where(eq(catalogSources.catalogCardId, row.id)).all();
+  const stored = parseCatalog(item.catalogCandidates, now);
+  const kept = stored?.status === "linked" && stored.linked ? stored.items[stored.linked.position] : undefined;
+  // The kept row only when it is this very card.
+  const chosen = kept && src.some((s) => s.sourceId === kept.sourceId) ? kept : undefined;
+  const auto = Boolean(chosen && stored?.linked?.auto);
+  const marks = parseFieldSources(item.fieldSources);
+  return {
+    line: cardLine(row),
+    auto,
+    setName: row.setName ?? chosen?.setName ?? null,
+    cardNumber: row.cardNumber,
+    team: row.team ?? (chosen?.verified ? chosen.team : null) ?? null,
+    details: chosen?.details ?? null,
+    url: sourceUrl(chosen?.url) ?? sourceUrl(src[0]?.url),
+    verified: row.verified !== false,
+    rookie: chosen ? catalogSaysRookie(chosen) : false,
+    confirmed: auto ? CONFIRMED_BY_MATCH.filter((f) => marks?.[f] === "catalog" && isFilled(item[f]) && sameValue(item[f], row[f])) : [],
   };
 }

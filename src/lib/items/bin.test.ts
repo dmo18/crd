@@ -113,6 +113,8 @@ describe("every reader ignores an item in Recently deleted", () => {
     expect(reviewItems(100, db)).toEqual([]);
 
     expect(collectionTotals(db)).toEqual({ totalValueCents: 500, itemCount: 1, unitCount: 1 });
+    // The scan above wrote its own snapshot for the real day: only the one recorded here is checked.
+    db.delete(collectionSnapshots).run();
     recordSnapshot(db, new Date("2026-11-16T12:00:00Z"));
     expect(db.select().from(collectionSnapshots).all()).toEqual([{ day: "2026-11-16", totalValueCents: 500, itemCount: 1, unitCount: 1 }]);
 
