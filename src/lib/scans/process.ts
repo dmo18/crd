@@ -82,15 +82,28 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     // Cut each card out of a multi-card photo before touching the database,
     // from the working copy. The archive copies are made afterwards by the
     // background converter (startPhotoArchiver), once no scan is waiting.
+    // A card whose back was found in another photo of the scan (12R.7) gets
+    // that part as its back photo, the way a one card scan keeps its back.
     const crops = new Map<number, StoredImage>();
+    const backs = new Map<number, StoredImage>();
     if (scan.mode === "multi") {
       for (const [i, r] of recognized.entries()) {
         const source: ImageRow | undefined = photoRows[r.sourceIndex];
-        if (!r.box || !source) continue;
-        try {
-          crops.set(i, await cropStored(source, r.box));
-        } catch {
-          // A bad box only costs this item its own picture.
+        if (r.box && source) {
+          try {
+            crops.set(i, await cropStored(source, r.box));
+          } catch {
+            // A bad box only costs this item its own picture.
+          }
+        }
+        const back = r.backPhoto;
+        const backSource: ImageRow | undefined = back ? photoRows[back.sourceIndex] : undefined;
+        if (back && backSource) {
+          try {
+            backs.set(i, await cropStored(backSource, back.box));
+          } catch {
+            // The card keeps its front; the back can be added later.
+          }
         }
       }
     }
@@ -110,6 +123,8 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
         }
         const crop = crops.get(i);
         if (crop) tx.insert(images).values({ itemId: item.id, scanId, role: "crop", ...crop }).run();
+        const back = backs.get(i);
+        if (back) tx.insert(images).values({ itemId: item.id, scanId, role: "back", ...back }).run();
       });
       // One-item scans: the photos themselves belong to that item.
       if (scan.mode !== "multi" && recognized.length === 1) {

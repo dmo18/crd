@@ -118,6 +118,27 @@ describe("processScan", () => {
     expect(db.select().from(images).where(eq(images.role, "source")).get()!.itemId).toBeNull();
   });
 
+  it("keeps a paired back from another photo of a many-card scan as that card's back photo (12R.7)", async () => {
+    const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }, { role: "source", data: await photo("#993333") }] }, db);
+    const paired: Recognizer = {
+      name: "fake-model",
+      async recognize() {
+        const front = recognizedItemSchema.parse({ ...griffey, sourceIndex: 0, box: { x: 0.05, y: 0.05, w: 0.4, h: 0.4 } });
+        const alone = recognizedItemSchema.parse({ ...griffey, player: "Bo Jackson", sourceIndex: 0, box: { x: 0.55, y: 0.05, w: 0.4, h: 0.4 } });
+        return [{ ...front, backPhoto: { sourceIndex: 1, box: { x: 0.5, y: 0.5, w: 0.4, h: 0.4 } } }, alone];
+      },
+    };
+    await processScan(scanId, { db, recognizer: paired });
+    const [first, second] = db.select().from(items).all();
+    const roles = (id: number) => db.select().from(images).where(eq(images.itemId, id)).all().map((i) => i.role).sort();
+    expect(roles(first.id)).toEqual(["back", "crop"]);
+    expect(roles(second.id)).toEqual(["crop"]);
+    const back = db.select().from(images).where(eq(images.role, "back")).get()!;
+    expect((await readPhoto(back.file)).data.length).toBeGreaterThan(0);
+    // Both original photos stay with the scan.
+    expect(db.select().from(images).where(eq(images.role, "source")).all().every((i) => i.itemId === null)).toBe(true);
+  });
+
   it("files sealed product and bulk lots with the right fields only", async () => {
     const a = await createScan({ mode: "sealed", photos: [{ role: "source", data: await photo() }] }, db);
     await processScan(a.scanId, { db, recognizer: fake([{ kind: "sealed", confidence: 0.9, year: 1990, brand: "Topps", sport: "baseball", productType: "box", packCount: 36, sealState: "factory_sealed", player: "ignored", pullList: ["Frank Thomas #414"] }]) });

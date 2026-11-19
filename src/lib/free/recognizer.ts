@@ -18,11 +18,12 @@ import {
   type RecognizedItemInput,
   type Recognizer,
 } from "@/lib/recognition/types";
-import { cardTilt, findCardBoxes } from "./find-cards";
+import { cardTilt, findCardShapes, type CardShape } from "./find-cards";
 import { keyCardsFor, matchKeyCard, normalizeBrand, normalizeName, type KeyCard } from "./key-cards";
 import { getTextReader, ReaderDownError, type OcrResult, type ReadOptions, type TextReader } from "./ocr";
 import { parseCardText, parseProductText, teamFromList, type ParsedCard } from "./parse";
 import { lookupPlayer, type PlayerFacts } from "./wikidata";
+import { looksLikeBack, ONE_SIDE_NOTE, pairSides, type SideRead } from "./multi";
 
 /**
  * Free card reading with no keys and no paid services:
@@ -35,7 +36,10 @@ import { lookupPlayer, type PlayerFacts } from "./wikidata";
 
 export type FreeDeps = {
   reader?: TextReader;
+  /** Cards in a photo as upright boxes (tests). Left out: the card finder, with each card's own outline. */
   findBoxes?: (image: Buffer) => Promise<Box[]>;
+  /** Cards in a photo with their own outlines (tests). Wins over findBoxes. */
+  findShapes?: (image: Buffer) => Promise<CardShape[]>;
   /** Degrees a cropped card is turned from upright, clockwise positive. */
   tilt?: (image: Buffer) => Promise<number>;
   lookup?: (name: string, opts: { sport?: Sport | null; year?: number | null }) => Promise<PlayerFacts | null>;
@@ -142,6 +146,39 @@ async function cropPhoto(photo: RecognitionPhoto, box: Box): Promise<Buffer> {
   return sharp(photo.data).extract({ left, top, width, height }).jpeg({ quality: 90 }).toBuffer();
 }
 
+function cornersOf(b: Box): [number, number][] {
+  return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]];
+}
+
+/** Colour put where the photo is not this card: plain, like a dark table, with no text in it. */
+const BLANK = "#383838";
+const OUTLINE_GROW = 1.03;
+
+/**
+ * One card cut out of a many-card photo: its upright box, with everything
+ * outside the card's own outline (a turned card does not fill its box)
+ * painted plain, so a corner of the card next to it is never read with it.
+ */
+async function isolate(photo: RecognitionPhoto, shape: CardShape): Promise<Buffer> {
+  const crop = await cropPhoto(photo, shape.box);
+  const box = cornersOf(shape.box);
+  const inBox = shape.outline.every(([x, y], k) => Math.abs(x - box[k][0]) < 1e-6 && Math.abs(y - box[k][1]) < 1e-6);
+  if (inBox) return crop;
+  const meta = await sharp(crop).metadata();
+  const w = meta.width ?? 1;
+  const h = meta.height ?? 1;
+  // A little more than the found outline, so the card's own edge is never cut.
+  const cx = shape.outline.reduce((t, p) => t + p[0], 0) / shape.outline.length;
+  const cy = shape.outline.reduce((t, p) => t + p[1], 0) / shape.outline.length;
+  const points = shape.outline
+    .map(([x, y]): [number, number] => [cx + (x - cx) * OUTLINE_GROW, cy + (y - cy) * OUTLINE_GROW])
+    .map(([x, y]) => `${(((x - shape.box.x) / shape.box.w) * w).toFixed(1)},${(((y - shape.box.y) / shape.box.h) * h).toFixed(1)}`)
+    .join(" ");
+  const keep = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><polygon points="${points}" fill="#fff"/></svg>`);
+  const cut = await sharp(crop).ensureAlpha().composite([{ input: keep, blend: "dest-in" }]).png().toBuffer();
+  return sharp(cut).flatten({ background: BLANK }).jpeg({ quality: 90 }).toBuffer();
+}
+
 function formatKeyCard(k: KeyCard): string {
   const flags = [k.isRookie ? "rookie" : null, k.isError ? "error" : null, k.variation].filter(Boolean).join(", ");
   return `${k.year} ${k.setName} #${k.cardNumber} ${k.player}${flags ? ` (${flags})` : ""}`;
@@ -161,7 +198,7 @@ function ruledOutOnFront(error: KeyCard, card: KeyCard, front: OcrResult | null)
 export class FreeRecognizer implements Recognizer {
   readonly name = "free";
   private readonly reader: TextReader;
-  private readonly findBoxes: (image: Buffer) => Promise<Box[]>;
+  private readonly findShapes: (image: Buffer) => Promise<CardShape[]>;
   private readonly lookup: NonNullable<FreeDeps["lookup"]>;
   private readonly tilt: NonNullable<FreeDeps["tilt"]>;
   private readonly catalog: Catalog | undefined;
@@ -170,7 +207,10 @@ export class FreeRecognizer implements Recognizer {
 
   constructor(deps: FreeDeps = {}) {
     this.reader = deps.reader ?? getTextReader();
-    this.findBoxes = deps.findBoxes ?? findCardBoxes;
+    const findBoxes = deps.findBoxes;
+    this.findShapes = deps.findShapes ?? (findBoxes
+      ? async (image) => (await findBoxes(image)).map((box) => ({ box, outline: cornersOf(box) }))
+      : findCardShapes);
     this.lookup = deps.lookup ?? ((name, opts) => lookupPlayer(name, opts));
     this.tilt = deps.tilt ?? cardTilt;
     this.catalog = deps.catalog;
@@ -261,31 +301,76 @@ export class FreeRecognizer implements Recognizer {
     return this.cardFromText(frontText, backText, { sourceIndex: 0, box: null });
   }
 
+  /**
+   * Many cards in one or more photos (12R.7). Each card found is cut out
+   * along its own outline (the rest of the photo blanked, so no text of a
+   * neighbouring card can reach it), turned upright and read on its own like
+   * a single card. A front and a back in different photos are joined into one
+   * card when their text shows they are the same card (pairSides); the pair
+   * is then read exactly like a single scan with both sides. A side left
+   * without its partner, in a scan that has both fronts and backs, waits for
+   * the owner with a note; a back alone counts only with a name on it.
+   */
   private async multi(photos: RecognitionPhoto[]): Promise<ReadCard[]> {
-    const out: ReadCard[] = [];
+    const sides: (SideRead & { box: Box | null })[] = [];
     for (const [index, photo] of photos.entries()) {
-      let boxes: Box[] = [];
+      let shapes: CardShape[] = [];
       try {
-        boxes = (await this.findBoxes(photo.data)).slice(0, MAX_CARDS_PER_PHOTO);
+        shapes = (await this.findShapes(photo.data)).slice(0, MAX_CARDS_PER_PHOTO);
       } catch {
-        boxes = [];
+        shapes = [];
       }
-      if (boxes.length === 0) {
-        // No separate cards found: treat the whole photo as one card.
-        out.push(await this.cardFromText(await this.read(photo.data), null, { sourceIndex: index, box: null }));
+      if (shapes.length === 0) {
+        // No separate cards found: the whole photo is one card, read as a front (as before).
+        sides.push({ photo: index, box: null, text: await this.read(photo.data), back: false });
         continue;
       }
-      for (const box of boxes) {
+      for (const shape of shapes) {
         let text: OcrResult | null = null;
+        let back = false;
         try {
-          // Many cards per photo: quick reads keep a big sheet inside the time limit.
-          text = await this.read(await this.straighten(await cropPhoto(photo, box)), { quick: true });
+          const crop = await this.straighten(await isolate(photo, shape));
+          text = await this.read(crop, { backIf: (first) => (back = looksLikeBack(first)) });
         } catch (err) {
           if (err instanceof RecognitionError) throw err;
           text = null;
         }
-        out.push(await this.cardFromText(text, null, { sourceIndex: index, box }));
+        sides.push({ photo: index, box: shape.box, text, back: back || looksLikeBack(text) });
       }
+    }
+
+    // Pairing only among cards found apart; a whole photo read as one card stays alone.
+    const apart = sides.map((s, i) => ({ s, i })).filter((x) => x.s.box !== null);
+    const pairs = pairSides(apart.map((x) => x.s)).map(([f, b]) => [apart[f].i, apart[b].i] as const);
+    const backOf = new Map(pairs.map(([f, b]) => [f, b]));
+    const paired = new Set(pairs.map(([, b]) => b));
+    // "Lone" makes sense only when a partner could have been in the scan:
+    // fronts and backs found in different photos. A scan of fronts only reads as before.
+    const canPair = apart.some((f) => !f.s.back && apart.some((b) => b.s.back && b.s.photo !== f.s.photo));
+
+    const out: ReadCard[] = [];
+    for (const [i, side] of sides.entries()) {
+      const where = { sourceIndex: side.photo, box: side.box };
+      if (!side.back) {
+        const b = backOf.get(i);
+        if (b !== undefined) {
+          const back = sides[b];
+          const card = await this.cardFromText(side.text, back.text, where);
+          if (back.box) card.item.backPhoto = { sourceIndex: back.photo, box: back.box };
+          out.push(card);
+        } else {
+          out.push(await this.cardFromText(side.text, null, where, { lone: canPair && side.box !== null }));
+        }
+        continue;
+      }
+      if (paired.has(i)) continue;
+      if (!canPair) {
+        // Backs only: each back is a card, read as a back.
+        out.push(await this.cardFromText(null, side.text, where));
+        continue;
+      }
+      // A back without its front becomes a card only with a trustworthy name on it.
+      if (parseCardText(null, side.text).player) out.push(await this.cardFromText(null, side.text, where, { lone: true }));
     }
     return out;
   }
@@ -325,15 +410,21 @@ export class FreeRecognizer implements Recognizer {
     }
   }
 
+  /**
+   * `lone`: one side of a card from a many-card scan that also had the other
+   * sides, left without its partner. It says so in the notes and always
+   * waits for the owner.
+   */
   private async cardFromText(
     front: OcrResult | null,
     back: OcrResult | null,
     where: { sourceIndex: number; box: Box | null },
+    opts: { lone?: boolean } = {},
   ): Promise<ReadCard> {
     const parsed = parseCardText(front, back);
     const readAnything = parsed.year != null || parsed.brand != null || parsed.cardNumber != null || parsed.player != null;
     if (!readAnything) {
-      const notes = back ? UNREAD_NOTE : `${UNREAD_NOTE} ${ADD_BACK_NOTE}`;
+      const notes = opts.lone ? `${ONE_SIDE_NOTE} ${UNREAD_NOTE}` : back ? UNREAD_NOTE : `${UNREAD_NOTE} ${ADD_BACK_NOTE}`;
       return { item: recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes }), names: [] };
     }
 
@@ -352,7 +443,7 @@ export class FreeRecognizer implements Recognizer {
     const found = key ? null : await this.findPlayer(parsed);
     const facts = found?.facts ?? null;
 
-    const notes = [...parsed.evidence];
+    const notes = opts.lone ? [ONE_SIDE_NOTE, ...parsed.evidence] : [...parsed.evidence];
     // 3. A team hint (not sure from the text alone) is written only when the
     // player's team list on Wikidata has it. A key card skipped step 2, so its
     // player is looked up here, and only when there is a hint to check.
@@ -427,7 +518,7 @@ export class FreeRecognizer implements Recognizer {
 
     const textConfidence = Math.max(front?.confidence ?? 0, back?.confidence ?? 0);
     const weak = textConfidence < 0.5 || item.year == null || item.cardNumber == null;
-    if (!back && weak) notes.push(ADD_BACK_NOTE);
+    if (!back && weak && !opts.lone) notes.push(ADD_BACK_NOTE);
     notes.push(FREE_NOTE);
     item.notes = notes.join(" ").slice(0, 600);
 
@@ -473,6 +564,7 @@ export class FreeRecognizer implements Recognizer {
       confidence = Math.min(confidence, CHECK_CONFIDENCE);
     }
     if (textConfidence < 0.5) confidence = Math.min(confidence, 0.6);
+    if (opts.lone) confidence = Math.min(confidence, CHECK_CONFIDENCE);
     // A reprint is never the valuable original: always let the owner check it.
     if (parsed.isReprint) {
       confidence = Math.min(confidence, 0.6);

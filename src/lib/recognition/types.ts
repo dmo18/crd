@@ -123,7 +123,14 @@ export const CERTAIN_FIELDS = ["sport", "year", "brand", "setName", "cardNumber"
 export type CertainField = (typeof CERTAIN_FIELDS)[number];
 export type FieldCertainty = Partial<Record<CertainField, "sure" | "unsure">>;
 
-export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence };
+/**
+ * Where the back of a card from a many-card scan was found, when the free
+ * reader paired it with its front (12R.7): the scan stores that part of the
+ * photo as the card's back. Like `catalog`, never part of the zod schema.
+ */
+export type BackPhoto = { sourceIndex: number; box: Box };
+
+export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence; backPhoto?: BackPhoto };
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;
 
 export const recognitionResultSchema = z.object({
