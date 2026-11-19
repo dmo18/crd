@@ -23,10 +23,10 @@ export const MAX_TOKENS = 32_000;
 const MIN_BOX_SIDE = 0.01;
 
 export const MESSAGES = {
-  keyRejected: "The AI key was rejected. Check the API key in settings.",
-  busy: "The AI service is busy. Try again in a minute.",
-  network: "Could not reach the AI service. Check the connection and try again.",
-  unreadable: "The AI could not read this photo. Try a sharper, well lit photo.",
+  keyRejected: "The paid reader key was rejected. Check the API key in settings.",
+  busy: "The paid reading service is busy. Try again in a minute.",
+  network: "Could not reach the paid reading service. Check the connection and try again.",
+  unreadable: "The reader could not read this photo. Try a sharper, well lit photo.",
   generic: "Something went wrong reading this photo. Try again.",
 } as const;
 
@@ -119,7 +119,7 @@ const itemProperties = {
         properties: {
           lowCents: nullableInt("Low end in whole US cents for one unit"),
           highCents: nullableInt("High end in whole US cents for one unit"),
-          basis: text("One sentence: AI estimate and the main value driver"),
+          basis: text("One sentence: estimate by the app and the main value driver"),
         },
         required: ["lowCents", "highCents", "basis"],
         additionalProperties: false,

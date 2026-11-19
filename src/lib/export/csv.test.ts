@@ -71,7 +71,7 @@ describe("itemsToCsv", () => {
     expect(at("Estimate low (USD)")).toBe("10.00");
     expect(at("Estimate high (USD)")).toBe("15.00");
     expect(at("Your value (USD)")).toBe("20.00");
-    expect(at("Value source")).toBe("manual");
+    expect(at("Value source")).toBe("Your value");
     expect(at("Added (ISO date)")).toBe("2026-03-04");
     expect(lines[1]).not.toContain("$");
   });

@@ -177,7 +177,7 @@ export function ItemForm({ item: given, create, locations = [], check = [] }: {
       <Group title="Value and count">
         {isBulk ? text("estCount", "Estimated number of cards", { inputMode: "numeric", max: 8 }) : null}
         {text("quantity", "How many you have", { inputMode: "numeric", max: 6 })}
-        <Field label="Your value" hint="Dollars for one. Leave empty to use the AI estimate." error={e.manualValue} htmlFor="f-manualValue">
+        <Field label="Your value" hint="Dollars for one. Leave empty to use the app's estimate." error={e.manualValue} htmlFor="f-manualValue">
           <input
             id="f-manualValue" name="manualValue" type="text" inputMode="decimal" maxLength={14}
             defaultValue={item.manualValueCents == null ? "" : (item.manualValueCents / 100).toFixed(2)}

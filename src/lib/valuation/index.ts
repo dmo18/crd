@@ -10,9 +10,9 @@ import { ValuationError, type PriceQuote, type PriceSource } from "./types";
 
 export const REVALUE_MESSAGES = {
   missing: "This item no longer exists.",
-  noValue: "The AI could not put a value on this one.",
+  noValue: "The reader could not put a value on this one.",
   freeMode: "Automatic estimates are off. Tap a sold listings link and enter the price you see.",
-  notSetUp: "AI estimates are not set up yet. Add the API key in settings.",
+  notSetUp: "Estimates from the app are not set up yet. Add the API key in settings.",
   generic: "Something went wrong getting a value. Try again.",
 } as const;
 

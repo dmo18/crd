@@ -1,4 +1,5 @@
 import type { Item } from "@/db/schema";
+import { valueSourceLabel } from "@/lib/items/labels";
 import { readRookie } from "@/lib/items/rookie";
 
 type Cell = string | number | boolean | Date | null | undefined;
@@ -54,7 +55,7 @@ const COLUMNS: Col[] = [
   { header: "Total value (USD)", get: (r) => dollars(unitCents(r) == null ? null : unitCents(r)! * r.quantity) },
   { header: "Estimate low (USD)", get: (r) => dollars(r.estLowCents) },
   { header: "Estimate high (USD)", get: (r) => dollars(r.estHighCents) },
-  { header: "Value source", get: (r) => text(r.manualValueCents != null ? "manual" : r.valueSource) },
+  { header: "Value source", get: (r) => text(valueSourceLabel(r.manualValueCents, r.valueSource)) },
   { header: "Your value (USD)", get: (r) => dollars(r.manualValueCents) },
   { header: "Confidence", get: (r) => raw(r.confidence == null ? "" : String(Math.round(r.confidence * 100) / 100)) },
   { header: "Notes", get: (r) => text(r.notes) },

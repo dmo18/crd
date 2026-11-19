@@ -14,6 +14,8 @@ export type ItemSummary = {
   valueCents: number | null;
   /** The version is "Not sure yet" and the owner has no figure: show "Choose the version to see a value". */
   waitingForVersion: boolean;
+  /** The figure is the one the owner typed (shown as "Your value"), not an estimate. */
+  ownersValue: boolean;
   lowCents: number | null;
   highCents: number | null;
   isRookie: boolean;
@@ -82,7 +84,9 @@ export function thumbsFor(itemIds: number[], db: Db = getDb()): Map<number, stri
 function summaryValue(r: Item) {
   const v = shownValue(r);
   const hide = r.versionState === "not_sure";
-  return { valueCents: v.cents, waitingForVersion: v.waitingForVersion, lowCents: hide ? null : r.estLowCents, highCents: hide ? null : r.estHighCents };
+  // The estimate range does not describe a figure the owner typed, so it is left out then.
+  const noRange = hide || v.ownersValue;
+  return { valueCents: v.cents, waitingForVersion: v.waitingForVersion, ownersValue: v.ownersValue, lowCents: noRange ? null : r.estLowCents, highCents: noRange ? null : r.estHighCents };
 }
 
 export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {

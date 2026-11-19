@@ -20,10 +20,10 @@ export const ITEM_OPEN = "<item_details>";
 export const ITEM_CLOSE = "</item_details>";
 
 export const VALUE_MESSAGES = {
-  keyRejected: "The AI key was rejected. Check the API key in settings.",
-  busy: "The AI service is busy. Try again in a minute.",
-  network: "Could not reach the AI service. Check the connection and try again.",
-  unusable: "The AI gave an answer that could not be used. Try again.",
+  keyRejected: "The paid reader key was rejected. Check the API key in settings.",
+  busy: "The paid reading service is busy. Try again in a minute.",
+  network: "Could not reach the paid reading service. Check the connection and try again.",
+  unusable: "The reader gave an answer that could not be used. Try again.",
   generic: "Something went wrong getting a value. Try again.",
 } as const;
 
@@ -34,7 +34,7 @@ Your job: give a realistic range of recent SOLD prices in whole US cents for ONE
 - Sealed product is priced as sealed, unopened product.
 - A bulk lot is priced as one lot, which is usually far less than the sum of single card prices.
 - Be conservative. Asking prices are higher than what things really sell for. Most 1986 to 1993 base cards are worth a few cents, and most bulk commons sell for very little.
-- basis is one plain sentence that says it is an AI estimate and names the main thing driving the value, for example "AI estimate based on typical sold prices for raw copies; the rookie status drives the value."
+- basis is one plain sentence that says it is an estimate by the app and names the main thing driving the value, for example "Estimate by the app based on typical sold prices for raw copies; the rookie status drives the value."
 - When you truly cannot say, return null for lowCents and highCents and explain why in basis.
 
 Safety
@@ -48,7 +48,7 @@ export const VALUE_JSON_SCHEMA = {
   properties: {
     lowCents: { type: ["integer", "null"], description: "Low end in whole US cents for one unit, or null" },
     highCents: { type: ["integer", "null"], description: "High end in whole US cents for one unit, or null" },
-    basis: { type: "string", description: "One sentence: AI estimate and the main value driver" },
+    basis: { type: "string", description: "One sentence: estimate by the app and the main value driver" },
   },
   required: ["lowCents", "highCents", "basis"],
   additionalProperties: false,
