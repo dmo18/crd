@@ -3,6 +3,7 @@ import path from "node:path";
 import sharp from "sharp";
 import type { RecognitionPhoto } from "@/lib/recognition/types";
 import type { OcrResult, TextReader } from "@/lib/free/ocr";
+import type { CardShape } from "@/lib/free/find-cards";
 
 /**
  * Card photo fixtures and their recorded text. The recording lets parsing
@@ -81,4 +82,27 @@ export async function readRealCard(id: RealCard, reader: TextReader): Promise<Re
 /** The recorded reader output for one of the owner's real cards. */
 export function recordedRealCard(id: RealCard): RecordedOcr {
   return JSON.parse(fs.readFileSync(realCardFiles(id).recording, "utf8")) as RecordedOcr;
+}
+
+/**
+ * The owner's many-cards try (12R.7): one photo of two fronts, one of their
+ * backs. The recording keeps the cards the finder found in each photo and
+ * what the real reader read on each card, in the order read.
+ */
+export const MULTI_PHOTOS = [path.join(REAL_DIR, "multi-fronts.jpg"), path.join(REAL_DIR, "multi-backs.jpg")] as const;
+export const MULTI_RECORDING = path.join(REAL_DIR, "multi.ocr.json");
+export type MultiRecording = { shapes: CardShape[][]; reads: OcrResult[] };
+
+export async function multiPhotos(): Promise<RecognitionPhoto[]> {
+  const out: RecognitionPhoto[] = [];
+  for (const file of MULTI_PHOTOS) {
+    const data = fs.readFileSync(file);
+    const meta = await sharp(data).metadata();
+    out.push({ role: "source", data, width: meta.width ?? 0, height: meta.height ?? 0 });
+  }
+  return out;
+}
+
+export function recordedMulti(): MultiRecording {
+  return JSON.parse(fs.readFileSync(MULTI_RECORDING, "utf8")) as MultiRecording;
 }
