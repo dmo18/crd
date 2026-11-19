@@ -38,6 +38,15 @@ const TWICE_TYPICAL = 1.6;
 const MIN_PROFILE_SPREAD = 3;
 /** Sobel strength (0 to about 1000) that counts as an edge. */
 const EDGE_LEVEL = 40;
+/** Unevenly lit table: softening (pixels of the work picture), fitting rounds, spread allowed, every how many pixels fitted. */
+const SHADE_BLUR = 2;
+const SHADE_ROUNDS = 3;
+const SHADE_SPREAD = 1.5;
+const SHADE_STEP = 2;
+/** How far (work picture pixels) a joined mask is shrunk to part cards lying close. */
+/** A card has at least this many times the detail of the bare table. */
+const PRINT_DETAIL = 2;
+const SHRINK_STEPS = [0, 3, 6, 9] as const;
 const DECODE_OPTIONS = { failOn: "error", limitInputPixels: 30_000_000 } as const;
 
 type PixelBox = { x0: number; y0: number; x1: number; y1: number; count: number };
@@ -187,6 +196,8 @@ type Shape = {
   fill: number;
   /** Short side over long side of that rectangle. */
   aspect: number;
+  /** The four corners of that rectangle, in pixels of the work picture. */
+  corners: [number, number][];
 };
 
 /**
@@ -222,7 +233,10 @@ function shapeOf(b: Blob, labels: Int32Array, width: number): Shape {
   let tiltDeg = axisDeg;
   while (tiltDeg > 45) tiltDeg -= 90;
   while (tiltDeg <= -45) tiltDeg += 90;
-  return { axisDeg, tiltDeg, fill: n / (lu * lv), aspect: Math.min(lu, lv) / Math.max(lu, lv) };
+  // Pixel centres span u0 to u1: the rectangle reaches half a pixel further each way.
+  const corner = (u: number, v: number): [number, number] => [u * c - v * sn + 0.5, u * sn + v * c + 0.5];
+  const corners = [corner(u0 - 0.5, v0 - 0.5), corner(u1 + 0.5, v0 - 0.5), corner(u1 + 0.5, v1 + 0.5), corner(u0 - 0.5, v1 + 0.5)];
+  return { axisDeg, tiltDeg, fill: n / (lu * lv), aspect: Math.min(lu, lv) / Math.max(lu, lv), corners };
 }
 
 /** Mean brightness per column (or row) inside a rectangle of the photo. */
@@ -395,7 +409,7 @@ function padAndClamp(b: Box): Box {
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
-type Found = { box: PixelBox; tiltDeg: number; single: boolean };
+type Found = { box: PixelBox; tiltDeg: number; single: boolean; corners?: [number, number][] };
 
 /** Card shaped blobs in a mask, with touching cards cut apart. */
 function cardsInMask(mask: Uint8Array, px: Buffer, width: number, height: number): Found[] {
@@ -417,7 +431,8 @@ function cardsInMask(mask: Uint8Array, px: Buffer, width: number, height: number
     if (fill < MIN_FILL) continue;
     const aspect = tilted ? shape.aspect : Math.min(bw, bh) / Math.max(bw, bh);
     if (!tilted && upright >= MIN_FILL) multi.push({ blob: c, aspect });
-    if (share <= MAX_AREA && cardLike(aspect)) singles.push({ box: c, tiltDeg: shape.tiltDeg, single: true });
+    // A tilted card's own rectangle; an upright one is its box.
+    if (share <= MAX_AREA && cardLike(aspect)) singles.push({ box: c, tiltDeg: shape.tiltDeg, single: true, corners: tilted ? shape.corners : undefined });
   }
 
   // Touching cards make one blob. Cut it when its pieces repeat like a row or
@@ -511,14 +526,186 @@ async function workImage(image: Buffer): Promise<{ data: Buffer; width: number; 
   return { data, width: info.width, height: info.height };
 }
 
+/** Solves a small square linear system (Gauss with pivoting); zeros when it is singular. */
+function solve(a: number[][], b: number[]): number[] {
+  const n = b.length;
+  const m = a.map((row, i) => [...row, b[i]]);
+  for (let i = 0; i < n; i++) {
+    let p = i;
+    for (let k = i + 1; k < n; k++) if (Math.abs(m[k][i]) > Math.abs(m[p][i])) p = k;
+    [m[i], m[p]] = [m[p], m[i]];
+    const d = m[i][i];
+    if (Math.abs(d) < 1e-12) return new Array<number>(n).fill(0);
+    for (let k = i; k <= n; k++) m[i][k] /= d;
+    for (let r = 0; r < n; r++) {
+      if (r === i) continue;
+      const f = m[r][i];
+      if (f) for (let k = i; k <= n; k++) m[r][k] -= f * m[i][k];
+    }
+  }
+  return m.map((row) => row[n]);
+}
+
+/** Terms of a smooth (second order) surface over the picture: lighting that falls off across a table. */
+function terms(x: number, y: number): number[] {
+  return [1, x, y, x * x, x * y, y * y];
+}
+
+/**
+ * For a table lit unevenly (bright near a window, dark across the photo),
+ * where one table colour does not fit the whole edge: the table's colour is
+ * fitted as a smooth surface, first to the outer edge, then again to every
+ * pixel that fits it, and a pixel is card when it differs clearly from that
+ * surface. The picture is softened first so the table's grain does not count.
+ * Holes inside a card (a dark photo on the card) are filled.
+ */
+async function shadedMask(px: Buffer, width: number, height: number): Promise<Uint8Array> {
+  const soft = await sharp(px, { raw: { width, height, channels: 3 } }).blur(SHADE_BLUR).raw().toBuffer();
+  const n = width * height;
+  const band = Math.max(1, Math.round(Math.min(width, height) * BORDER_FRACTION));
+  let use = new Uint8Array(n);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) if (y < band || y >= height - band || x < band || x >= width - band) use[y * width + x] = 1;
+  }
+  // Per pixel: how much brighter than the table (shade: darker, never card) and how different in colour.
+  const lift = new Float64Array(n);
+  const tint = new Float64Array(n);
+  let liftMax = MIN_COLOR_DISTANCE;
+  let tintMax = MIN_COLOR_DISTANCE;
+  for (let round = 0; round < SHADE_ROUNDS; round++) {
+    const fits = [0, 1, 2].map((ch) => {
+      const a = Array.from({ length: 6 }, () => new Array<number>(6).fill(0));
+      const b = new Array<number>(6).fill(0);
+      for (let p = 0; p < n; p += SHADE_STEP) {
+        if (!use[p]) continue;
+        const t = terms((p % width) / width, Math.floor(p / width) / height);
+        const v = soft[p * 3 + ch];
+        for (let i = 0; i < 6; i++) {
+          b[i] += t[i] * v;
+          for (let j = 0; j < 6; j++) a[i][j] += t[i] * t[j];
+        }
+      }
+      return solve(a, b);
+    });
+    const lifts: number[] = [];
+    const tints: number[] = [];
+    for (let p = 0; p < n; p++) {
+      const t = terms((p % width) / width, Math.floor(p / width) / height);
+      const d = [0, 0, 0];
+      for (let ch = 0; ch < 3; ch++) {
+        let model = 0;
+        for (let i = 0; i < 6; i++) model += fits[ch][i] * t[i];
+        d[ch] = soft[p * 3 + ch] - model;
+      }
+      const l = (d[0] + d[1] + d[2]) / 3;
+      lift[p] = l;
+      tint[p] = Math.hypot(d[0] - l, d[1] - l, d[2] - l);
+      if (use[p]) {
+        lifts.push(Math.abs(l));
+        tints.push(tint[p]);
+      }
+    }
+    const p90 = (v: number[]) => v.sort((x, y) => x - y)[Math.floor(v.length * 0.9)] ?? 0;
+    liftMax = Math.max(MIN_COLOR_DISTANCE, SHADE_SPREAD * p90(lifts));
+    tintMax = Math.max(MIN_COLOR_DISTANCE, SHADE_SPREAD * p90(tints));
+    use = new Uint8Array(n);
+    for (let p = 0; p < n; p++) if (Math.abs(lift[p]) < liftMax / 2 && tint[p] < tintMax / 2) use[p] = 1;
+  }
+  const mask = new Uint8Array(n);
+  for (let p = 0; p < n; p++) if (lift[p] > liftMax || tint[p] > tintMax) mask[p] = 1;
+  return clean(fillHoles(clean(mask, width, height), width, height), width, height);
+}
+
 async function findCards(work: { data: Buffer; width: number; height: number }): Promise<Found[]> {
   const { data, width, height } = work;
   let found = cardsInMask(clean(foregroundMask(data, width, height), width, height), data, width, height);
   if (found.length === 0) found = cardsInMask(await edgeMask(data, width, height), data, width, height);
+  if (found.length === 0) found = withDetail(apart(await shadedMask(data, width, height), data, width, height), data, width, height);
   return found;
 }
 
-export async function findCardBoxes(image: Buffer): Promise<Box[]> {
+/** Mean brightness change between neighbouring pixels inside a box (print has much, bare table and glare little). */
+function detail(px: Buffer, width: number, b: { x0: number; y0: number; x1: number; y1: number }): number {
+  let sum = 0;
+  let count = 0;
+  const lum = (i: number) => px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+  for (let y = b.y0; y < b.y1; y++) {
+    for (let x = b.x0; x < b.x1; x++) {
+      const i = (y * width + x) * 3;
+      sum += Math.abs(lum(i + 3) - lum(i)) + Math.abs(lum(i + width * 3) - lum(i));
+      count++;
+    }
+  }
+  return count ? sum / count : 0;
+}
+
+/**
+ * Only blobs with print on them: a patch of glare on the table differs from
+ * the table in brightness but has no more detail than the table itself.
+ */
+function withDetail(found: Found[], px: Buffer, width: number, height: number): Found[] {
+  const band = Math.max(2, Math.round(Math.min(width, height) * BORDER_FRACTION));
+  const table = median([
+    detail(px, width, { x0: 0, y0: 0, x1: width - 1, y1: band }),
+    detail(px, width, { x0: 0, y0: height - 1 - band, x1: width - 1, y1: height - 1 }),
+    detail(px, width, { x0: 0, y0: 0, x1: band, y1: height - 1 }),
+    detail(px, width, { x0: width - 1 - band, y0: 0, x1: width - 1, y1: height - 1 }),
+  ]);
+  return found.filter((f) => detail(px, width, f.box) >= PRINT_DETAIL * table);
+}
+
+/** A found card grown back by `r` pixels on every side (after the mask was shrunk by r). */
+function grown(f: Found, r: number, width: number, height: number): Found {
+  if (r === 0) return f;
+  const b = f.box;
+  const box = { ...b, x0: Math.max(0, b.x0 - r), y0: Math.max(0, b.y0 - r), x1: Math.min(width - 1, b.x1 + r), y1: Math.min(height - 1, b.y1 + r) };
+  let corners = f.corners;
+  if (corners) {
+    const cx = corners.reduce((s, c) => s + c[0], 0) / 4;
+    const cy = corners.reduce((s, c) => s + c[1], 0) / 4;
+    corners = corners.map(([x, y]): [number, number] => {
+      const d = Math.hypot(x - cx, y - cy) || 1;
+      // A corner moves out along the diagonal: r along each side is r times root 2 there.
+      return [x + ((x - cx) / d) * r * Math.SQRT2, y + ((y - cy) / d) * r * Math.SQRT2];
+    });
+  }
+  return { ...f, box, corners };
+}
+
+/**
+ * Cards lying close together can join in the mask through a thin bridge
+ * (soft light between them). The mask is shrunk step by step until it falls
+ * apart into card shaped pieces; each piece is grown back by the same amount.
+ * The step that finds the most card area wins; the least shrinking on a tie.
+ */
+function apart(mask: Uint8Array, px: Buffer, width: number, height: number): Found[] {
+  let best: Found[] = [];
+  let bestArea = 0;
+  for (const r of SHRINK_STEPS) {
+    const m = r === 0 ? mask : morph(mask, width, height, r, false);
+    const found = cardsInMask(m, px, width, height).map((f) => grown(f, r, width, height));
+    const covered = found.reduce((s, f) => s + (f.box.x1 - f.box.x0 + 1) * (f.box.y1 - f.box.y0 + 1), 0);
+    if (covered > bestArea * 1.05) {
+      best = found;
+      bestArea = covered;
+    }
+  }
+  return best;
+}
+
+/**
+ * One card found in a photo: `box` the upright box around it (with a small
+ * margin), `outline` the card's own four corners (fractions of the photo),
+ * which differ from the box's corners when the card lies turned.
+ */
+export type CardShape = { box: Box; outline: [number, number][] };
+
+function boxCorners(b: Box): [number, number][] {
+  return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]];
+}
+
+/** The cards in a photo of several cards, in reading order, or [] for a close-up of one card or no clear cards. */
+export async function findCardShapes(image: Buffer): Promise<CardShape[]> {
   const work = await workImage(image);
   if (!work) return [];
   const { width, height } = work;
@@ -528,8 +715,25 @@ export async function findCardBoxes(image: Buffer): Promise<Box[]> {
   // One card filling much of the photo is a close-up: the caller reads the whole photo.
   if (found.length === 1 && found[0].single && area(toBox(found[0].box)) >= SINGLE_CARD_AREA) return [];
 
-  const merged = mergeOverlapping(found.map((f) => padAndClamp(toBox(f.box))));
-  return readingOrder(merged).slice(0, MAX_BOXES);
+  const shapes = found.map((f): CardShape => {
+    const box = padAndClamp(toBox(f.box));
+    const outline = f.corners
+      ? f.corners.map(([x, y]): [number, number] => [x / width, y / height])
+      : boxCorners(box);
+    return { box, outline };
+  });
+  // Boxes that overlap much are one card seen twice: one box around both, its own outline.
+  const merged = mergeOverlapping(shapes.map((s) => s.box));
+  const out = merged.map((box): CardShape => {
+    const same = shapes.filter((s) => s.box.x === box.x && s.box.y === box.y && s.box.w === box.w && s.box.h === box.h);
+    return same.length === 1 ? same[0] : { box, outline: boxCorners(box) };
+  });
+  const order = readingOrder(out.map((s) => s.box));
+  return order.map((b) => out.find((s) => s.box === b)!).slice(0, MAX_BOXES);
+}
+
+export async function findCardBoxes(image: Buffer): Promise<Box[]> {
+  return (await findCardShapes(image)).map((s) => s.box);
 }
 
 /**
