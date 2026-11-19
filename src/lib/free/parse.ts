@@ -2003,8 +2003,12 @@ function nameRuns(l: Line): NameRead[] {
 
 /** The back's heading: in the top part of the card, in type at least as tall as the back's usual line. */
 const HEADING_TOP = 0.3;
+/** Team nicknames that are also the name of a sport. */
+const SPORT_NAME_NICKS = /\bAthletics$/;
 /** A heading this much taller than the usual line is large type: it stands against a different front name. */
 const HEADING_LARGE = 1.25;
+/** A front name read without its space keeps at most this many letters of its first name (misread ones). */
+const BANNER_PREFIX = 3;
 
 function middle(values: number[]): number {
   if (values.length === 0) return 0;
@@ -2208,6 +2212,35 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
       if (chosen) break;
     }
   }
+  // "NMHARDAWAY": the front name without its space and with its first name
+  // misread (tiny or foil print, 12R.7). The back's name in large type (a
+  // banner, wherever it sits on the back) whose surname ends the front's word
+  // gives the whole name. Two places agree on the surname only, so the name
+  // stays unsure.
+  let fromBanner = false;
+  if (!chosen && glued.length > 0) {
+    const usual = middle(back.filter((l) => l.raw.replace(/[^A-Za-z0-9]/g, "").length >= 3).map((l) => l.box.h));
+    const banners = back
+      .filter((l) => usual > 0 && l.box.h >= HEADING_LARGE * usual && !isSentence(l) && !labelLine(l))
+      .flatMap((l) => nameRuns(l))
+      .filter((n) => n.words.length >= 2);
+    for (const g of glued) {
+      const word = g.tokens[0].replace(/[^A-Za-z]/g, "").toUpperCase();
+      const hit = banners.find((b) => {
+        const sur = b.words[b.words.length - 1].toUpperCase().replace(/[^A-Z]/g, "");
+        return sur.length >= 5 && word.endsWith(sur) && word.length - sur.length <= BANNER_PREFIX;
+      });
+      if (hit) {
+        chosen = hit;
+        agree = true;
+        suffix = hit.suffix;
+        fromBanner = true;
+        nameLines.add(g);
+        nameLines.add(hit.line);
+        break;
+      }
+    }
+  }
   if (!chosen && frontReads.length > 0) {
     // Front and back name different people: a name header with a position
     // ("CAL RIPKEN, JR. SS") on the back beats the front; a large heading
@@ -2233,7 +2266,7 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
 
   const first = checkFirstName(chosen.words, [...front, ...back]);
   if (first === null) return { player: null, names: [display(chosen, suffix)], agree: false, keyMatch: null, hint, header, nameLines };
-  const corrected = first !== chosen.words[0];
+  const corrected = first !== chosen.words[0] || fromBanner;
   if (corrected) chosen = { ...chosen, words: [first, ...chosen.words.slice(1)] };
   let player = display(chosen, suffix);
   let keyMatch: string | null = null;
@@ -2624,11 +2657,16 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   } else if (team || hint) {
     const h = (team ?? hint)!;
     // "COWBOYS" with the baseball position SS: signs that disagree, no hint.
+    // "Athletics" is also the name of a sport (track and field, on Olympic
+    // and other multi-sport cards): without the team's city or a sign of
+    // baseball it stays a hint but says nothing about the sport, so it never
+    // makes the card a baseball card (12R.7).
+    const sportName = SPORT_NAME_NICKS.test(h.team) && !h.city && !((votes.get(h.sport ?? "other") ?? 0) > 0);
     if (!h.ambiguous && h.sport && !(pos?.sport && pos.sport !== h.sport)) {
       out.teamHint = h.team;
       out.teamHintSport = h.sport;
       // A hint says half as much about the sport as a team read for sure.
-      vote(votes, h.sport, 3 * FUZZY_WEIGHT);
+      if (!sportName) vote(votes, h.sport, 3 * FUZZY_WEIGHT);
       ev.push(`Maybe team ${h.team} (not sure, check it)`);
     } else if (h.ambiguous) {
       ev.push(`Read team name ${h.team}, but it is used in more than one sport`);
