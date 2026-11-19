@@ -14,6 +14,16 @@ export async function register() {
       log.warn("sign_in_address_unknown", { message: "Sign-in limits cannot tell visitors apart. Set CLIENT_IP_HEADER or TRUST_PROXY_HOPS." });
     }
     log.info("server_started", { alerts: alertChannels(e).join(",") || "off" });
+    // One pass at every start: items without a value get the built-in guide price,
+    // guide prices follow table changes. Idempotent; never touches the owner's values.
+    try {
+      const { fillGuidePrices } = await import("@/lib/valuation/guide/apply");
+      const changed = fillGuidePrices();
+      if (changed > 0) log.info("guide_prices_filled", { changed });
+    } catch (err) {
+      const { errorKind } = await import("@/lib/log");
+      log.warn("guide_fill_failed", { error: errorKind(err) });
+    }
   } catch {
     // Bad settings are reported clearly by the first request that needs them.
   }

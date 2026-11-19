@@ -145,7 +145,10 @@ describe("answering the serial question", () => {
     expect(await actions.serialAnswerAction(empty, form({ id, answer: "yes" }))).toEqual({ message: null });
     const after = get(id);
     expect(after).toMatchObject({ serialCopy: "045", serialEdition: "100", serialNumber: "045/100", serialSuggested: null });
-    expect({ ...after, ...{ serialCopy: null, serialEdition: null, serialNumber: null, updatedAt: null } }).toEqual({ ...before, serialSuggested: null, updatedAt: null });
+    // RULE CHANGE (S2): a saved answer also refreshes the built-in guide price, which a serial number moves.
+    expect(after.valueSource).toBe("price_guide");
+    const guide = { estLowCents: null, estHighCents: null, estValueCents: null, valueSource: null, valueBasis: null, valuedAt: null };
+    expect({ ...after, ...{ serialCopy: null, serialEdition: null, serialNumber: null, updatedAt: null }, ...guide }).toEqual({ ...before, serialSuggested: null, updatedAt: null, ...guide });
     expect(audits()).toContain("serial_confirmed");
   });
 

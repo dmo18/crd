@@ -1,4 +1,4 @@
-import { and, asc, gte, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { collectionSnapshots, items } from "@/db/schema";
 import { liveItem } from "@/lib/items/live";
@@ -24,6 +24,30 @@ export function collectionTotals(db: Db = getDb()): { totalValueCents: number; i
     itemCount: Number(row?.itemCount ?? 0),
     unitCount: Number(row?.unitCount ?? 0),
   };
+}
+
+export type ValueSplit = {
+  /** From the owner's own values. */
+  ownCents: number;
+  /** From the built-in price guide (rough). */
+  guideCents: number;
+  /** From any other estimate (older estimates, sample data). */
+  otherCents: number;
+};
+
+/**
+ * How the collection total splits by where each value came from. Uses the
+ * same rule as collectionTotals, so the three parts always add up to its total.
+ */
+export function valueSplit(db: Db = getDb()): ValueSplit {
+  const own = isNotNull(items.manualValueCents);
+  const guide = and(isNull(items.manualValueCents), eq(items.valueSource, "price_guide"));
+  const row = db.select({
+    ownCents: sql<number>`coalesce(sum(case when ${own} then ${items.manualValueCents} * ${items.quantity} else 0 end), 0)`,
+    guideCents: sql<number>`coalesce(sum(case when ${guide} then coalesce(${items.estValueCents}, 0) * ${items.quantity} else 0 end), 0)`,
+    otherCents: sql<number>`coalesce(sum(case when ${own} or (${guide}) then 0 else coalesce(${items.estValueCents}, 0) * ${items.quantity} end), 0)`,
+  }).from(items).where(liveItem).get();
+  return { ownCents: Number(row?.ownCents ?? 0), guideCents: Number(row?.guideCents ?? 0), otherCents: Number(row?.otherCents ?? 0) };
 }
 
 /** Saves today's totals (UTC day). A second call on the same day replaces the row. */

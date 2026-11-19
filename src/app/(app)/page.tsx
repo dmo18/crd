@@ -8,7 +8,7 @@ import { requireOwner } from "@/lib/auth/guard";
 import { decadeBreakdown, highlights, kindBreakdown, recentItems, topItems } from "@/lib/items/stats";
 import { formatCents } from "@/lib/money";
 import { summarize } from "@/lib/scans/view";
-import { collectionTotals, getSnapshots, recordSnapshot } from "@/lib/valuation/snapshots";
+import { collectionTotals, getSnapshots, recordSnapshot, valueSplit } from "@/lib/valuation/snapshots";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +44,7 @@ export default async function Home() {
   }
 
   const hl = highlights();
+  const split = valueSplit();
   const mode = recognitionMode();
   const kinds = kindBreakdown();
   const snapshots = getSnapshots(90);
@@ -69,7 +70,14 @@ export default async function Home() {
         <p className="text-sm text-muted">
           {plural(totals.itemCount, "item", "items")} · {plural(totals.unitCount, "card and product", "cards and products")}
         </p>
-        {mode === "sample" ? <Notice tone="warn">These are sample cards for trying the app.</Notice> : null}
+        {split.guideCents > 0 ? (
+          <p className="text-sm">
+            Your own values: <span className="tabular font-semibold">{formatCents(split.ownCents)}</span>
+            {" · "}Price guide (rough): <span className="tabular font-semibold">{formatCents(split.guideCents)}</span>
+            {split.otherCents > 0 ? <>{" · "}Other estimates: <span className="tabular font-semibold">{formatCents(split.otherCents)}</span></> : null}
+          </p>
+        ) : null}
+        {mode === "sample" ?<Notice tone="warn">These are sample cards for trying the app.</Notice> : null}
         {mode === "free" && hl.noValue > 0 ? (
           <Notice tone="accent">
             <Link href="/items?value=none&sort=newest" className="flex min-h-11 items-center font-semibold">

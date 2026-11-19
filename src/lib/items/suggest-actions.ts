@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auditThisRequest } from "@/lib/audit/request";
 import { requireOwner } from "@/lib/auth/guard";
 import { ITEM_GONE, answerRookie, answerSerial, type SerialAnswer } from "./suggest";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 
 export type AskState = { message: string | null };
 
@@ -12,6 +13,7 @@ const idSchema = z.coerce.number().int().positive().max(2_000_000_000);
 const answerSchema = z.enum(["yes", "fix", "no"]);
 
 function refresh(id: number) {
+  refreshGuideQuietly(id);
   revalidatePath(`/items/${id}`);
   revalidatePath("/items");
   revalidatePath("/review");

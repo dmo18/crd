@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { items, playerFacts, valuations, type Item } from "@/db/schema";
+import { collectionTotals, valueSplit } from "../snapshots";
 import { fillGuidePrices, GUIDE_MESSAGES, refreshGuidePrice } from "./apply";
 
 let db: Db;
@@ -65,6 +66,20 @@ describe("saving guide prices", () => {
     fillGuidePrices(db, NOW);
     expect(get(a.id).valueBasis).toMatch(/Hall of Fame player/);
     expect(get(a.id).estHighCents!).toBeGreaterThan(get(b.id).estHighCents!);
+  });
+
+  it("splits the Home total into the owner's values, guide values and other estimates", () => {
+    add({ year: 1989, brand: "Upper Deck", player: "Ken Griffey Jr.", cardNumber: "1", quantity: 2 });
+    add({ year: 1990, brand: "Donruss", player: "Joe", cardNumber: "5", manualValueCents: 1000, quantity: 3 });
+    add({ estValueCents: 700, valueSource: "ai_estimate" });
+    add({ estValueCents: 999, valueSource: "price_guide", manualValueCents: 50 });
+    add({ estValueCents: 4000, valueSource: "price_guide", deletedAt: NOW });
+    fillGuidePrices(db, NOW);
+    const guideEach = get(1).estValueCents!;
+    expect(guideEach).toBeGreaterThan(4000);
+    const split = valueSplit(db);
+    expect(split).toEqual({ ownCents: 3050, guideCents: guideEach * 2, otherCents: 700 });
+    expect(split.ownCents + split.guideCents + split.otherCents).toBe(collectionTotals(db).totalValueCents);
   });
 
   it("leaves items in Recently deleted alone", () => {

@@ -15,7 +15,7 @@ const blank: GuideFields = {
   productType: null, estCount: null,
 };
 const card = (f: Partial<GuideFields>) => ({ ...blank, ...f });
-const DASHES = /[–—]/;
+const DASHES = new RegExp("[\\u2013\\u2014]");
 
 function ok(item: GuideFields, facts = {}) {
   const p = guidePrice(item, facts);

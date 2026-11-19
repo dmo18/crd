@@ -12,6 +12,7 @@ import { dismissCandidates, lookUpAgain, NOT_ON_LIST, pickCandidate, takeCatalog
 import { keepApart, mergeInto } from "./duplicates";
 import { deleteFailedScans } from "./remove";
 import { confirmItem, deleteItem } from "./update";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 
 const idSchema = z.coerce.number().int().positive().max(2_000_000_000);
 /** The candidate is chosen by its place in the list the server stored, never by its fields. */
@@ -35,6 +36,7 @@ export async function mergeDuplicateAction(formData: FormData): Promise<void> {
   const label = `${itemLabel(source.data)} into ${itemLabel(target.data)}`;
   // The server decides again whether these two may be combined; the form only names them.
   const result = mergeInto(source.data, target.data);
+  if (result.ok) refreshGuideQuietly(result.targetId);
   refresh();
   if (!result.ok) redirect(`/review?merge=${result.problem}`);
   const photos = result.movedPhotos === 0 ? "" : `, ${result.movedPhotos} ${result.movedPhotos === 1 ? "photo" : "photos"} moved`;
@@ -98,6 +100,7 @@ export async function pickCandidateAction(_prev: CatalogActionState, formData: F
   if (!sourceId.success) return { message: NOT_ON_LIST };
   const label = itemLabel(id.data);
   const r = pickCandidate(id.data, position.data, sourceId.data);
+  refreshGuideQuietly(id.data);
   if (!r.ok) return { message: r.error };
   await auditThisRequest("catalog_card_linked", "ok", `${label} is ${r.line}`);
   refresh();
@@ -111,6 +114,7 @@ export async function catalogValuesAction(formData: FormData): Promise<void> {
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) return;
   const r = takeCatalogValues(id.data, { confirm: true });
+  refreshGuideQuietly(id.data);
   if (r.ok && r.replaced.length > 0) {
     await auditThisRequest("catalog_card_linked", "ok", `${itemLabel(id.data)}, used the catalog's values`);
   }
