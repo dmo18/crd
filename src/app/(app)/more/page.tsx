@@ -26,6 +26,26 @@ export default async function MorePage() {
       </Card>
 
       <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Add a card</h2>
+        <p className="text-sm text-muted">Search the card catalog by words, or type a card in yourself.</p>
+        <LinkButton href="/search" variant="secondary">Search cards</LinkButton>
+        <LinkButton href="/items/new" variant="secondary">Add by hand</LinkButton>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Manage records</h2>
+        <p className="text-sm text-muted">Pick many cards and fix, move, check or delete them in one go.</p>
+        <LinkButton href="/manage" variant="secondary">Select and edit</LinkButton>
+        <LinkButton href="/manage/deleted" variant="secondary">Recently deleted</LinkButton>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Scan activity</h2>
+        <p className="text-sm text-muted">What was read, what is waiting and what did not work.</p>
+        <LinkButton href="/scans" variant="secondary">See scan activity</LinkButton>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Export</h2>
         <a
           href="/api/export" download
@@ -34,6 +54,12 @@ export default async function MorePage() {
           Download spreadsheet (CSV)
         </a>
         <p className="text-sm text-muted">Opens in Excel, Numbers or Google Sheets. Good for insurance records.</p>
+      </Card>
+
+      <Card className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold">Connections</h2>
+        <p className="text-sm text-muted">Outside sources the app uses for card facts. Test them, switch them off, and see how many calls were made.</p>
+        <LinkButton href="/more/connections" variant="secondary">See connections</LinkButton>
       </Card>
 
       <Card className="flex flex-col gap-2">

@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1990 Topps 414 Thomas",
+  "limit": 20,
+  "sport": "Baseball",
+  "year": "1990"
+ },
+ "elapsed_ms": 1158,
+ "status": 200,
+ "bytes": 2707,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1990 Topps 414 Thomas\",\n  \"count\": 4,\n  \"results\": [\n    {\n      \"card_id\": \"551963\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps Tiffany\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"414\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Frank Thomas\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-tiffany-2131/base-set-9181/414-frank-thomas-551963\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/551963.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_cf7313bc810d\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"414\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Frank Thomas\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-ebay_15c7ea716b/base-set-ebay_f85e7fbda5/414-frank-thomas-ebay_cf7313bc810d\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_cf7313bc810d.jpg\"\n    },\n    {\n      \"card_id\": \"551111\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"414\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"FRANK THOMAS NO NAME ON FRONT\",\n          \"team_name\": \"\"\n        },\n        {\n          \"subject_name\": \"Frank Thomas\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/414-frank-thomas-no-name-on-front-551111\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/551111.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_5f183b4935db\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"1990 Topps\",\n      \"card_number\": \"414\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Frank Thomas\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card, Autographed, HOF, RC, Auto\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-ebay_15c7ea716b/1990-topps-ebay_89d34e37ce/414-frank-thomas-ebay_5f183b4935db\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_5f183b4935db.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

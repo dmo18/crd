@@ -1,6 +1,7 @@
-import { desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { ITEM_KINDS, items, type Item, type ItemKind } from "@/db/schema";
+import { liveItem } from "./live";
 
 /** Per-unit value: the owner's figure wins, then the estimate, else 0. */
 const unitValue = sql`coalesce(${items.manualValueCents}, ${items.estValueCents}, 0)`;
@@ -18,6 +19,7 @@ export function kindBreakdown(db: Db = getDb()): KindStat[] {
       valueCents: sql<number>`coalesce(sum(${unitValue} * ${items.quantity}), 0)`,
     })
     .from(items)
+    .where(liveItem)
     .groupBy(items.kind)
     .all();
   return ITEM_KINDS.map((kind) => {
@@ -31,7 +33,7 @@ export function topItems(limit: number, db: Db = getDb()): Item[] {
   return db
     .select()
     .from(items)
-    .where(sql`${unitValueOrNull} is not null`)
+    .where(and(liveItem, sql`${unitValueOrNull} is not null`))
     .orderBy(desc(unitValueOrNull), desc(items.id))
     .limit(limit)
     .all();
@@ -57,6 +59,7 @@ export function highlights(db: Db = getDb()): Highlights {
       sampleValued: sql<number>`coalesce(sum(${isNull(items.manualValueCents)} and ${eq(items.valueSource, "sample")}), 0)`,
     })
     .from(items)
+    .where(liveItem)
     .get();
   return {
     rookies: Number(r?.rookies ?? 0),
@@ -80,6 +83,7 @@ export function decadeBreakdown(db: Db = getDb()): DecadeStat[] {
       valueCents: sql<number>`coalesce(sum(${unitValue} * ${items.quantity}), 0)`,
     })
     .from(items)
+    .where(liveItem)
     .groupBy(decade)
     .orderBy(sql`${decade} is null`, decade)
     .all();
@@ -91,5 +95,5 @@ export function decadeBreakdown(db: Db = getDb()): DecadeStat[] {
 }
 
 export function recentItems(limit: number, db: Db = getDb()): Item[] {
-  return db.select().from(items).orderBy(desc(items.createdAt), desc(items.id)).limit(limit).all();
+  return db.select().from(items).where(liveItem).orderBy(desc(items.createdAt), desc(items.id)).limit(limit).all();
 }

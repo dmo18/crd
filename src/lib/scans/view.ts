@@ -1,7 +1,8 @@
-import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, lt, or } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, type Item, type Scan } from "@/db/schema";
-import { effectiveValueCents } from "@/lib/money";
+import { liveItem } from "@/lib/items/live";
+import { shownValue } from "@/lib/items/value-line";
 
 export type ItemSummary = {
   id: number;
@@ -11,6 +12,8 @@ export type ItemSummary = {
   confidence: number | null;
   quantity: number;
   valueCents: number | null;
+  /** The version is "Not sure yet" and the owner has no figure: show "Choose the version to see a value". */
+  waitingForVersion: boolean;
   lowCents: number | null;
   highCents: number | null;
   isRookie: boolean;
@@ -25,6 +28,8 @@ export type ScanView = {
   status: Scan["status"];
   error: string | null;
   itemCount: number;
+  /** Items of this scan that are in Recently deleted (they are not in `items`). */
+  inBin: number;
   createdAt: number;
   /** When processing began (ms), or null while it waits in line. */
   startedAt: number | null;
@@ -34,6 +39,16 @@ export type ScanView = {
   serverTime: number;
   items: ItemSummary[];
 };
+
+/** How many items of each scan are in Recently deleted. Reads deleted rows on purpose (scan activity says so). */
+function binCounts(scanIds: number[], db: Db): Map<number, number> {
+  const out = new Map<number, number>();
+  if (scanIds.length === 0) return out;
+  const rows = db.select({ scanId: items.scanId, n: count() }).from(items)
+    .where(and(inArray(items.scanId, scanIds), isNotNull(items.deletedAt))).groupBy(items.scanId).all();
+  for (const r of rows) if (r.scanId != null) out.set(r.scanId, r.n);
+  return out;
+}
 
 /**
  * Place in line for a queued scan. Uses this server's queue order when the
@@ -64,11 +79,17 @@ export function thumbsFor(itemIds: number[], db: Db = getDb()): Map<number, stri
   return out;
 }
 
+function summaryValue(r: Item) {
+  const v = shownValue(r);
+  const hide = r.versionState === "not_sure";
+  return { valueCents: v.cents, waitingForVersion: v.waitingForVersion, lowCents: hide ? null : r.estLowCents, highCents: hide ? null : r.estHighCents };
+}
+
 export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {
   const thumbs = thumbsFor(rows.map((r) => r.id), db);
   return rows.map((r) => ({
     id: r.id, kind: r.kind, status: r.status, title: r.title, confidence: r.confidence, quantity: r.quantity,
-    valueCents: effectiveValueCents(r), lowCents: r.estLowCents, highCents: r.estHighCents,
+    ...summaryValue(r),
     isRookie: r.isRookie, rarityTier: r.rarityTier, thumb: thumbs.get(r.id) ?? null,
   }));
 }
@@ -76,9 +97,10 @@ export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {
 export function getScanView(scanId: number, db: Db = getDb(), order: number[] = [], now: number = Date.now()): ScanView | null {
   const scan = db.select().from(scans).where(eq(scans.id, scanId)).get();
   if (!scan) return null;
-  const rows = db.select().from(items).where(eq(items.scanId, scanId)).orderBy(asc(items.id)).all();
+  const rows = db.select().from(items).where(and(eq(items.scanId, scanId), liveItem)).orderBy(asc(items.id)).all();
   return {
     id: scan.id, mode: scan.mode, status: scan.status, error: scan.error, itemCount: scan.itemCount,
+    inBin: binCounts([scan.id], db).get(scan.id) ?? 0,
     createdAt: scan.createdAt.getTime(), startedAt: scan.startedAt?.getTime() ?? null,
     queuePosition: scan.status === "queued" ? queuePositionOf(scan, order, db) : null,
     serverTime: now,
@@ -86,14 +108,84 @@ export function getScanView(scanId: number, db: Db = getDb(), order: number[] = 
   };
 }
 
+/**
+ * Many scans at once, for the scan screen's one batched status call. A fixed
+ * number of queries however many ids (no query per scan). Ids that do not
+ * exist are left out. Same shape as `getScanView`.
+ */
+export function scanViews(scanIds: number[], db: Db = getDb(), order: number[] = [], now: number = Date.now()): ScanView[] {
+  if (scanIds.length === 0) return [];
+  const rows = db.select().from(scans).where(inArray(scans.id, scanIds)).orderBy(asc(scans.id)).all();
+  if (rows.length === 0) return [];
+  const itemRows = db.select().from(items).where(and(inArray(items.scanId, rows.map((r) => r.id)), liveItem)).orderBy(asc(items.id)).all();
+  const summaries = summarize(itemRows, db);
+  const byScan = new Map<number, ItemSummary[]>();
+  itemRows.forEach((r, i) => {
+    const list = byScan.get(r.scanId!) ?? [];
+    list.push(summaries[i]!);
+    byScan.set(r.scanId!, list);
+  });
+  // Place in line, worked out from one list of unfinished scans (same rules as queuePositionOf).
+  const active = rows.some((r) => r.status === "queued")
+    ? db.select({ id: scans.id, status: scans.status }).from(scans).where(inArray(scans.status, ["queued", "processing"])).orderBy(asc(scans.id)).all()
+    : [];
+  const headProcessing = order.length > 0 && active.some((a) => a.id === order[0] && a.status === "processing");
+  const position = (id: number): number => {
+    const at = order.indexOf(id);
+    if (at >= 0) return at + 1 - (at > 0 && headProcessing ? 1 : 0);
+    return active.filter((a) => a.id < id).length + 1;
+  };
+  const bin = binCounts(rows.map((r) => r.id), db);
+  return rows.map((scan) => ({
+    id: scan.id, mode: scan.mode, status: scan.status, error: scan.error, itemCount: scan.itemCount,
+    inBin: bin.get(scan.id) ?? 0,
+    createdAt: scan.createdAt.getTime(), startedAt: scan.startedAt?.getTime() ?? null,
+    queuePosition: scan.status === "queued" ? position(scan.id) : null,
+    serverTime: now,
+    items: byScan.get(scan.id) ?? [],
+  }));
+}
+
 /** The most recent scans, newest first, for the rapid-fire queue list. */
 export function recentScans(limit = 20, db: Db = getDb(), order: number[] = []): ScanView[] {
   const rows = db.select({ id: scans.id }).from(scans).orderBy(desc(scans.id)).limit(Math.min(Math.max(limit, 1), 50)).all();
-  return rows.map((r) => getScanView(r.id, db, order)).filter((v): v is ScanView => v !== null);
+  // One batched read (a few queries) instead of several queries per scan.
+  return scanViews(rows.map((r) => r.id), db, order).sort((a, b) => b.id - a.id);
 }
 
 /** Photos that belong to the scan as a whole (the uncropped originals). */
 export function scanSourcePhotos(scanId: number, db: Db = getDb()) {
   return db.select({ file: images.file, thumbFile: images.thumbFile, role: images.role })
     .from(images).where(and(eq(images.scanId, scanId), inArray(images.role, ["front", "back", "source"]))).orderBy(asc(images.id)).all();
+}
+
+export type ScanStatusCounts = { reading: number; failed: number; toReview: number };
+
+/** Small numbers for the "being read" pill: scans waiting or running, scans that failed, items to check. */
+export function scanStatusCounts(db: Db = getDb()): ScanStatusCounts {
+  const reading = db.select({ n: count() }).from(scans).where(inArray(scans.status, ["queued", "processing"])).get()?.n ?? 0;
+  const failed = db.select({ n: count() }).from(scans).where(eq(scans.status, "failed")).get()?.n ?? 0;
+  const toReview = db.select({ n: count() }).from(items).where(and(liveItem, eq(items.status, "needs_review"))).get()?.n ?? 0;
+  return { reading, failed, toReview };
+}
+
+/**
+ * One small photo per scan (front first), for the Scan activity page. None
+ * when the files are gone, or when every item of the scan is in Recently
+ * deleted (the photo shows the card, so it goes with it).
+ */
+export function scanPhotoThumbs(scanIds: number[], db: Db = getDb()): Map<number, string> {
+  const out = new Map<number, string>();
+  if (scanIds.length === 0) return out;
+  const bin = binCounts(scanIds, db);
+  const live = new Set(bin.size === 0 ? [] : db.select({ scanId: items.scanId }).from(items)
+    .where(and(inArray(items.scanId, [...bin.keys()]), liveItem)).all().map((r) => r.scanId));
+  scanIds = scanIds.filter((id) => !bin.has(id) || live.has(id));
+  if (scanIds.length === 0) return out;
+  const order = { front: 0, source: 1, back: 2, crop: 3 } as const;
+  const rows = db.select({ scanId: images.scanId, role: images.role, thumbFile: images.thumbFile })
+    .from(images).where(and(inArray(images.scanId, scanIds), inArray(images.role, ["front", "back", "source"]))).orderBy(asc(images.id)).all();
+  rows.sort((a, b) => order[a.role] - order[b.role]);
+  for (const r of rows) if (r.scanId != null && !out.has(r.scanId)) out.set(r.scanId, r.thumbFile);
+  return out;
 }

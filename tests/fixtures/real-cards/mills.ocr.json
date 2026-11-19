@@ -1,0 +1,381 @@
+{
+ "front": {
+  "text": "HALL OF FAME\nU.S. OLYMPIC CARDS\nOSA\n722\nBILLY MILLS\nAthletics",
+  "lines": [
+   {
+    "text": "HALL OF FAME",
+    "confidence": 0.8731,
+    "box": {
+     "x": 0.1591737545565006,
+     "y": 0.055,
+     "w": 0.5382746051032806,
+     "h": 0.10333333333333333
+    },
+    "source": "page"
+   },
+   {
+    "text": "U.S. OLYMPIC CARDS",
+    "confidence": 0.99,
+    "box": {
+     "x": 0.24058323207776428,
+     "y": 0.06416666666666666,
+     "w": 0.37667071688942894,
+     "h": 0.03833333333333333
+    },
+    "source": "page"
+   },
+   {
+    "text": "OSA",
+    "confidence": 0.8746,
+    "box": {
+     "x": 0.26852976913730253,
+     "y": 0.3358333333333333,
+     "w": 0.1616038882138518,
+     "h": 0.06833333333333336
+    },
+    "source": "page"
+   },
+   {
+    "text": "722",
+    "confidence": 0.877,
+    "box": {
+     "x": 0.26123936816524906,
+     "y": 0.3858333333333333,
+     "w": 0.19562575941676796,
+     "h": 0.10166666666666668
+    },
+    "source": "page"
+   },
+   {
+    "text": "BILLY MILLS",
+    "confidence": 0.9974,
+    "box": {
+     "x": 0.267314702308627,
+     "y": 0.8558333333333333,
+     "w": 0.4981773997569866,
+     "h": 0.04583333333333328
+    },
+    "source": "page"
+   },
+   {
+    "text": "Athletics",
+    "confidence": 1,
+    "box": {
+     "x": 0.4289185905224787,
+     "y": 0.8983333333333333,
+     "w": 0.18347509113001215,
+     "h": 0.03083333333333338
+    },
+    "source": "page"
+   }
+  ],
+  "confidence": 0.9557749999999999,
+  "passes": 2,
+  "crops": 0
+ },
+ "back": {
+  "text": "WILLIAM MERVIN MILLS\n24\nAthletics\nClass of 1984\nDate of birth: June 30, 1938\nBirthplace: Pine Ridge, SD\nHometown: Fair Oaks, CA\nCollege: University of Kansas\nDuring the 1964 Tokyo Olympic Games he became the\nfirst American to win the 10,000 meters as a virtual\nunknown, setting an Olympic record in the process. Mills\nalso set a world record in the six-mile run during the AAU\nchampionships in 1965. Part Sioux Indian, Mills became\nactive with Indian affairs and, subsequently, a movie of his\nlife, \"Running Brave,\" was made in 1983. In 1964 he had\nserved as a First Lieutenant in the U.S. Marine Corps and\nlaterbecame an insurance sales agent. Mills is currently\npresident of Billy Mills Enterprises.\nCareer Highlights:\n1964 Tokyo Olympic Games\n10,000 meters\nGold medal*\n* Olympic record\n©1988 USOC\n©1991 Impel Marketing Inc. 36 USC 380\nAll Rights Reserved\nOfficial Licensee of the U.S. Olympic Committee",
+  "lines": [
+   {
+    "text": "WILLIAM MERVIN MILLS",
+    "confidence": 0.9989,
+    "box": {
+     "x": 0.07239263803680981,
+     "y": 0.0525,
+     "w": 0.7680981595092025,
+     "h": 0.06416666666666668
+    },
+    "source": "page"
+   },
+   {
+    "text": "24",
+    "confidence": 1,
+    "box": {
+     "x": 0.841717791411043,
+     "y": 0.12583333333333332,
+     "w": 0.07607361963190185,
+     "h": 0.04083333333333333
+    },
+    "source": "page"
+   },
+   {
+    "text": "Athletics",
+    "confidence": 0.9999,
+    "box": {
+     "x": 0.4331288343558282,
+     "y": 0.20083333333333334,
+     "w": 0.1349693251533743,
+     "h": 0.0325
+    },
+    "source": "page"
+   },
+   {
+    "text": "Class of 1984",
+    "confidence": 0.9993,
+    "box": {
+     "x": 0.43190184049079755,
+     "y": 0.22333333333333333,
+     "w": 0.20981595092024535,
+     "h": 0.031666666666666676
+    },
+    "source": "page"
+   },
+   {
+    "text": "Date of birth: June 30, 1938",
+    "confidence": 0.996,
+    "box": {
+     "x": 0.43190184049079755,
+     "y": 0.24666666666666667,
+     "w": 0.40368098159509197,
+     "h": 0.033333333333333354
+    },
+    "source": "page"
+   },
+   {
+    "text": "Birthplace: Pine Ridge, SD",
+    "confidence": 0.9868,
+    "box": {
+     "x": 0.4331288343558282,
+     "y": 0.2675,
+     "w": 0.3877300613496933,
+     "h": 0.034999999999999976
+    },
+    "source": "page"
+   },
+   {
+    "text": "Hometown: Fair Oaks, CA",
+    "confidence": 0.9844,
+    "box": {
+     "x": 0.43190184049079755,
+     "y": 0.29,
+     "w": 0.3828220858895705,
+     "h": 0.033333333333333326
+    },
+    "source": "page"
+   },
+   {
+    "text": "College: University of Kansas",
+    "confidence": 0.9982,
+    "box": {
+     "x": 0.4331288343558282,
+     "y": 0.31166666666666665,
+     "w": 0.42453987730061354,
+     "h": 0.03500000000000003
+    },
+    "source": "page"
+   },
+   {
+    "text": "During the 1964 Tokyo Olympic Games he became the",
+    "confidence": 0.9914,
+    "box": {
+     "x": 0.06993865030674846,
+     "y": 0.3516666666666667,
+     "w": 0.8441717791411043,
+     "h": 0.04249999999999998
+    },
+    "source": "page"
+   },
+   {
+    "text": "first American to win the 10,000 meters as a virtual",
+    "confidence": 0.984,
+    "box": {
+     "x": 0.0687116564417178,
+     "y": 0.375,
+     "w": 0.8441717791411042,
+     "h": 0.04083333333333333
+    },
+    "source": "page"
+   },
+   {
+    "text": "unknown, setting an Olympic record in the process. Mills",
+    "confidence": 0.9838,
+    "box": {
+     "x": 0.0687116564417178,
+     "y": 0.39666666666666667,
+     "w": 0.8441717791411042,
+     "h": 0.03999999999999998
+    },
+    "source": "page"
+   },
+   {
+    "text": "also set a world record in the six-mile run during the AAU",
+    "confidence": 0.9759,
+    "box": {
+     "x": 0.06748466257668712,
+     "y": 0.4191666666666667,
+     "w": 0.845398773006135,
+     "h": 0.03916666666666663
+    },
+    "source": "page"
+   },
+   {
+    "text": "championships in 1965. Part Sioux Indian, Mills became",
+    "confidence": 0.9978,
+    "box": {
+     "x": 0.06748466257668712,
+     "y": 0.44166666666666665,
+     "w": 0.845398773006135,
+     "h": 0.03833333333333333
+    },
+    "source": "page"
+   },
+   {
+    "text": "active with Indian affairs and, subsequently, a movie of his",
+    "confidence": 0.99,
+    "box": {
+     "x": 0.06625766871165645,
+     "y": 0.4633333333333333,
+     "w": 0.845398773006135,
+     "h": 0.038333333333333386
+    },
+    "source": "page"
+   },
+   {
+    "text": "life, \"Running Brave,\" was made in 1983. In 1964 he had",
+    "confidence": 0.9766,
+    "box": {
+     "x": 0.06625766871165645,
+     "y": 0.48583333333333334,
+     "w": 0.845398773006135,
+     "h": 0.036666666666666625
+    },
+    "source": "page"
+   },
+   {
+    "text": "served as a First Lieutenant in the U.S. Marine Corps and",
+    "confidence": 0.9913,
+    "box": {
+     "x": 0.0638036809815951,
+     "y": 0.5083333333333333,
+     "w": 0.8478527607361963,
+     "h": 0.035833333333333384
+    },
+    "source": "page"
+   },
+   {
+    "text": "laterbecame an insurance sales agent. Mills is currently",
+    "confidence": 0.999,
+    "box": {
+     "x": 0.0638036809815951,
+     "y": 0.53,
+     "w": 0.845398773006135,
+     "h": 0.036666666666666625
+    },
+    "source": "page"
+   },
+   {
+    "text": "president of Billy Mills Enterprises.",
+    "confidence": 0.9832,
+    "box": {
+     "x": 0.06257668711656442,
+     "y": 0.5533333333333333,
+     "w": 0.5104294478527608,
+     "h": 0.03166666666666662
+    },
+    "source": "page"
+   },
+   {
+    "text": "Career Highlights:",
+    "confidence": 1,
+    "box": {
+     "x": 0.0638036809815951,
+     "y": 0.6275,
+     "w": 0.298159509202454,
+     "h": 0.03083333333333338
+    },
+    "source": "page"
+   },
+   {
+    "text": "1964 Tokyo Olympic Games",
+    "confidence": 0.998,
+    "box": {
+     "x": 0.06257668711656442,
+     "y": 0.6708333333333333,
+     "w": 0.4466257668711656,
+     "h": 0.03083333333333338
+    },
+    "source": "page"
+   },
+   {
+    "text": "10,000 meters",
+    "confidence": 0.9877,
+    "box": {
+     "x": 0.1460122699386503,
+     "y": 0.695,
+     "w": 0.2294478527607362,
+     "h": 0.029166666666666674
+    },
+    "source": "page"
+   },
+   {
+    "text": "Gold medal*",
+    "confidence": 0.9999,
+    "box": {
+     "x": 0.45521472392638035,
+     "y": 0.6975,
+     "w": 0.19754601226993868,
+     "h": 0.02416666666666667
+    },
+    "source": "page"
+   },
+   {
+    "text": "* Olympic record",
+    "confidence": 0.9911,
+    "box": {
+     "x": 0.05521472392638037,
+     "y": 0.7375,
+     "w": 0.2822085889570552,
+     "h": 0.03249999999999997
+    },
+    "source": "page"
+   },
+   {
+    "text": "©1988 USOC",
+    "confidence": 0.9717,
+    "box": {
+     "x": 0.5435582822085889,
+     "y": 0.8691666666666666,
+     "w": 0.13865030674846623,
+     "h": 0.020000000000000018
+    },
+    "source": "page"
+   },
+   {
+    "text": "©1991 Impel Marketing Inc. 36 USC 380",
+    "confidence": 0.9906,
+    "box": {
+     "x": 0.051533742331288344,
+     "y": 0.8866666666666667,
+     "w": 0.43435582822085894,
+     "h": 0.025833333333333264
+    },
+    "source": "page"
+   },
+   {
+    "text": "All Rights Reserved",
+    "confidence": 0.984,
+    "box": {
+     "x": 0.5141104294478528,
+     "y": 0.8883333333333333,
+     "w": 0.19754601226993862,
+     "h": 0.019166666666666665
+    },
+    "source": "page"
+   },
+   {
+    "text": "Official Licensee of the U.S. Olympic Committee",
+    "confidence": 0.9903,
+    "box": {
+     "x": 0.25398773006134967,
+     "y": 0.9066666666666666,
+     "w": 0.46993865030674853,
+     "h": 0.023333333333333428
+    },
+    "source": "page"
+   }
+  ],
+  "confidence": 0.9893310580204776,
+  "passes": 2,
+  "crops": 4
+ }
+}

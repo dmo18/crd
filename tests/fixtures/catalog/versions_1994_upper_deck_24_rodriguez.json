@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1994 Upper Deck 24 Rodriguez",
+  "limit": 20,
+  "sport": "Baseball",
+  "year": "1994"
+ },
+ "elapsed_ms": 506,
+ "status": 200,
+ "bytes": 1371,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1994 Upper Deck 24 Rodriguez\",\n  \"count\": 2,\n  \"results\": [\n    {\n      \"card_id\": \"2799917\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1994\",\n      \"product\": \"Upper Deck\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"24\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Alex Rodriguez RC\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1994/upper-deck-6581/base-set-47211/24-alex-rodriguez-rc-2799917\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/2799917.jpg\"\n    },\n    {\n      \"card_id\": \"2799918\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1994\",\n      \"product\": \"Upper Deck\",\n      \"set\": \"Base Set Electric Diamond\",\n      \"card_number\": \"24\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Alex Rodriguez RC\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1994/upper-deck-6581/base-set-electric-diamond-47212/24-alex-rodriguez-rc-2799918\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/2799918.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

@@ -1,0 +1,23 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1990 Topps Eriffey",
+  "limit": 20
+ },
+ "elapsed_ms": 2527,
+ "status": 200,
+ "bytes": 174,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1990 Topps Eriffey\",\n  \"count\": 0,\n  \"results\": []\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

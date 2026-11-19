@@ -279,16 +279,18 @@ describe("Hall of Fame", () => {
 describe("rate limits", () => {
   it("stops looking up for as long as Retry-After asks after a 429", async () => {
     setLogSink(() => undefined);
-    resetWikidataPause();
+    // The pause now lives in the database (outside_state, through the shared
+    // gate), so both lookups use the same database and the reset names it.
+    const db = createDb(":memory:");
+    resetWikidataPause(db);
     const limited = vi.fn(async () => new Response("slow down", { status: 429, headers: { "Retry-After": "120" } }));
-    expect(await lookupPlayer("Frank Thomas", { db: createDb(":memory:"), fetchImpl: asFetch(limited) })).toBeNull();
+    expect(await lookupPlayer("Frank Thomas", { db, fetchImpl: asFetch(limited) })).toBeNull();
     expect(limited).toHaveBeenCalledTimes(1);
     const ok = fakeFetch([BIG_HURT], ["Q1"]);
-    const db = createDb(":memory:");
     expect(await lookupPlayer("Frank Thomas", { db, fetchImpl: asFetch(ok) })).toBeNull();
     expect(ok).not.toHaveBeenCalled();
     expect(db.select().from(playerFacts).all()).toHaveLength(0);
-    resetWikidataPause();
+    resetWikidataPause(db);
     expect(await lookupPlayer("Frank Thomas", { db, fetchImpl: asFetch(ok) })).toMatchObject({ wikidataId: "Q1" });
     setLogSink();
   });

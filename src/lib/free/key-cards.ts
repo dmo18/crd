@@ -1,4 +1,8 @@
 import type { RarityTier, Sport } from "@/db/schema";
+import { normalizeBrand, normalizeCardNumber, normalizeName } from "@/lib/catalog/normalize";
+
+// Moved to src/lib/catalog/normalize.ts; still exported from here for older callers.
+export { normalizeBrand, normalizeCardNumber, normalizeName };
 
 /**
  * A built-in list of notable cards from 1980 to 1995, used to flag key rookies,
@@ -222,34 +226,6 @@ export const KEY_CARDS: readonly KeyCard[] = [
   card(H, 1988, "O-Pee-Chee", "O-Pee-Chee", "66", "Brett Hull", "key", "Rookie card from the 1988 O-Pee-Chee set."),
   card(H, 1990, "Upper Deck", "Upper Deck", "356", "Jaromir Jagr", "star", "Rookie card from the first Upper Deck hockey set."),
 ];
-
-/** Case and punctuation insensitive brand key: "O-Pee-Chee" and "o pee chee" both give "opeechee". */
-export function normalizeBrand(s: string): string {
-  return stripAccents(String(s ?? ""))
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
-/** Lowercase, accents stripped, punctuation removed: "Ken Griffey Jr." gives "ken griffey jr". */
-export function normalizeName(s: string): string {
-  return stripAccents(String(s ?? ""))
-    .toLowerCase()
-    .replace(/['\u2019.]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-/** Card number key: "U-27", "u27" and "27U" all match, leading zeros ignored. */
-export function normalizeCardNumber(s: string): string {
-  const up = String(s ?? "").toUpperCase();
-  const letters = up.replace(/[^A-Z]/g, "");
-  const digits = up.replace(/[^0-9]/g, "").replace(/^0+(?=\d)/, "");
-  return letters + digits;
-}
-
-function stripAccents(s: string): string {
-  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
 
 function sameText(a: string, b: string): boolean {
   return normalizeBrand(a) === normalizeBrand(b);

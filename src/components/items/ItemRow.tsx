@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui";
 import { confidenceLabel, KIND_LABELS, RARITY_LABELS } from "@/lib/items/labels";
+import { CHOOSE_VERSION_LINE } from "@/lib/items/value-line";
 import { formatCents } from "@/lib/money";
 import type { ItemSummary } from "@/lib/scans/view";
 
@@ -24,6 +25,7 @@ export function ItemBadges({ item }: { item: BadgeInfo }) {
 }
 
 function valueText(item: ItemSummary): string {
+  if (item.waitingForVersion) return CHOOSE_VERSION_LINE;
   if (item.lowCents != null && item.highCents != null && item.lowCents !== item.highCents) {
     return `${formatCents(item.lowCents)} to ${formatCents(item.highCents)}`;
   }

@@ -23,15 +23,17 @@ export const CLEANUP_EVERY_MS = 24 * HOUR;
 export async function removeOrphanPhotos(db: Db = getDb(), dir: string = uploadsDir(), now: Date = new Date()): Promise<number> {
   const known = new Set<string>();
   const knownWork = new Set<string>();
-  for (const r of db.select({ file: images.file, thumb: images.thumbFile, work: images.workFile }).from(images).all()) {
+  for (const r of db.select({ file: images.file, thumb: images.thumbFile, work: images.workFile, original: images.originalFile }).from(images).all()) {
     known.add(r.file);
     known.add(r.thumb);
+    // A kept original is in use as long as its photo's row lives.
+    if (r.original) known.add(r.original);
     if (r.work) knownWork.add(r.work);
   }
   const cutoff = now.getTime() - ORPHAN_MIN_AGE_MS;
   const stillUnused = (name: string, work: boolean) =>
     !db.select({ id: images.id }).from(images)
-      .where(work ? eq(images.workFile, name) : or(eq(images.file, name), eq(images.thumbFile, name))).get();
+      .where(work ? eq(images.workFile, name) : or(eq(images.file, name), eq(images.thumbFile, name), eq(images.originalFile, name))).get();
 
   let removed = 0;
   const sweep = async (folder: string, wanted: (name: string) => boolean, work: boolean) => {

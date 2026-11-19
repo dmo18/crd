@@ -11,6 +11,7 @@ const fieldsSchema = z.object({
   mode: z.enum(SCAN_MODES),
   hint: z.string().max(200).optional(),
   locationId: z.coerce.number().int().positive().optional(),
+  clientKey: z.string().uuid().optional(),
 });
 
 const ROLES: ScanPhotoRole[] = ["front", "back", "source"];
@@ -33,14 +34,16 @@ export async function POST(request: Request) {
   try {
     form = await request.formData();
   } catch {
-    return bad("The photos did not arrive. Try again.");
+    // Usually a body cut short by a weak connection. 408 tells the page to
+    // send the photo again (same clientKey, so never a duplicate).
+    return bad("The photos did not arrive. Try again.", 408);
   }
 
   const text = (name: string) => {
     const v = form.get(name);
     return typeof v === "string" && v.trim() !== "" ? v : undefined;
   };
-  const fields = fieldsSchema.safeParse({ mode: text("mode"), hint: text("hint"), locationId: text("locationId") });
+  const fields = fieldsSchema.safeParse({ mode: text("mode"), hint: text("hint"), locationId: text("locationId"), clientKey: text("clientKey") });
   if (!fields.success) return bad("That scan request was not understood.");
 
   const photos: ScanPhotoInput[] = [];
@@ -54,7 +57,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { scanId } = await createScan({ ...fields.data, photos });
+    const { scanId, duplicate } = await createScan({ ...fields.data, photos });
+    // A repeat of an upload we already have changes nothing and is not queued twice.
+    if (duplicate) return Response.json({ scanId }, { status: 200 });
     enqueueScan(scanId);
     return Response.json({ scanId }, { status: 201 });
   } catch (err) {

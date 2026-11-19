@@ -10,7 +10,10 @@ const row = (over: Partial<Item> = {}): Item => ({
   worthGrading: null, gradingNotes: null, productType: null, packCount: null, sealState: null, estCount: null,
   containerType: null, description: null, pullList: null, quantity: 1, locationId: null, notes: null, confidence: null,
   aiNotes: null, estLowCents: null, estHighCents: null, estValueCents: null, valueSource: null, valueBasis: null,
-  valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(),
+  valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(), deletedAt: null,
+  catalogCardId: null, firstSuggestion: null, fieldSources: null, catalogCandidates: null,
+  versionState: null, versionSource: null, versionOptions: null, serialCopy: null, serialEdition: null, serialSuggested: null,
+  rookieState: null, rookieSource: null, rookieNote: null, keptApartFrom: null,
   ...over,
 });
 
@@ -22,13 +25,23 @@ const parse = (csv: string) => {
 const none = new Map<number, string>();
 
 describe("itemsToCsv", () => {
+  it("leaves the catalog columns out", () => {
+    const plain = itemsToCsv([row({ player: "Ken Griffey Jr." })], none);
+    const linked = itemsToCsv([row({
+      player: "Ken Griffey Jr.", catalogCardId: 77123, firstSuggestion: "{\"v\":1,\"secretmark\":1}",
+      fieldSources: "{\"player\":\"reading\"}", catalogCandidates: "{\"candidatemark\":1}",
+    })], none);
+    expect(linked).toBe(plain);
+    expect(parse(linked)[0]).not.toMatch(/catalog|suggestion|source[s ]|candidate/i);
+  });
+
   it("empty collection gives only the header, with BOM and CRLF", () => {
     const csv = itemsToCsv([], none);
     expect(csv.startsWith("﻿")).toBe(true);
     const lines = parse(csv);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^ID,Kind,Status,Title,/);
-    expect(lines[0]).toMatch(/,Notes,Added \(ISO date\)$/);
+    expect(lines[0]).toMatch(/,Notes,Added \(ISO date\),Description$/);
     expect(csv.endsWith("\r\n")).toBe(true);
     expect(csv.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
   });
@@ -80,5 +93,15 @@ describe("formula guard, leading whitespace", () => {
     expect(guardFormula("\n=1+1")).toBe("'\n=1+1");
     expect(guardFormula("Ken Griffey Jr.")).toBe("Ken Griffey Jr.");
     expect(guardFormula("Topps - Traded")).toBe("Topps - Traded");
+  });
+});
+
+describe("itemsToCsv description column", () => {
+  it("is the last column and is formula-guarded", () => {
+    const csv = itemsToCsv([row({ description: '=SUM(1,2)' }), row({ description: "Plain, with comma" })], none);
+    const lines = parse(csv);
+    expect(lines[0].endsWith(",Description")).toBe(true);
+    expect(lines[1].endsWith(`,"'=SUM(1,2)"`)).toBe(true);
+    expect(lines[2].endsWith(`,"Plain, with comma"`)).toBe(true);
   });
 });

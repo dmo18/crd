@@ -1,7 +1,8 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items, valuations } from "@/db/schema";
 import { parseDollars } from "@/lib/money";
+import { liveItem } from "./live";
 
 export type QuickValueResult = { ok: true } | { ok: false; error: string };
 
@@ -9,7 +10,7 @@ export type QuickValueResult = { ok: true } | { ok: false; error: string };
 export function setQuickValue(itemId: number, dollarsText: string, db: Db = getDb()): QuickValueResult {
   const cents = parseDollars(dollarsText);
   if (cents == null) return { ok: false, error: "Enter a dollar amount like 12.50" };
-  const item = db.select({ id: items.id }).from(items).where(eq(items.id, itemId)).get();
+  const item = db.select({ id: items.id }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
   if (!item) return { ok: false, error: "This item no longer exists." };
   db.transaction((tx) => {
     tx.update(items).set({ manualValueCents: cents, updatedAt: new Date() }).where(eq(items.id, itemId)).run();

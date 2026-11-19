@@ -1,13 +1,14 @@
+import fs from "node:fs";
 import sharp from "sharp";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, locations, scans, valuations } from "@/db/schema";
-import { readPhoto } from "@/lib/images/store";
+import { readPhoto, uploadsDir } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
 import { createScan, ScanInputError } from "./create";
 import { enqueueScan, processScan, queueIdle, queueOrder, RECOGNITION_DEADLINE_MS, recoverScans, retryScan, TOO_SLOW } from "./process";
-import { getScanView } from "./view";
+import { getScanView, recentScans, scanPhotoThumbs, scanStatusCounts, scanViews } from "./view";
 
 async function photo(color = "#336699"): Promise<Buffer> {
   return sharp({ create: { width: 900, height: 1200, channels: 3, background: color } }).jpeg().toBuffer();
@@ -69,11 +70,27 @@ describe("processScan", () => {
     expect(scan).toMatchObject({ status: "done", itemCount: 1, recognizer: "fake-model", error: null });
     const item = db.select().from(items).get()!;
     expect(item).toMatchObject({
-      kind: "card", status: "confirmed", title: "1989 Upper Deck #1 Ken Griffey Jr.", isRookie: true, locationId: loc.id,
+      kind: "card", status: "confirmed", title: "1989 Upper Deck #1 Ken Griffey Jr.", isRookie: false, rookieState: null, rookieSource: "reading", locationId: loc.id,
       estLowCents: 4000, estHighCents: 8000, estValueCents: 6000, valueSource: "ai_estimate",
     });
     expect(db.select().from(images).all().every((i) => i.itemId === item.id)).toBe(true);
     expect(db.select().from(valuations).get()).toMatchObject({ itemId: item.id, valueCents: 6000 });
+  });
+
+  it("keeps what the scanner first read and marks its fields as reading", async () => {
+    const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    const at = new Date("2026-11-16T12:00:00Z");
+    await processScan(scanId, { db, recognizer: fake([{ ...griffey, confidence: 0.5, team: null }]), now: () => at });
+    const item = db.select().from(items).where(eq(items.scanId, scanId)).get()!;
+    expect(JSON.parse(item.fieldSources!)).toEqual({
+      sport: "reading", year: "reading", brand: "reading", setName: "reading", cardNumber: "reading", player: "reading",
+    });
+    expect(JSON.parse(item.firstSuggestion!)).toEqual({
+      v: 1, confidence: 0.5, reader: "fake-model", at: at.getTime(),
+      fields: { sport: "baseball", year: 1989, brand: "Upper Deck", setName: "Upper Deck", cardNumber: "1", player: "Ken Griffey Jr." },
+    });
+    expect(item.catalogCardId).toBeNull();
+    expect(item.catalogCandidates).toBeNull();
   });
 
   it("sends unsure results to review", async () => {
@@ -252,5 +269,114 @@ describe("retryScan", () => {
     db.delete(images).run();
     expect(retryScan(scanId, db)).toMatchObject({ ok: false, status: 410 });
     expect(db.select().from(scans).get()?.status).toBe("failed");
+  });
+});
+
+const KEY = "6f9619ff-8b86-4011-b42d-00c04fc964ff";
+const filesOnDisk = () => {
+  const count = (dir: string): number => fs.existsSync(dir)
+    ? fs.readdirSync(dir, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? count(`${dir}/${e.name}`) : 1), 0)
+    : 0;
+  return count(uploadsDir());
+};
+
+describe("createScan with a clientKey", () => {
+  it("first upload makes a scan and stores the key", async () => {
+    const r = await createScan({ mode: "single", clientKey: KEY, photos: [{ role: "front", data: await photo() }] }, db);
+    expect(r.duplicate).toBe(false);
+    expect(db.select().from(scans).where(eq(scans.id, r.scanId)).get()!.clientKey).toBe(KEY);
+  });
+
+  it("the same key twice gives one scan, the same id and no new files", async () => {
+    const photos = [{ role: "front" as const, data: await photo() }];
+    const first = await createScan({ mode: "single", clientKey: KEY, photos }, db);
+    const filesAfterFirst = filesOnDisk();
+    const second = await createScan({ mode: "single", clientKey: KEY, photos }, db);
+    expect(second).toEqual({ scanId: first.scanId, duplicate: true });
+    expect(db.select().from(scans).all()).toHaveLength(1);
+    expect(db.select().from(images).all()).toHaveLength(1);
+    expect(filesOnDisk()).toBe(filesAfterFirst);
+  });
+
+  it("two repeats racing give one scan and leave no stray files", async () => {
+    const photos = [{ role: "front" as const, data: await photo() }];
+    const before = filesOnDisk();
+    const [a, b] = await Promise.all([
+      createScan({ mode: "single", clientKey: KEY, photos }, db),
+      createScan({ mode: "single", clientKey: KEY, photos }, db),
+    ]);
+    expect(a.scanId).toBe(b.scanId);
+    expect([a.duplicate, b.duplicate].sort()).toEqual([false, true]);
+    expect(db.select().from(scans).all()).toHaveLength(1);
+    expect(db.select().from(images).all()).toHaveLength(1);
+    // The files added equal what one lone upload adds: nothing from the loser remains.
+    const raced = filesOnDisk() - before;
+    const mid = filesOnDisk();
+    await createScan({ mode: "single", photos }, db);
+    expect(raced).toBeGreaterThan(0);
+    expect(raced).toBe(filesOnDisk() - mid);
+  });
+
+  it("no key works as before, and two keyless scans stay separate", async () => {
+    const photos = [{ role: "front" as const, data: await photo() }];
+    const a = await createScan({ mode: "single", photos }, db);
+    const b = await createScan({ mode: "single", photos }, db);
+    expect(a.scanId).not.toBe(b.scanId);
+    expect(a.duplicate).toBe(false);
+  });
+});
+
+describe("scanStatusCounts", () => {
+  it("counts scans by state and items needing review", () => {
+    const mk = (status: "queued" | "processing" | "done" | "failed") => db.insert(scans).values({ mode: "single", status }).returning({ id: scans.id }).get().id;
+    const done = mk("done");
+    mk("queued"); mk("queued"); mk("processing"); mk("failed");
+    const item = (status: "needs_review" | "confirmed") =>
+      db.insert(items).values({ kind: "card", status, title: "x", scanId: done }).run();
+    item("needs_review"); item("needs_review"); item("confirmed");
+    expect(scanStatusCounts(db)).toEqual({ reading: 3, failed: 1, toReview: 2 });
+  });
+
+  it("is all zero on an empty database", () => {
+    expect(scanStatusCounts(db)).toEqual({ reading: 0, failed: 0, toReview: 0 });
+  });
+});
+
+describe("scanViews (many scans in one go)", () => {
+  it("gives the same answer as getScanView for each scan, with places in line", () => {
+    const mk = (status: "queued" | "processing" | "done" | "failed") => db.insert(scans).values({ mode: "single", status }).returning({ id: scans.id }).get().id;
+    const ids = [mk("done"), mk("processing"), mk("queued"), mk("queued"), mk("failed"), mk("queued")];
+    db.insert(items).values([
+      { kind: "card", status: "confirmed", title: "a", scanId: ids[0] },
+      { kind: "card", status: "needs_review", title: "b", scanId: ids[0] },
+      { kind: "card", status: "confirmed", title: "c", scanId: ids[4] },
+    ]).run();
+    for (const order of [[], [ids[1]!, ids[5]!, ids[2]!], [ids[3]!, ids[2]!]]) {
+      const many = scanViews([...ids].reverse(), db, order, 5);
+      expect(many.map((v) => v.id)).toEqual(ids);
+      expect(many).toEqual(ids.map((id) => getScanView(id, db, order, 5)));
+    }
+    expect(scanViews([], db)).toEqual([]);
+    expect(scanViews([12345], db)).toEqual([]);
+  });
+});
+
+describe("Scan activity data", () => {
+  it("lists one scan in each state, newest first, with a small photo for scans that have one", async () => {
+    const done = db.insert(scans).values({ mode: "single", status: "done" }).returning({ id: scans.id }).get().id;
+    const failed = db.insert(scans).values({ mode: "single", status: "failed", error: "Could not read this photo." }).returning({ id: scans.id }).get().id;
+    const processing = db.insert(scans).values({ mode: "single", status: "processing", startedAt: new Date() }).returning({ id: scans.id }).get().id;
+    const queued = db.insert(scans).values({ mode: "single", status: "queued" }).returning({ id: scans.id }).get().id;
+    db.insert(items).values({ kind: "card", status: "needs_review", title: "Check me", scanId: done }).run();
+    db.insert(images).values({ scanId: done, role: "back", file: "b.jpg", thumbFile: "b-t.jpg", width: 1, height: 1, bytes: 1 }).run();
+    db.insert(images).values({ scanId: done, role: "front", file: "f.jpg", thumbFile: "f-t.jpg", width: 1, height: 1, bytes: 1 }).run();
+    const list = recentScans(50, db);
+    expect(list.map((s) => [s.id, s.status])).toEqual([[queued, "queued"], [processing, "processing"], [failed, "failed"], [done, "done"]]);
+    expect(list.find((s) => s.id === failed)!.error).toBe("Could not read this photo.");
+    expect(list.find((s) => s.id === done)!.items.map((i) => [i.title, i.status])).toEqual([["Check me", "needs_review"]]);
+    const thumbs = scanPhotoThumbs(list.map((s) => s.id), db);
+    expect(thumbs.get(done)).toBe("f-t.jpg");
+    expect(thumbs.has(queued)).toBe(false);
+    expect(scanPhotoThumbs([], db).size).toBe(0);
   });
 });

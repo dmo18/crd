@@ -65,10 +65,12 @@ First-time tasks for this loop (do them, ask the owner only for clicks):
 4. Deploys without clicking: ask the owner to enable the API (Coolify,
    Settings) and create a token under Keys & Tokens with deploy rights. Store
    it in `/home/ops-agent/.coolify-token`, mode 600, never in git. Then:
-   `curl -fsS -H "Authorization: Bearer $(cat ~/.coolify-token)" "http://127.0.0.1:8000/api/v1/deploy?uuid=APP_UUID"`
-   The app's uuid is the last part of its page address in Coolify. Check the
-   exact endpoint against Coolify's API docs for the installed version before
-   relying on it.
+   `curl -fsS -X POST -H "Authorization: Bearer $(cat ~/.coolify-token)" "http://127.0.0.1:8000/api/v1/deploy?uuid=APP_UUID"`
+   Coolify 4.7.5: POST, not GET (GET answers "use POST"). Card Vault's uuid
+   is `uxxie2puczalzcb3yxzfw5fe`. Progress:
+   `GET /api/v1/deployments/<deployment_uuid>` (status `finished` or `failed`).
+   Done on 2026-11-16: branch is `live`, API on, token stored (read, deploy).
+   Owner rule: deploy only through Coolify, never with docker by hand.
 
 ## The server
 - "appy": Ubuntu 24.04 on Hyper-V, LAN 10.20.1.12, behind the owner's
@@ -95,6 +97,24 @@ First-time tasks for this loop (do them, ask the owner only for clicks):
   sudo rights. That is expected since the owner gave you full authority. If
   bootstrap.sh is ever run again it reinstalls the read-only guide but keeps
   `/etc/sudoers.d/zz-ops-agent-owner`.
+
+## Outside sources and what we store (Milestone 10)
+- Every call that leaves the server goes through `src/lib/outside/gate.ts`
+  (`outsideCall`). Never add another `fetch` to an outside address; a test
+  fails if you do. Sources, hosts and limits live in
+  `src/lib/outside/sources.ts`. Alerts (`src/lib/alerts.ts`) are the one
+  other exception.
+- MyCardfolio limits: 1 call at a time (all sources), 2 s between calls,
+  200 per hour, 1,000 per UTC day, 5 s timeout, 2 MB largest answer. A 429
+  or a 403 from its front door pauses it (stored, survives a restart).
+- Storage policy (settled, also in `docs/SPEC.md`): stored answers only for
+  a bounded time (7 days, 1 day for an empty search, 30 days for cards and
+  checklists, 50 MB in total), only on this server, only to spare the site
+  repeat calls. Kept for good: only cards the owner confirmed, with their
+  source link. Never copy the catalog, walk sets nobody asked for, show
+  catalog data to anyone else, or download the site's card images.
+- Counters per source and day: table `outside_usage`. Switch and pause:
+  table `outside_state`. Stored answers: table `outside_cache`.
 
 ## Lessons paid for during setup (do not repeat)
 - This server's awk is gawk. In scripts with `pipefail`, never pipe into a

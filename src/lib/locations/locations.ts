@@ -2,6 +2,7 @@ import { and, asc, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { items, locations } from "@/db/schema";
+import { liveItem } from "@/lib/items/live";
 import { LOCATION_KINDS } from "./kinds";
 
 
@@ -39,7 +40,7 @@ export function listLocations(db: Db = getDb()): LocationSummary[] {
       totalValueCents: sql<number>`coalesce(sum(coalesce(${items.manualValueCents}, ${items.estValueCents}, 0) * ${items.quantity}), 0)`.mapWith(Number),
     })
     .from(locations)
-    .leftJoin(items, eq(items.locationId, locations.id))
+    .leftJoin(items, and(eq(items.locationId, locations.id), liveItem))
     .groupBy(locations.id)
     .orderBy(asc(sql`lower(${locations.name})`), asc(locations.id))
     .all();
@@ -102,8 +103,14 @@ export function renameLocation(id: number, input: unknown, db: Db = getDb()): Lo
   });
 }
 
-/** Items in the location are kept; the database sets their location to none. */
-export function deleteLocation(id: number, db: Db = getDb()): { ok: boolean } {
-  const res = db.delete(locations).where(eq(locations.id, id)).run();
-  return { ok: res.changes > 0 };
+/**
+ * Items in the location are kept; the database sets their location to none.
+ * Those items get updated_at = now, so a bulk undo sees them as edited since.
+ */
+export function deleteLocation(id: number, db: Db = getDb(), now: Date = new Date()): { ok: boolean } {
+  return db.transaction((tx) => {
+    tx.update(items).set({ updatedAt: now }).where(eq(items.locationId, id)).run();
+    const res = tx.delete(locations).where(eq(locations.id, id)).run();
+    return { ok: res.changes > 0 };
+  }, { behavior: "immediate" });
 }

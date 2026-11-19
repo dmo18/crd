@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
-import { auditEvents } from "@/db/schema";
+import { AUDIT_EVENTS, auditEvents } from "@/db/schema";
 import { describeAudit } from "./labels";
 import { AUDIT_PAGE_SIZE, KEEP_AUDIT_MS, listAudit, recordAudit, resetAuditPrune } from "./store";
 
@@ -51,8 +51,21 @@ describe("audit store", () => {
 });
 
 describe("plain-language labels", () => {
+  it("has plain words for every event, with and without detail", () => {
+    for (const event of AUDIT_EVENTS) {
+      for (const detail of [null, "MyCardfolio"]) {
+        const line = describeAudit({ event, ip: "unknown", detail });
+        expect(line, event).toMatch(/^[A-Z][a-z]/);
+        expect(line, event).not.toContain(event);
+        expect(line, event).not.toMatch(/undefined|[\u2013\u2014]/);
+      }
+    }
+  });
+
   it("reads like a sentence", () => {
     expect(describeAudit({ event: "sign_in_failed", ip: "203.0.113.7", detail: null })).toBe("Wrong password from 203.0.113.7");
+    expect(describeAudit({ event: "connection_tested", ip: "unknown", detail: "MyCardfolio, works" })).toBe("Tested a connection: MyCardfolio, works");
+    expect(describeAudit({ event: "catalog_card_linked", ip: "unknown", detail: null })).toBe("Linked an item to a catalog card");
     expect(describeAudit({ event: "sign_in_ok", ip: "unknown", detail: "new device" })).toBe("Signed in on a new device from an unknown address");
     expect(describeAudit({ event: "location_deleted", ip: "x", detail: "Box 1" })).toBe("Deleted location Box 1");
   });

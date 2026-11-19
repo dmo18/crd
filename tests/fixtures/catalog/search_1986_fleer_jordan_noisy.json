@@ -1,0 +1,21 @@
+{
+  "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only. Body is the JSON-RPC answer; result.content[0].text is itself a JSON string.",
+  "tool": "search_cards",
+  "arguments": {
+    "query": "1986 Fleer Michael Jordan",
+    "limit": 5
+  },
+  "elapsed_ms": 358,
+  "response": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"query\": \"1986 Fleer Michael Jordan\",\n  \"count\": 5,\n  \"results\": [\n    {\n      \"card_id\": \"ebay_5f29106e25f1\",\n      \"sport\": \"Basketball\",\n      \"year\": \"1986\",\n      \"product\": \"Sports Stars USA\",\n      \"set\": \"1986 Fleer Michael Jordan Rookie Card\",\n      \"card_number\": \"1\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Michael Jordan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card, Reprint\",\n      \"url\": \"https://mycardfolio.com/sports/basketball/1986/sports-stars-usa-ebay_929eee6833/1986-fleer-michael-jordan-rookie-card-ebay_5831dc5782/1-michael-jordan-ebay_5f29106e25f1\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_5f29106e25f1.jpg\"\n    },\n    {\n      \"card_id\": \"ing_00bcae2654e0\",\n      \"sport\": \"Basketball\",\n      \"year\": \"1986\",\n      \"product\": \"Fleer Sticker\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"8\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Michael Jordan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/basketball/1986/fleer-sticker-ing_f848a4ea24/base-set-ing_2624d4a3c4/8-michael-jordan-ing_00bcae2654e0\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ing_00bcae2654e0.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_c379a4800fa7\",\n      \"sport\": \"Basketball\",\n      \"year\": \"1986\",\n      \"product\": \"FLEER\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"57\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"MICHAEL JORDAN\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"RC\",\n      \"url\": \"https://mycardfolio.com/sports/basketball/1986/fleer-ebay_9448409f5a/base-set-ebay_54b520511e/57-michael-jordan-ebay_c379a4800fa7\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_c379a4800fa7.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_145c9a7f7d1f\",\n      \"sport\": \"Basketball\",\n      \"year\": \"1986\",\n      \"product\": \"Fleer\",\n      \"set\": \"1986-87\",\n      \"card_number\": \"57\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Michael Jordan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card\",\n      \"url\": \"https://mycardfolio.com/sports/basketball/1986/fleer-ebay_9448409f5a/1986-87-ebay_c85c80535b/57-michael-jordan-ebay_145c9a7f7d1f\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_145c9a7f7d1f.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_926efa4dfff2\",\n      \"sport\": \"Basketball\",\n      \"year\": \"1986\",\n      \"product\": \"Fleer\",\n      \"set\": \"Rookie Card\",\n      \"card_number\": \"57\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Michael Jordan\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"Rookie Card\",\n      \"url\": \"https://mycardfolio.com/sports/basketball/1986/fleer-ebay_9448409f5a/rookie-card-ebay_f0f37127d5/57-michael-jordan-ebay_926efa4dfff2\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_926efa4dfff2.jpg\"\n    }\n  ]\n}"
+        }
+      ]
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  }
+}

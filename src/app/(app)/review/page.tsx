@@ -1,15 +1,24 @@
-import { asc, count, eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { DeleteFailedScans } from "@/components/items/DeleteFailedScans";
+import { CatalogCandidates } from "@/components/items/CatalogCandidates";
 import { ItemRow } from "@/components/items/ItemRow";
 import { ReviewRowActions } from "@/components/items/ReviewRowActions";
-import { Button, Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
+import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
 import { requireOwner } from "@/lib/auth/guard";
-import { items, scans } from "@/db/schema";
-import { findDuplicates, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount } from "@/lib/items/duplicates";
-import { mergeDuplicateAction } from "@/lib/items/review-actions";
+import { scans } from "@/db/schema";
+import { findDuplicateMatches, MERGE_MESSAGES, MERGE_PROBLEMS, reviewCount, reviewItems } from "@/lib/items/duplicates";
+import { DuplicateNotice } from "@/components/items/DuplicateNotice";
 import { summarize } from "@/lib/scans/view";
+import { NOT_CHECKED_LINES } from "@/lib/catalog/candidates";
+import { reviewCatalogView } from "@/lib/catalog/pick";
+import { SerialAsk } from "@/components/items/SerialAsk";
+import { RookieAsk } from "@/components/items/RookieAsk";
+import { rookieAsk } from "@/lib/items/rookie";
+import { parseSuggestion } from "@/lib/items/serial";
+import { checkLine } from "@/lib/items/labels";
+import { fieldsToCheck } from "@/lib/catalog/sources";
 
 export const metadata = { title: "Review" };
 
@@ -30,9 +39,11 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
   const db = getDb();
   const failedScans = db.select({ n: count() }).from(scans).where(eq(scans.status, "failed")).get()?.n ?? 0;
   const total = reviewCount(db);
-  const rows = db.select().from(items).where(eq(items.status, "needs_review"))
-    .orderBy(asc(items.createdAt), asc(items.id)).limit(LIMIT).all();
+  const rows = reviewItems(LIMIT, db);
   const summaries = summarize(rows, db);
+  const now = new Date();
+  const rowById = new Map(rows.map((r) => [r.id, r]));
+  const catalogViews = new Map(rows.map((r) => [r.id, reviewCatalogView(r, db, now)]));
 
   return (
     <div className="flex flex-col gap-4">
@@ -54,21 +65,32 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
       ) : (
         <ul className="flex flex-col gap-4">
           {summaries.map((item) => {
-            const dup = findDuplicates(item.id, db)[0];
+            const dup = findDuplicateMatches(item.id, db)[0] ?? null;
+            const cat = catalogViews.get(item.id) ?? null;
             return (
               <li key={item.id}>
                 <Card className="flex flex-col gap-3 p-3">
                   <ItemRow item={item} />
-                  {dup ? (
-                    <form action={mergeDuplicateAction} className="flex flex-col gap-2">
-                      <input type="hidden" name="sourceId" value={item.id} />
-                      <input type="hidden" name="targetId" value={dup.id} />
-                      <p className="text-sm">You already have this card (quantity {dup.quantity}).</p>
-                      <Button type="submit" variant="secondary" aria-label={`Add ${item.title} to the one you already have`}>
-                        Add to existing
-                      </Button>
-                    </form>
+                  {dup ? <DuplicateNotice itemId={item.id} title={item.title} quantity={item.quantity} match={dup} /> : null}
+                  {cat ? (
+                    <CatalogCandidates
+                      id={item.id} title={item.title} view={cat}
+                      notCheckedLine={cat.reason ? NOT_CHECKED_LINES[cat.reason] : null}
+                    />
                   ) : null}
+                  {(() => {
+                    const full = rowById.get(item.id);
+                    const serial = full ? parseSuggestion(full.serialSuggested) : null;
+                    const rookie = full ? rookieAsk(full) : null;
+                    const check = full ? checkLine(fieldsToCheck(full)) : null;
+                    return (
+                      <>
+                        {check ? <Notice tone="warn">{check}</Notice> : null}
+                        {serial ? <SerialAsk itemId={item.id} title={item.title} view={serial} /> : null}
+                        {rookie ? <RookieAsk itemId={item.id} title={item.title} view={rookie} /> : null}
+                      </>
+                    );
+                  })()}
                   <ReviewRowActions id={item.id} title={item.title} />
                 </Card>
               </li>

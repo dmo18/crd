@@ -1,8 +1,8 @@
 import sharp from "sharp";
-import { afterAll, describe, expect, it } from "vitest";
-import { REVIEW_THRESHOLD, type RecognitionPhoto } from "@/lib/recognition/types";
-import { closeTextReader, getTextReader, type OcrResult, type TextReader } from "./ocr";
-import { FreeRecognizer } from "./recognizer";
+import { describe, expect, it } from "vitest";
+import { RecognitionError, REVIEW_THRESHOLD, type RecognitionPhoto } from "@/lib/recognition/types";
+import { ReaderDownError, type OcrResult, type TextReader } from "./ocr";
+import { FreeRecognizer, READER_DOWN } from "./recognizer";
 import type { PlayerFacts } from "./wikidata";
 
 /** A fake reader that returns set text per photo, keyed by the photo's first byte. */
@@ -31,9 +31,23 @@ describe("FreeRecognizer with fake parts", () => {
     });
     const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
     expect(item).toMatchObject({ kind: "card", year: 1990, brand: "Topps", cardNumber: "414", player: "Frank Thomas", isRookie: true });
-    expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
+    // Year and brand were each read in one place only (the copyright line):
+    // a key card hit alone no longer files the card (12R.5 round 2).
+    expect(item.confidence).toBeLessThan(REVIEW_THRESHOLD);
+    expect(item.evidence?.certainty).toMatchObject({ year: "unsure", brand: "unsure" });
     expect(item.estimate).toBeNull();
     expect(lookups).toBe(0);
+  });
+
+  it("files a key card on its own only when player, year and brand are each read in two places", async () => {
+    const r = new FreeRecognizer({
+      reader: reader({ 1: "1990 TOPPS\nFRANK THOMAS\nWHITE SOX", 2: "FRANK THOMAS\nNO. 414\nFIRST BASE\n\u00a9 1990 THE TOPPS COMPANY, INC." }),
+      lookup: async () => null,
+    });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
+    expect(item).toMatchObject({ year: 1990, brand: "Topps", cardNumber: "414", player: "Frank Thomas", isRookie: true });
+    expect(item.evidence?.certainty).toMatchObject({ year: "sure", brand: "sure", player: "sure" });
+    expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
   });
 
   it("confirms an unlisted player on Wikidata and notes Hall of Fame and possible rookie", async () => {
@@ -49,6 +63,45 @@ describe("FreeRecognizer with fake parts", () => {
     expect(item.rarityNotes).toMatch(/may be a rookie card/);
     expect(item.isRookie).toBe(false);
     expect(item.notes).toMatch(/Wikidata/);
+  });
+
+  it("writes a team hint only when the player's Wikidata team list has it (10.10)", async () => {
+    const text = "NO. 99\nFRANK THOMAS\nFrank was the White Sox top pick in the 1989 draft.\n© 1990 SCORE";
+    const run = async (facts: PlayerFacts | null) => {
+      const r = new FreeRecognizer({ reader: reader({ 3: text }), lookup: async () => facts });
+      return (await r.recognize({ mode: "single", photos: [photo(3)] }))[0];
+    };
+    // The team stands only in a sentence: a hint.
+    const none = await run(null);
+    expect(none.team).toBeNull();
+    expect(none.notes).toMatch(/Maybe team Chicago White Sox/);
+    const confirmed = await run(thomasFacts);
+    expect(confirmed.team).toBe("Chicago White Sox");
+    expect(confirmed.notes).toMatch(/Team confirmed on Wikidata: Chicago White Sox/);
+    // A team list without it, or another sport: not written.
+    expect((await run({ ...thomasFacts, teams: ["Oakland Athletics"] })).team).toBeNull();
+    expect((await run({ ...thomasFacts, sports: ["football"] })).team).toBeNull();
+  });
+
+  it("H1 end to end: a lowercase bio word and a misread front team write no team", async () => {
+    const r = new FreeRecognizer({
+      reader: reader({ 1: "GREGG OLSON\nMARMNERS", 2: "NO. 723\nHis two sons are twins and both play ball.\n© 1989 THE UPPER DECK CO." }),
+      lookup: async () => ({ ...thomasFacts, name: "Gregg Olson", teams: ["Baltimore Orioles"] }),
+    });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
+    expect(item.team).toBeNull();
+    expect(item.notes).not.toMatch(/Twins/);
+  });
+
+  it("a key card looks the player up only to check a team hint", async () => {
+    let lookups = 0;
+    const r = new FreeRecognizer({
+      reader: reader({ 1: "FRANK THOMAS\nFrank was the White Sox top pick in the 1989 draft.", 2: "NO. 414\nFRANK THOMAS\nFIRST BASE\n© 1990 THE TOPPS COMPANY, INC." }),
+      lookup: async () => { lookups++; return thomasFacts; },
+    });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] });
+    expect(item).toMatchObject({ player: "Frank Thomas", cardNumber: "414", team: "Chicago White Sox", isRookie: true });
+    expect(lookups).toBe(1);
   });
 
   it("still files a card it cannot read, for the owner to fill in", async () => {
@@ -109,19 +162,62 @@ describe("FreeRecognizer with fake parts", () => {
   });
 });
 
-describe("FreeRecognizer end to end with the real text reader", () => {
-  afterAll(() => closeTextReader());
-  it("reads a printed card back and identifies it", async () => {
-    const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1400">
-      <rect width="100%" height="100%" fill="#e9dfc4"/>
-      <text x="70" y="140" font-family="sans-serif" font-size="64" font-weight="700" fill="#222">NO. 1</text>
-      <text x="70" y="260" font-family="sans-serif" font-size="64" font-weight="700" fill="#222">KEN GRIFFEY JR.</text>
-      <text x="70" y="340" font-family="sans-serif" font-size="40" fill="#222">SEATTLE MARINERS  OF</text>
-      <text x="70" y="1300" font-family="sans-serif" font-size="32" fill="#222">© 1989 THE UPPER DECK CO.</text></svg>`);
-    const data = await sharp(svg).jpeg({ quality: 90 }).toBuffer();
-    const r = new FreeRecognizer({ reader: getTextReader(), lookup: async () => null });
-    const [item] = await r.recognize({ mode: "single", photos: [{ role: "front", data, width: 1000, height: 1400 }] });
-    expect(item).toMatchObject({ year: 1989, brand: "Upper Deck", cardNumber: "1", player: "Ken Griffey Jr.", rarityTier: "grail" });
-    expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
-  }, 60000);
+describe("FreeRecognizer passes what it saw as evidence, not as fields", () => {
+  const run = async (text: string) => {
+    const r = new FreeRecognizer({ reader: reader({ 5: text }), lookup: async () => null });
+    return (await r.recognize({ mode: "single", photos: [photo(5)] }))[0];
+  };
+  it("a key list hit is passed explicitly, and a card off the list has none", async () => {
+    const hit = await run("NO. 414\nFRANK THOMAS\nFIRST BASE\n© 1990 THE TOPPS COMPANY, INC.");
+    expect(hit.evidence?.keyCard).toEqual({ isRookie: true });
+    const off = await run("NO. 99\nSOME PLAYER\n© 1990 SCORE");
+    expect(off.evidence?.keyCard).toBeUndefined();
+  });
+  it("a read serial number travels as evidence with its line; the item field stays empty", async () => {
+    const item = await run("NO. 414\nFRANK THOMAS\n045/100\n© 1995 THE TOPPS COMPANY, INC.");
+    expect(item.serialNumber).toBeNull();
+    expect(item.evidence?.serial).toMatchObject({ text: "045/100", line: "045/100", weak: false });
+  });
+  it("the word ROOKIE and REPRINT travel as evidence", async () => {
+    const item = await run("NO. 414\nFRANK THOMAS\nROOKIE\nREPRINT\n© 1990 THE TOPPS COMPANY, INC.");
+    expect(item.evidence).toMatchObject({ rookieWord: true, reprint: true });
+  });
+});
+
+describe("FreeRecognizer when the text reader itself is not working (12R final review)", () => {
+  const dead: TextReader = { read: async () => { throw new ReaderDownError(); } };
+  const source = () => sharp({ create: { width: 1000, height: 1400, channels: 3, background: "#225533" } }).jpeg().toBuffer();
+
+  it("fails a single card scan with a plain message instead of an empty card", async () => {
+    const r = new FreeRecognizer({ reader: dead, lookup: async () => null });
+    const err = await r.recognize({ mode: "single", photos: [photo(1), photo(2, "back")] }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RecognitionError);
+    expect((err as RecognitionError).userMessage).toBe(READER_DOWN);
+    expect(READER_DOWN).toBe("The text reader is not working. Try again later.");
+  });
+
+  it("fails a many-card scan instead of making one empty card per box", async () => {
+    let reads = 0;
+    const r = new FreeRecognizer({
+      reader: { read: async () => { reads++; throw new ReaderDownError(); } },
+      findBoxes: async () => [{ x: 0.05, y: 0.05, w: 0.4, h: 0.4 }, { x: 0.55, y: 0.05, w: 0.4, h: 0.4 }],
+      lookup: async () => null,
+    });
+    await expect(r.recognize({ mode: "multi", photos: [{ role: "source", data: await source(), width: 1000, height: 1400 }] })).rejects.toBeInstanceOf(RecognitionError);
+    expect(reads).toBe(1);
+    const whole = new FreeRecognizer({ reader: dead, findBoxes: async () => [], lookup: async () => null });
+    await expect(whole.recognize({ mode: "multi", photos: [{ role: "source", data: await source(), width: 1000, height: 1400 }] })).rejects.toBeInstanceOf(RecognitionError);
+  });
+
+  it("fails a product scan", async () => {
+    const r = new FreeRecognizer({ reader: dead, lookup: async () => null });
+    await expect(r.recognize({ mode: "sealed", photos: [photo(5, "source")] })).rejects.toBeInstanceOf(RecognitionError);
+  });
+
+  it("a photo the reader simply could not read still gives an empty card to fill in", async () => {
+    const r = new FreeRecognizer({ reader: { read: async () => { throw new Error("Could not read text from the photo."); } }, lookup: async () => null });
+    const [item] = await r.recognize({ mode: "single", photos: [photo(1)] });
+    expect(item.kind).toBe("card");
+    expect(item.notes).toContain("Could not read the printed text clearly");
+  });
 });

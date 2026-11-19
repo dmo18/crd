@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui";
 import { deleteFailedScansAction } from "@/lib/items/review-actions";
 
-export function DeleteFailedScans({ count }: { count: number }) {
+export function DeleteFailedScans({ count, back = "review" }: { count: number; back?: "review" | "scans" }) {
   const [asking, setAsking] = useState(false);
   const what = count === 1 ? "1 scan that did not work" : `${count} scans that did not work`;
   if (!asking) {
@@ -17,6 +17,7 @@ export function DeleteFailedScans({ count }: { count: number }) {
   }
   return (
     <form action={deleteFailedScansAction} className="flex flex-col gap-2">
+      <input type="hidden" name="back" value={back} />
       <p role="alert" className="text-sm font-semibold">Delete {what} and their photos? This cannot be undone.</p>
       <div className="flex gap-2">
         <Button type="submit" variant="danger" className="flex-1">Yes, delete</Button>

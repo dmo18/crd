@@ -19,3 +19,4 @@ docker-compose.yaml
 .dockerignore
 .DS_Store
 npm-debug.log*
+scripts/catalog-probe.mjs

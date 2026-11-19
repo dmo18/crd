@@ -1,4 +1,7 @@
 import { z } from "zod";
+import type { Candidate } from "@/lib/catalog/match";
+import type { NotCheckedReason } from "@/lib/catalog/candidates";
+import type { CatalogCard } from "@/lib/catalog/types";
 import { CONDITIONS, ITEM_KINDS, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS } from "@/db/schema";
 
 /**
@@ -78,7 +81,49 @@ export const recognizedItemSchema = z.object({
   notes: optionalText(600),
   estimate: estimateSchema.nullish().transform((v) => v ?? null),
 });
-export type RecognizedItem = z.infer<typeof recognizedItemSchema>;
+/**
+ * What the catalog said about a card the free reader read. Never part of the
+ * zod schema: it is added by the server after the check, so an AI answer can
+ * never bring one in (zod drops unknown keys). Left out means the catalog was
+ * not asked (sealed, bulk, sample and AI modes, or no catalog given).
+ */
+export type RecognizedCatalog =
+  /** One card the matching rule is sure of. `confidence`: the item's figure once it is applied. */
+  | { status: "sure"; card: CatalogCard; confidence: number }
+  | { status: "candidates"; candidates: Candidate[] }
+  | { status: "none" }
+  | { status: "not_checked"; reason: NotCheckedReason };
+
+/**
+ * What the reader saw that the owner is asked about. Like `catalog`, never part
+ * of the zod schema: the server adds it after the reading, so an AI answer can
+ * never bring one in. Nothing here is written to the item as a fact: a scan
+ * writes only a key list hit for the rookie mark, and never a serial number.
+ */
+export type ReadEvidence = {
+  /** The built-in key card list had this very card. `isRookie` is the list's answer. Passed explicitly, never inferred. */
+  keyCard?: { isRookie: boolean };
+  /** The card says REPRINT. */
+  reprint?: boolean;
+  /** The word ROOKIE or RC was read on the card. */
+  rookieWord?: boolean;
+  /** A serial number as the reader saw it. */
+  serial?: { text: string; line: string; weak: boolean; why: string[] };
+  /**
+   * Per filled field, how sure the free reader is (12R.5 round 2): "sure"
+   * only when two independent signs on the card agree, else "unsure". Unsure
+   * fields are marked "Check this" for the owner. Left out by readers that
+   * do not say (AI, sample).
+   */
+  certainty?: FieldCertainty;
+};
+
+/** The fields a reader may say it is sure of. */
+export const CERTAIN_FIELDS = ["sport", "year", "brand", "setName", "cardNumber", "player", "team"] as const;
+export type CertainField = (typeof CERTAIN_FIELDS)[number];
+export type FieldCertainty = Partial<Record<CertainField, "sure" | "unsure">>;
+
+export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence };
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;
 
 export const recognitionResultSchema = z.object({

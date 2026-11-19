@@ -14,6 +14,11 @@ const schema = z.object({
   DATA_DIR: z.string().min(1).default("./data"),
   SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
   /**
+   * Optional. Locks the keys saved on More, Connections. Without it they are
+   * locked with SESSION_SECRET. Changing it means entering the keys again.
+   */
+  SETTINGS_KEY: z.string().min(32, "SETTINGS_KEY must be at least 32 characters").max(500).optional(),
+  /**
    * Owner password (bcrypt hash, base64). Optional: without it the password
    * is set once in the app at /setup and kept in the database. When set, it wins.
    */
@@ -96,7 +101,7 @@ let cached: Env | undefined;
 export function env(): Env {
   if (cached) return cached;
   const raw = { ...process.env };
-  for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "APP_ORIGIN", "TRUST_PROXY_HOPS", "CLIENT_IP_HEADER", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE",
+  for (const name of ["SETTINGS_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "APP_ORIGIN", "TRUST_PROXY_HOPS", "CLIENT_IP_HEADER", "OWNER_PASSWORD_HASH_B64", "SETUP_CODE",
     "ALERT_TELEGRAM_BOT_TOKEN", "ALERT_TELEGRAM_CHAT_ID", "ALERT_DISCORD_WEBHOOK_URL"]) {
     if (raw[name]?.trim() === "") delete raw[name];
   }
@@ -129,6 +134,11 @@ export function recognitionMode(): "free" | "sample" | "anthropic" {
 /** Host (with port, if any) of APP_ORIGIN, lowercased, or null when unset. */
 export function appOriginHost(e: Pick<Env, "APP_ORIGIN"> = env()): string | null {
   return e.APP_ORIGIN ? new URL(e.APP_ORIGIN).host.toLowerCase() : null;
+}
+
+/** The secret the connection keys are locked with: SETTINGS_KEY, else SESSION_SECRET. Server only. */
+export function settingsSecret(e: Pick<Env, "SETTINGS_KEY" | "SESSION_SECRET"> = env()): string {
+  return e.SETTINGS_KEY ?? e.SESSION_SECRET;
 }
 
 export type AlertChannel = "telegram" | "discord";

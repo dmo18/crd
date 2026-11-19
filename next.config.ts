@@ -41,7 +41,7 @@ const nextConfig: NextConfig = {
     proxyClientMaxBodySize: "64mb",
     serverActions: { allowedOrigins: appOriginHosts() },
   },
-  serverExternalPackages: ["better-sqlite3", "sharp", "tesseract.js", "@tesseract.js-data/eng"],
+  serverExternalPackages: ["better-sqlite3", "sharp"],
   turbopack: {
     rules: {
       "*.css": {

@@ -1,6 +1,10 @@
-import type { NewItem, ValueSource } from "@/db/schema";
-import { REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
+import type { CatalogField, NewItem, ValueSource } from "@/db/schema";
+import { CERTAIN_FIELDS, REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
+import { serializeCatalog } from "@/lib/catalog/candidates";
+import { buildFirstSuggestion, sourcesFor } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
+import { rookieFromScan } from "./rookie";
+import { suggestionFromRead } from "./serial";
 
 /** The single figure used for totals: the middle of the estimated range. */
 export function midpointCents(low: number | null, high: number | null): number | null {
@@ -8,36 +12,63 @@ export function midpointCents(low: number | null, high: number | null): number |
   return low ?? high ?? null;
 }
 
-/** Turns one recognized item into a database row (not yet saved). */
+/**
+ * Turns one recognized item into a database row (not yet saved). The fields
+ * the scanner filled are marked `reading`, and what it read is kept once in
+ * `firstSuggestion`, which no later change touches. Catalog candidates, or
+ * why the catalog was not checked, are kept for Review. Catalog cards are
+ * never applied here; automatic filling is OFF (AUTO_FILL_SURE), so every
+ * catalog card needs the owner's tap in Review.
+ */
 export function itemFromRecognition(
   r: RecognizedItem,
-  ctx: { scanId: number; locationId: number | null; valueSource: ValueSource; now: Date },
+  ctx: { scanId: number; locationId: number | null; valueSource: ValueSource; now: Date; recognizer?: string | null },
 ): NewItem {
   const low = r.estimate?.lowCents ?? null;
   const high = r.estimate?.highCents ?? null;
   const value = midpointCents(low, high);
   const isCard = r.kind === "card";
-  return {
-    kind: r.kind,
-    status: r.confidence >= REVIEW_THRESHOLD ? "confirmed" : "needs_review",
-    scanId: ctx.scanId,
-    title: buildTitle(r),
+  const read = {
     sport: r.sport,
     year: r.year,
-    yearEnd: r.kind === "bulk" ? r.yearEnd : null,
     brand: r.brand,
     setName: r.setName,
     cardNumber: isCard ? r.cardNumber : null,
     player: isCard ? r.player : null,
     team: isCard ? r.team : null,
     variation: r.variation,
-    isRookie: isCard && r.isRookie,
+  };
+  const serial = isCard ? (r.evidence?.serial ?? (r.serialNumber ? { text: r.serialNumber } : null)) : null;
+  const suggestion = suggestionFromRead(serial, r.year);
+  const serialSuggestion = suggestion ? JSON.stringify(suggestion) : null;
+  const cat = isCard ? r.catalog : undefined;
+  let catalogCandidates: string | null = null;
+  if (cat?.status === "candidates") catalogCandidates = serializeCatalog({ status: "candidates", items: cat.candidates }, ctx.now);
+  else if (cat?.status === "none") catalogCandidates = serializeCatalog({ status: "none" }, ctx.now);
+  else if (cat?.status === "not_checked") catalogCandidates = serializeCatalog({ status: "not_checked", reason: cat.reason }, ctx.now);
+  return {
+    kind: r.kind,
+    status: r.confidence >= REVIEW_THRESHOLD ? "confirmed" : "needs_review",
+    scanId: ctx.scanId,
+    title: buildTitle(r),
+    ...read,
+    yearEnd: r.kind === "bulk" ? r.yearEnd : null,
+    fieldSources: sourcesFor(read, "reading"),
+    catalogCandidates,
+    firstSuggestion: buildFirstSuggestion(read, {
+      confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now, unsure: isCard ? unsureFields(r) : [],
+    }),
+    ...rookieFromScan(isCard, r.isRookie, r.evidence),
     isError: isCard && r.isError,
     isParallel: isCard && r.isParallel,
     isInsert: isCard && r.isInsert,
     isAutograph: isCard && r.isAutograph,
     isMemorabilia: isCard && r.isMemorabilia,
-    serialNumber: isCard ? r.serialNumber : null,
+    // A scan never writes the serial number or its parts: what it read waits for the owner's answer.
+    serialNumber: null,
+    serialCopy: null,
+    serialEdition: null,
+    serialSuggested: serialSuggestion,
     rarityTier: r.rarityTier,
     rarityNotes: r.rarityNotes,
     condition: isCard ? r.condition : null,
@@ -67,6 +98,13 @@ export function itemFromRecognition(
     createdAt: ctx.now,
     updatedAt: ctx.now,
   };
+}
+
+/** The fields the reader filled but was not sure of (see ReadEvidence.certainty). */
+function unsureFields(r: RecognizedItem): CatalogField[] {
+  const c = r.evidence?.certainty;
+  if (!c) return [];
+  return CERTAIN_FIELDS.filter((f) => c[f] === "unsure");
 }
 
 /** Reads the stored pull list back into an array. Bad data gives an empty list. */

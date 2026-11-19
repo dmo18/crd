@@ -1,0 +1,6 @@
+# Text reader models (PP-OCR, Apache-2.0, see ocr/README.txt). One per line:
+# role sha256 file url. Fetched once when the image is built and checked by
+# sha256 then and every time the worker starts. Never downloaded at run time.
+det 090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f PP-OCRv6_det_small.onnx https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx
+cls e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c ch_ppocr_mobile_v2.0_cls_mobile.onnx https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx
+rec 6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884 PP-OCRv6_rec_small.onnx https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx

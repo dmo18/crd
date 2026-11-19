@@ -1,0 +1,22 @@
+{
+ "note": "Recorded 2026-11-16 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1990 Topps 792",
+  "limit": 10
+ },
+ "elapsed_ms": 481,
+ "bytes": 1295,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1990 Topps 792\",\n  \"count\": 2,\n  \"results\": [\n    {\n      \"card_id\": \"551489\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"792\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Gerald Perry\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-2129/base-set-9179/792-gerald-perry-551489\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/551489.jpg\"\n    },\n    {\n      \"card_id\": \"552341\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1990\",\n      \"product\": \"Topps Tiffany\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"792\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Gerald Perry\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1990/topps-tiffany-2131/base-set-9181/792-gerald-perry-552341\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/552341.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

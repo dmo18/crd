@@ -38,6 +38,54 @@ export function describeAudit(row: { event: AuditEvent; ip: string; detail: stri
       return d ? `Merged duplicates: ${d}` : "Merged duplicates";
     case "location_deleted":
       return d ? `Deleted location ${d}` : "Deleted a location";
+    case "item_restored":
+      return d ? `Brought back ${d} from Recently deleted` : "Brought back an item from Recently deleted";
+    case "bulk_edit":
+      return d ? `Changed many at once: ${d}` : "Changed many items at once";
+    case "bulk_delete":
+      return d ? `Deleted many at once: ${d}` : "Deleted many items at once";
+    case "bulk_restore":
+      return d ? `Brought back from Recently deleted: ${d}` : "Brought back items from Recently deleted";
+    case "bulk_purge":
+      return d ? `Deleted forever: ${d}` : "Deleted items forever";
+    case "bulk_undo":
+      return d ? `Undid a change to many items: ${d}` : "Undid a change to many items";
+    case "connection_key_saved":
+      return d ? `Saved a key for a connection: ${d}` : "Saved a key for a connection";
+    case "connection_key_removed":
+      return d ? `Removed the key of a connection: ${d}` : "Removed the key of a connection";
+    case "connection_tested":
+      return d ? `Tested a connection: ${d}` : "Tested a connection";
+    case "connection_switched":
+      return d ? `Switched a connection on or off: ${d}` : "Switched a connection on or off";
+    case "catalog_answers_cleared":
+      return d ? `Cleared stored catalog answers: ${d}` : "Cleared stored catalog answers";
+    case "catalog_card_added":
+      return d ? `Added a card from the catalog: ${d}` : "Added a card from the catalog";
+    case "catalog_card_linked":
+      return d ? `Linked an item to a catalog card: ${d}` : "Linked an item to a catalog card";
+    case "catalog_card_unlinked":
+      return d ? `Unlinked an item from its catalog card: ${d}` : "Unlinked an item from its catalog card";
+    case "catalog_none_of_these":
+      return d ? `Said none of the catalog cards fit: ${d}` : "Said none of the catalog cards fit";
+    case "catalog_lookup_again":
+      return d ? `Looked a card up again in the catalog: ${d}` : "Looked a card up again in the catalog";
+    case "version_chosen":
+      return d ? `Chose the version of a card: ${d}` : "Chose the version of a card";
+    case "versions_shown":
+      return d ? `Showed the versions of a card: ${d}` : "Showed the versions of a card";
+    case "serial_confirmed":
+      return d ? `Confirmed a serial number: ${d}` : "Confirmed a serial number";
+    case "rookie_set":
+      return d ? `Set the rookie mark: ${d}` : "Set the rookie mark";
+    case "photo_added":
+      return d ? `Added a photo: ${d}` : "Added a photo";
+    case "photo_edited":
+      return d ? `Turned or trimmed a photo: ${d}` : "Turned or trimmed a photo";
+    case "photo_restored":
+      return d ? `Put back the original photo: ${d}` : "Put back the original photo";
+    case "duplicate_kept_apart":
+      return d ? `Kept two records apart: ${d}` : "Kept two records apart";
     case "backup_note":
       return d ? `Backup: ${d}` : "Backup note";
   }

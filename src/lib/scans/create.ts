@@ -42,10 +42,16 @@ function checkPhotos(mode: ScanMode, photos: ScanPhotoInput[]) {
  * call enqueueScan with the returned id.
  */
 export async function createScan(
-  input: { mode: ScanMode; hint?: string | null; locationId?: number | null; photos: ScanPhotoInput[] },
+  input: { mode: ScanMode; hint?: string | null; locationId?: number | null; clientKey?: string | null; photos: ScanPhotoInput[] },
   db: Db = getDb(),
-): Promise<{ scanId: number }> {
+): Promise<{ scanId: number; duplicate: boolean }> {
   checkPhotos(input.mode, input.photos);
+  const clientKey = input.clientKey ?? null;
+  const existingId = () => clientKey === null ? undefined
+    : db.select({ id: scans.id }).from(scans).where(eq(scans.clientKey, clientKey)).get()?.id;
+  // A repeat of an upload we already have: save nothing, answer with the same scan.
+  const seen = existingId();
+  if (seen !== undefined) return { scanId: seen, duplicate: true };
   const hint = input.hint?.trim().slice(0, 200) || null;
 
   let locationId: number | null = null;
@@ -61,15 +67,18 @@ export async function createScan(
       stored.push({ role: photo.role, image: await saveUpload(photo.data) });
     }
     return db.transaction((tx) => {
-      const scan = tx.insert(scans).values({ mode: input.mode, hint, locationId }).returning({ id: scans.id }).get();
+      const scan = tx.insert(scans).values({ mode: input.mode, hint, locationId, clientKey }).returning({ id: scans.id }).get();
       for (const s of stored) {
         tx.insert(images).values({ scanId: scan.id, role: s.role, ...s.image }).run();
       }
-      return { scanId: scan.id };
+      return { scanId: scan.id, duplicate: false };
     });
   } catch (err) {
     // Do not leave orphan files behind when anything fails part way.
     await Promise.all(stored.map((s) => deleteStored(s.image.file).catch(() => undefined)));
+    // Two sends of the same key raced and the other one won: use its scan.
+    const winner = existingId();
+    if (winner !== undefined) return { scanId: winner, duplicate: true };
     if (err instanceof ImageError) throw new ScanInputError(err.userMessage);
     throw err;
   }

@@ -2,13 +2,15 @@
 
 import { useActionState, type ReactNode } from "react";
 import { Button, Field, INPUT_CLASS, Notice } from "@/components/ui";
-import type { Item } from "@/db/schema";
+import type { Item, ItemKind } from "@/db/schema";
 import { CONDITIONS, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS } from "@/db/schema";
-import { saveItemAction, type SaveState } from "@/lib/items/actions";
+import { createItemAction, saveItemAction, type SaveState } from "@/lib/items/actions";
+import { readRookie, ROOKIE_STATE_LABELS } from "@/lib/items/rookie";
+import { splitSerial } from "@/lib/items/serial";
+import { ROOKIE_STATES } from "@/db/schema";
 import { CONDITION_LABELS, PRODUCT_LABELS, RARITY_LABELS, SEAL_LABELS, SPORT_LABELS } from "@/lib/items/labels";
 
 const FLAGS = [
-  ["isRookie", "Rookie card"],
   ["isError", "Error card"],
   ["isParallel", "Parallel"],
   ["isInsert", "Insert"],
@@ -38,17 +40,37 @@ function Select<T extends string>({ id, name, value, values, labels }: {
 
 const INITIAL: SaveState = { status: "idle", errors: {} };
 
-export function ItemForm({ item, locations = [] }: { item: Item; locations?: { id: number; name: string }[] }) {
-  const [state, action, pending] = useActionState(saveItemAction, INITIAL);
+/** An empty record the new item form starts from. */
+function blankItem(kind: ItemKind): Item {
+  return {
+    id: 0, kind, quantity: 1, status: "confirmed", title: "", sport: null, year: null, yearEnd: null, brand: null, setName: null,
+    cardNumber: null, player: null, team: null, variation: null, isRookie: false, isError: false, isParallel: false,
+    isInsert: false, isAutograph: false, isMemorabilia: false, serialNumber: null, rarityTier: null, condition: null,
+    conditionNotes: null, grader: null, grade: null, certNumber: null, productType: null, packCount: null, sealState: null,
+    estCount: null, containerType: null, description: null, locationId: null, notes: null, manualValueCents: null,
+  } as unknown as Item;
+}
+
+/** Edits `item`, or (with `create`) makes a new record of that kind by hand. */
+export function ItemForm({ item: given, create, locations = [], check = [] }: {
+  item?: Item; create?: ItemKind; locations?: { id: number; name: string }[];
+  /** Fields the reader filled without being sure: marked "Check this". */
+  check?: readonly string[];
+}) {
+  const item = given ?? blankItem(create ?? "card");
+  const [state, action, pending] = useActionState(create ? createItemAction : saveItemAction, INITIAL);
   const e = state.errors;
   const isCard = item.kind === "card";
+  const rookie = readRookie(item);
+  const serialParts = item.serialEdition ? { copy: item.serialCopy, edition: item.serialEdition } : splitSerial(item.serialNumber);
+  const wholeSerial = !serialParts && !!item.serialNumber;
   const isSealed = item.kind === "sealed";
   const isBulk = item.kind === "bulk";
 
   const text = (name: keyof Item, label: string, opts: { hint?: string; inputMode?: "numeric" | "decimal"; max?: number } = {}) => {
     const v = item[name];
     return (
-      <Field label={label} hint={opts.hint} error={e[name]} htmlFor={`f-${name}`}>
+      <Field label={label} hint={opts.hint} error={e[name]} htmlFor={`f-${name}`} check={check.includes(name)}>
         <input
           id={`f-${name}`} name={name} type="text" defaultValue={v == null ? "" : String(v)}
           inputMode={opts.inputMode} maxLength={opts.max} className={INPUT_CLASS}
@@ -60,10 +82,10 @@ export function ItemForm({ item, locations = [] }: { item: Item; locations?: { i
 
   return (
     <form action={action} className="flex flex-col gap-6">
-      <input type="hidden" name="id" value={item.id} />
+      {create ? <input type="hidden" name="kind" value={create} /> : <input type="hidden" name="id" value={item.id} />}
 
       <Group title="What it is">
-        <Field label="Sport" error={e.sport} htmlFor="f-sport">
+        <Field label="Sport" error={e.sport} htmlFor="f-sport" check={check.includes("sport")}>
           <Select id="f-sport" name="sport" value={item.sport} values={SPORTS} labels={SPORT_LABELS} />
         </Field>
         {text("year", isBulk ? "First year" : "Year", { inputMode: "numeric", max: 4 })}
@@ -86,11 +108,9 @@ export function ItemForm({ item, locations = [] }: { item: Item; locations?: { i
           </>
         ) : null}
         {isBulk ? text("containerType", "Container", { hint: "For example: shoebox or binder.", max: 80 }) : null}
-        {isBulk ? (
-          <Field label="Description" error={e.description} htmlFor="f-description">
-            <textarea id="f-description" name="description" rows={3} maxLength={600} defaultValue={item.description ?? ""} className={`${INPUT_CLASS} py-2`} />
-          </Field>
-        ) : null}
+        <Field label="Description" hint={create ? "Your own words, if you do not know the player or set." : undefined} error={e.description} htmlFor="f-description">
+          <textarea id="f-description" name="description" rows={3} maxLength={600} defaultValue={item.description ?? ""} className={`${INPUT_CLASS} py-2`} />
+        </Field>
       </Group>
 
       <Group title="Rarity">
@@ -108,7 +128,32 @@ export function ItemForm({ item, locations = [] }: { item: Item; locations?: { i
                 </label>
               ))}
             </fieldset>
-            {text("serialNumber", "Serial number", { hint: "If the card is numbered, like 045/100.", max: 30 })}
+            <fieldset className="flex flex-col gap-1">
+              <legend className="pb-1 text-sm font-semibold">Rookie card?</legend>
+              {rookie.source === "key_list" && rookie.note ? <p className="pb-1 text-sm text-muted">{rookie.note}</p> : null}
+              {!create && !rookie.sourceRecorded && rookie.state === "yes" ? <p className="pb-1 text-sm text-muted">Source not recorded.</p> : null}
+              <div className="grid grid-cols-2 gap-2">
+                {ROOKIE_STATES.map((v) => (
+                  <label key={v} className="flex min-h-11 items-center gap-3 rounded-xl border border-border bg-surface-2 px-3">
+                    <input type="radio" name="rookieState" value={v} defaultChecked={rookie.state === v} className="size-5 accent-accent" />
+                    <span>{ROOKIE_STATE_LABELS[v]}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset className="flex flex-col gap-1">
+              <legend className="pb-1 text-sm font-semibold">Serial number</legend>
+              <p className="pb-1 text-sm text-muted">Only if the card is numbered, like 045 of 100. Keep the zeros.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Copy" error={e.serialCopy} htmlFor="f-serialCopy">
+                  <input id="f-serialCopy" name="serialCopy" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={6} defaultValue={serialParts?.copy ?? ""} className={INPUT_CLASS} />
+                </Field>
+                <Field label="of" error={e.serialEdition} htmlFor="f-serialEdition">
+                  <input id="f-serialEdition" name="serialEdition" type="text" inputMode="numeric" pattern="[0-9]*" maxLength={6} defaultValue={serialParts?.edition ?? ""} className={INPUT_CLASS} />
+                </Field>
+              </div>
+              {wholeSerial ? text("serialNumber", "Serial number as written", { hint: "This older note does not fit the two boxes, so it is kept as it is.", max: 30 }) : null}
+            </fieldset>
           </>
         ) : null}
       </Group>
@@ -158,9 +203,9 @@ export function ItemForm({ item, locations = [] }: { item: Item; locations?: { i
 
       {e.form ? <div role="alert"><Notice tone="danger">{e.form}</Notice></div> : null}
       <div aria-live="polite">
-        {state.status === "saved" ? <Notice tone="accent">Saved</Notice> : null}
+        {state.status === "saved" && !create ? <Notice tone="accent">Saved</Notice> : null}
       </div>
-      <Button type="submit" disabled={pending}>{pending ? "Saving..." : "Save changes"}</Button>
+      <Button type="submit" disabled={pending}>{pending ? "Saving..." : create ? "Save" : "Save changes"}</Button>
     </form>
   );
 }
