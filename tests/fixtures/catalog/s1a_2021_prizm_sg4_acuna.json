@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-19 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "2021 Prizm SG-4 Acuna",
+  "limit": 10,
+  "sport": "Baseball",
+  "year": "2021"
+ },
+ "elapsed_ms": 470,
+ "status": 200,
+ "bytes": 1473,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"2021 Prizm SG-4 Acuna\",\n  \"count\": 2,\n  \"results\": [\n    {\n      \"card_id\": \"ebay_99d06a88a8a0\",\n      \"sport\": \"Baseball\",\n      \"year\": \"2021\",\n      \"product\": \"Prizm\",\n      \"set\": \"Stained Glass\",\n      \"card_number\": \"SG-4\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Ronald Acuna Jr\",\n          \"team_name\": \"Atlanta Braves\"\n        }\n      ],\n      \"card_details\": \"RC, SP\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/2021/prizm-ebay_f49e231840/stained-glass-ebay_0b76a39037/sg-4-ronald-acuna-jr-ebay_99d06a88a8a0\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_99d06a88a8a0.jpg\"\n    },\n    {\n      \"card_id\": \"ebay_b24d57fc3a58\",\n      \"sport\": \"Baseball\",\n      \"year\": \"2021\",\n      \"product\": \"Prizm\",\n      \"set\": \"Stained Glass\",\n      \"card_number\": \"SG-4\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Ronald Acuna Jr.\",\n          \"team_name\": \"Atlanta Braves\"\n        }\n      ],\n      \"card_details\": \"RC, SP\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/2021/prizm-ebay_f49e231840/stained-glass-ebay_0b76a39037/sg-4-ronald-acuna-jr-ebay_b24d57fc3a58\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/ebay_b24d57fc3a58.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

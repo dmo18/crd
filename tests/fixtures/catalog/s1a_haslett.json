@@ -1,0 +1,24 @@
+{
+ "note": "Recorded 2026-11-19 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "Haslett",
+  "limit": 10,
+  "sport": "Football"
+ },
+ "elapsed_ms": 432,
+ "status": 200,
+ "bytes": 2368,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"Haslett\",\n  \"count\": 4,\n  \"results\": [\n    {\n      \"card_id\": \"613082\",\n      \"sport\": \"Football\",\n      \"year\": \"1986\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"392\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"JIM HASLETT\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/football/1986/topps-2334/base-set-9382/392-jim-haslett-613082\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/613082.jpg\"\n    },\n    {\n      \"card_id\": \"612498\",\n      \"sport\": \"Football\",\n      \"year\": \"1985\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"204\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"JIM HASLETT\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/football/1985/topps-2333/base-set-9381/204-jim-haslett-612498\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/612498.jpg\"\n    },\n    {\n      \"card_id\": \"611003\",\n      \"sport\": \"Football\",\n      \"year\": \"1982\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"29\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"JIM HASLETT\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/football/1982/topps-2330/base-set-9378/29-jim-haslett-611003\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/611003.jpg\"\n    },\n    {\n      \"card_id\": \"610619\",\n      \"sport\": \"Football\",\n      \"year\": \"1981\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"173\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"JIM HASLETT\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/football/1981/topps-2329/base-set-9377/173-jim-haslett-610619\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/610619.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

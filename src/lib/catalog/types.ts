@@ -24,6 +24,10 @@ export type CatalogCard = {
   variation: string | null;
   /** "RC", "IR", "TC" and the like, taken off the name. Kept for Milestone 11. */
   tags: string[];
+  /** The first player's team, when the catalog names one (clean entries rarely do). */
+  team?: string | null;
+  /** The catalog's card details text ("RC", "Rookie Card", variation words), as sent. */
+  details?: string | null;
 };
 
 export type CatalogFailure = "off" | "paused" | "cap" | "busy" | "failed";

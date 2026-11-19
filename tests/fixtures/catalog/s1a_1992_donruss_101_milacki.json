@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-19 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1992 Donruss 101 Milacki",
+  "limit": 10,
+  "sport": "Baseball",
+  "year": "1992"
+ },
+ "elapsed_ms": 1002,
+ "status": 200,
+ "bytes": 742,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1992 Donruss 101 Milacki\",\n  \"count\": 1,\n  \"results\": [\n    {\n      \"card_id\": \"2310072\",\n      \"sport\": \"Baseball\",\n      \"year\": \"1992\",\n      \"product\": \"Donruss\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"101\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Bob Milacki\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/baseball/1992/donruss-5009/base-set-38809/101-bob-milacki-2310072\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/2310072.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

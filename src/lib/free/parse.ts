@@ -718,6 +718,15 @@ const BRANDS: BrandDef[] = [
 const SET_LOGOS: [RegExp, string][] = [[/^SELECT$/, "Select"], [/^CERTIFIED$/, "Certified"], [/^METAL(?:\s*UNIVERSE)?$/, "Metal"]];
 
 /**
+ * Every product (set) name of the maker and product table, and the set logos:
+ * a read set name on this list names the product the catalog files the card
+ * under ("Prizm", "Stadium Club"), not an insert or subset.
+ */
+export const PRODUCT_NAMES: readonly string[] = [
+  ...new Set([...BRANDS.flatMap((d) => [d.set, d.modern?.set]), ...SET_LOGOS.map(([, name]) => name)].filter((v): v is string => Boolean(v))),
+];
+
+/**
  * Makers that are one company, or owned one another, in the years cards
  * carry both names (Leaf, Inc. owned Donruss; Pinnacle Brands made Score
  * and later Donruss; Panini bought Donruss Playoff; Fleer and SkyBox merged;

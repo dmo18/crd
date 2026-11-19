@@ -97,11 +97,13 @@ export function toCard(rawRow: unknown, setIdHint: string | null = null): Catalo
 
   const names: string[] = [];
   const tags: string[] = [];
+  let team: string | null = null;
   // Only the first few players: a card never has more, and a huge list must stay cheap.
   for (const subj of (r.subjects ?? []).slice(0, MAX_SUBJECTS)) {
-    const o = z.object({ subject_name: z.string().nullish() }).passthrough().safeParse(subj);
+    const o = z.object({ subject_name: z.string().nullish(), team_name: z.string().nullish() }).passthrough().safeParse(subj);
     if (!o.success) continue;
     const c = cleanName(o.data.subject_name);
+    if (names.length === 0 && c.name) team = o.data.team_name?.replace(/\s+/g, " ").trim().slice(0, 80) || null;
     if (c.name && !names.includes(c.name)) names.push(c.name);
     // Rookie and other words on listings are not trusted: tags only from clean entries.
     if (verified) for (const t of c.tags) if (!tags.includes(t)) tags.push(t);
@@ -125,6 +127,8 @@ export function toCard(rawRow: unknown, setIdHint: string | null = null): Catalo
     otherPlayers: names.slice(1),
     variation,
     tags,
+    team,
+    details: s(r.card_details).replace(/\s+/g, " ").trim().slice(0, 120) || null,
   };
 }
 

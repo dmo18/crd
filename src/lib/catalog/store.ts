@@ -38,7 +38,8 @@ export function saveCatalogCardIn(tx: Db, card: CatalogCard, now: Date = new Dat
     if (!row) {
       const values = {
         sport, year, brand, setName: card.setName, cardNumber: card.cardNumber,
-        player, team: null, variation: card.variation,
+        // A team only from a clean entry: listings carry free text there.
+        player, team: card.verified ? card.team ?? null : null, variation: card.variation,
       };
       row = tx.insert(catalogCards).values({
         canonicalKey: key, ...values, verified: card.verified, fieldSources: sourcesFor(values, "catalog"),
