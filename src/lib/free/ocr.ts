@@ -47,6 +47,12 @@ export type ReadOptions = {
   quick?: boolean;
   /** The back of a card: the corners are read again for the card number. */
   back?: boolean;
+  /**
+   * A card whose side is not known (many cards in one photo): asked once,
+   * after the card is read the right way up, whether this is a back. When it
+   * says yes the corners are read again as for `back`.
+   */
+  backIf?: (read: OcrResult) => boolean;
 };
 export interface TextReader {
   read(image: Buffer, options?: ReadOptions): Promise<OcrResult>;
@@ -370,7 +376,7 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
   }
 
   // 3. On a back, each corner read again larger: the card number sits in one.
-  if (options.back) {
+  if (options.back || options.backIf?.(summarize(best, passes, crops))) {
     for (const corner of cornerBoxes()) {
       const zoomed = await part(view, { region: corner, edge: CORNER_EDGE, maxUp: CORNER_MAX_UP, pad: true });
       const got = await reread(zoomed.png);
