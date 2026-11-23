@@ -16,7 +16,7 @@
     "check": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "1.8.0",
+    "@anthropic-ai/sdk": "1.11.0",
     "bcryptjs": "3.0.3",
     "better-sqlite3": "13.2.0",
     "drizzle-orm": "0.45.4",
@@ -39,6 +39,6 @@
     "tailwindcss": "4.3.5",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
-    "vitest": "5.1.0"
+    "vitest": "5.1.1"
   }
 }
