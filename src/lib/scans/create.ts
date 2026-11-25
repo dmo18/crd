@@ -1,6 +1,7 @@
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, locations, scans, type ScanMode } from "@/db/schema";
+import { MAX_BATCH_PHOTOS } from "./batch-limits";
 import { deleteStored, ImageError, MAX_PHOTOS_PER_SCAN, saveUpload, type StoredImage } from "@/lib/images/store";
 
 export type ScanPhotoRole = "front" | "back" | "source";
@@ -13,6 +14,8 @@ export class ScanInputError extends Error {
     this.name = "ScanInputError";
   }
 }
+
+export const BATCH_FULL = `This upload already has ${MAX_BATCH_PHOTOS} cards. Start a new one.`;
 
 /** How many photos each kind of scan accepts. */
 export const PHOTO_RULES: Record<ScanMode, { min: number; max: number }> = {
@@ -52,6 +55,11 @@ export async function createScan(
   // A repeat of an upload we already have: save nothing, answer with the same scan.
   const seen = existingId();
   if (seen !== undefined) return { scanId: seen, duplicate: true };
+  const batchKey = input.batchKey ?? null;
+  const batchFull = () => batchKey !== null
+    && (db.select({ n: count() }).from(scans).where(eq(scans.batchKey, batchKey)).get()?.n ?? 0) >= MAX_BATCH_PHOTOS;
+  // The server's own cap per upload; a resend of a saved scan was answered above.
+  if (batchFull()) throw new ScanInputError(BATCH_FULL);
   const hint = input.hint?.trim().slice(0, 200) || null;
 
   let locationId: number | null = null;
@@ -67,6 +75,7 @@ export async function createScan(
       stored.push({ role: photo.role, image: await saveUpload(photo.data, { manyCards: input.mode === "multi" }) });
     }
     return db.transaction((tx) => {
+      if (batchFull()) throw new ScanInputError(BATCH_FULL);
       const scan = tx.insert(scans).values({ mode: input.mode, hint, locationId, clientKey, batchKey: input.batchKey ?? null }).returning({ id: scans.id }).get();
       for (const s of stored) {
         tx.insert(images).values({ scanId: scan.id, role: s.role, ...s.image }).run();

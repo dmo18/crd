@@ -181,6 +181,25 @@ describe("batch routes", () => {
     expect(db.select().from(scans).all()).toHaveLength(1);
   });
 
+  it("server cap: the 61st scan of one upload is refused in plain words; a resend of a saved one still works", async () => {
+    const { enqueueScan: queued } = await import("@/lib/scans/process");
+    vi.mocked(queued).mockImplementation(() => undefined);
+    const { setDbForTests } = await import("@/db");
+    setDbForTests(db);
+    const keys = Array.from({ length: 60 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    for (const clientKey of keys) {
+      db.insert(scans).values({ mode: "single", status: "done", clientKey, batchKey: B1 }).run();
+    }
+    const over = await post({ batchKey: B1, clientKey: "11111111-1111-4111-8111-111111111111" });
+    expect(over.status).toBe(400);
+    expect(await over.json()).toEqual({ error: "This upload already has 60 cards. Start a new one." });
+    expect(db.select().from(scans).all()).toHaveLength(60);
+    const again = await post({ batchKey: B1, clientKey: keys[3]! });
+    expect(again.status).toBe(200);
+    // Another upload is not affected.
+    expect((await post({ batchKey: B2 })).status).toBe(201);
+  });
+
   it("GET /api/scans/batches reports; both routes need the owner session", async () => {
     const { GET } = await import("@/app/api/scans/batches/route");
     const { POST: RETRY } = await import("@/app/api/scans/batches/retry/route");
