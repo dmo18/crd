@@ -260,20 +260,6 @@ describe("Look up again and None of these: limits, audit and races", () => {
     expect(rows[0].detail).toMatch(/^item \d+, /);
   });
 
-  it("a sure card from a scan is confirmed only when nothing differs; otherwise it waits in Review with the differences", () => {
-    const { candidateCard } = require_candidates;
-    const same = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps", cardNumber: "336" }, []);
-    const differs = scanned({ player: "Ken Griffey Jr.", year: 1990, brand: "Topps", cardNumber: "33" }, []);
-    const card = candidateCard(slim(griffey));
-    expect(pick.applyScanCard(db, same, card, 0.9, T0)).toBe(true);
-    expect(get(same.id).status).toBe("confirmed");
-    expect(pick.applyScanCard(db, differs, card, 0.9, T0)).toBe(true);
-    const row = get(differs.id);
-    expect(row).toMatchObject({ status: "needs_review", cardNumber: "33" });
-    expect(row.catalogCardId).not.toBeNull();
-    expect(pick.reviewCatalogView(row, db)!.linked?.differences).toEqual([{ label: "number", read: "33", catalog: "336" }]);
-  });
-
   it("writes an audit row for None of these", async () => {
     const item = scanned({ player: "Ken Griffey Jr." });
     await actions.dismissCandidatesAction(form({ id: item.id }));

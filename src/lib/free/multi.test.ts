@@ -88,6 +88,12 @@ describe("the owner's many-cards try, recorded", () => {
     expect(items[0].backPhoto?.sourceIndex).toBe(1);
   });
 
+  it("a side left without its partner carries the one side hold, so a catalog link never files it alone", async () => {
+    const items = await owner([[0, 1], [0]]);
+    expect(items[1].evidence?.hold).toContain("one_side");
+    expect(items[0].evidence?.hold ?? []).not.toContain("one_side");
+  });
+
   it("a back whose front was not found is a card with its name, never guessed as baseball, with a note", async () => {
     // The fronts photo without the Mills front.
     const items = await owner([[1], [0, 1]]);

@@ -40,7 +40,8 @@ export const CATALOG_SOURCES = ["mycardfolio"] as const;
 /** The item fields a catalog card can fill. Their origin is tracked in `fieldSources`. */
 export const CATALOG_FIELDS = ["sport", "year", "brand", "setName", "cardNumber", "player", "team", "variation"] as const;
 /** Where the value of one field came from. */
-export const FIELD_SOURCES = ["catalog", "owner", "reading", "key_list", "wikidata"] as const;
+/** `checklist`: a blank filled from the catalog's set list (S1a rule D), never read from the card. */
+export const FIELD_SOURCES = ["catalog", "owner", "reading", "key_list", "wikidata", "checklist"] as const;
 /** The owner's answer to "Which version is it?". Null on an item means never asked. */
 export const VERSION_STATES = ["confirmed", "not_sure"] as const;
 /** Where a chosen version came from. */

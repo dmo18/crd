@@ -50,6 +50,7 @@ export function CatalogBlock({ item }: { item: Item }) {
               <p className="font-semibold break-words">{facts.line}</p>
             )}
             {facts.verified ? null : <div><Badge tone="warn">Unverified listing</Badge></div>}
+            {facts.hold.map((h) => <p key={h} className="text-sm font-semibold break-words">{h}</p>)}
             {facts.confirmed.length > 0 ? (
               <p className="text-sm">The catalog agrees with the card on: {facts.confirmed.map((f) => CARD_FIELD_LABELS[f]).join(", ")}.</p>
             ) : null}

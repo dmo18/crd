@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { Candidate } from "@/lib/catalog/match";
 import type { NotCheckedReason } from "@/lib/catalog/candidates";
-import type { CatalogCard } from "@/lib/catalog/types";
 import { CONDITIONS, ITEM_KINDS, PRODUCT_TYPES, RARITY_TIERS, SEAL_STATES, SPORTS } from "@/db/schema";
 
 /**
@@ -88,8 +87,6 @@ export const recognizedItemSchema = z.object({
  * not asked (sealed, bulk, sample and AI modes, or no catalog given).
  */
 export type RecognizedCatalog =
-  /** One card the matching rule is sure of. `confidence`: the item's figure once it is applied. */
-  | { status: "sure"; card: CatalogCard; confidence: number }
   | { status: "candidates"; candidates: Candidate[] }
   /**
    * Exactly one verified match (S1a rule C): the scan links `candidates[0]`
@@ -121,6 +118,36 @@ export type ReadEvidence = {
    * do not say (AI, sample).
    */
   certainty?: FieldCertainty;
+  /**
+   * Why this card must wait for the owner whatever the catalog says (the
+   * free reader's hold backs). A catalog link never lifts such a card to
+   * confirmed. See HOLD_REASONS.
+   */
+  hold?: HoldReason[];
+  /** Filled fields whose value did not come from reading the card (the key card list, Wikidata). */
+  notRead?: CertainField[];
+  /** Fields that were blank and were filled from the catalog's set list (rule D), not read from the card. */
+  checklist?: ("player" | "team" | "cardNumber")[];
+};
+
+/**
+ * The reasons a read card always waits for the owner:
+ * - reprint: the card says REPRINT (never the original);
+ * - one_side: one side of a card from a many-cards scan, left without its partner;
+ * - hard_to_read: the text itself was hard to read;
+ * - error_check: the card may be a listed error version, which text cannot tell;
+ * - key_list_guess: only a possible key list card, its player or number not read.
+ */
+export const HOLD_REASONS = ["reprint", "one_side", "hard_to_read", "error_check", "key_list_guess"] as const;
+export type HoldReason = (typeof HOLD_REASONS)[number];
+
+/** Plain words for each hold reason, shown on the item. */
+export const HOLD_WORDS: Record<HoldReason, string> = {
+  reprint: "Marked REPRINT, so it is not the original card. Check it yourself.",
+  one_side: "Only one side of this card was matched in a many-cards scan. Check it yourself.",
+  hard_to_read: "The text on the card was hard to read. Check it yourself.",
+  error_check: "This may be a known error version, which the reader cannot tell. Check it yourself.",
+  key_list_guess: "Only a possible key card: the player or number was not read. Check it yourself.",
 };
 
 /** The fields a reader may say it is sure of. */

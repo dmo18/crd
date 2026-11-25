@@ -27,7 +27,8 @@ const same = (a: unknown, b: unknown) =>
  * The filling rule, used everywhere a catalog card meets an item:
  * 1. Empty fields are filled and marked `catalog`.
  * 2. A field marked `owner` (or not marked at all, as on old items) is never changed.
- * 3. A field marked `reading` that differs from the catalog is not changed,
+ * 3. A field marked `reading` (or `checklist`, a value from the catalog's own
+ *    set list) that differs from the catalog is not changed,
  *    only listed, unless `useCatalogValues` is set ("Use the catalog's
  *    values"), which changes those `reading` fields and nothing else.
  * 4. The title is rebuilt; values and `firstSuggestion` are not touched.
@@ -49,7 +50,7 @@ export function applyCatalogCard(item: Item, card: CatalogValues, opts: { useCat
       values[f] = theirs;
       marks[f] = "catalog";
       filled.push(f);
-    } else if (source === "reading" && !same(item[f], theirs)) {
+    } else if ((source === "reading" || source === "checklist") && !same(item[f], theirs)) {
       if (opts.useCatalogValues) {
         values[f] = theirs;
         marks[f] = "catalog";

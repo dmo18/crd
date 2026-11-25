@@ -37,6 +37,12 @@ export type FindRead = {
   /** The version words the card reads ("Tiffany"), when any. A read version is never assumed away. */
   variation?: string | null;
   unsure: readonly CertainField[];
+  /**
+   * Filled fields whose value was not read from the card (the catalog, its
+   * set list, the key card list, Wikidata). A verified match needs player,
+   * number, year and maker or product read from the card or given by the owner.
+   */
+  notRead?: readonly CertainField[];
 };
 
 export type FindStop = "budget" | CatalogFailure;
@@ -237,17 +243,22 @@ export function brandAgrees(read: Pick<FindRead, "brand" | "setName">, c: Pick<C
 /**
  * C: a clean entry (not an unverified listing) whose player, card number and
  * year agree with what the card reads (number and year exactly as read), and
- * whose maker or product agrees. Never with a year taken from the stat rows.
+ * whose maker or product agrees. Never with a year taken from the stat rows,
+ * and never on a value that did not come from the card or the owner.
  */
 export function isVerifiedMatch(read: FindRead, c: OfferCandidate): boolean {
   if (isUnverified(c) || c.differs) return false;
   if (!read.player || read.year == null || read.yearFromStats) return false;
+  // A value the catalog (or another list) gave can never confirm itself.
+  const notRead = read.notRead ?? [];
+  if (notRead.includes("player") || notRead.includes("year") || notRead.includes("cardNumber")) return false;
+  const own = { brand: notRead.includes("brand") ? null : read.brand, setName: notRead.includes("setName") ? null : read.setName };
   const num = cleanCardNumber(read.cardNumber);
   if (!num || cleanCardNumber(c.cardNumber) !== num) return false;
   if (c.year !== read.year) return false;
   if (read.sport && c.sport !== read.sport) return false;
   if (isGroupCard(c) || !playerAgrees(read.player, c.player)) return false;
-  return brandAgrees(read, c);
+  return brandAgrees(own, c);
 }
 
 /**

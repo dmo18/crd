@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { CATALOG_FIELDS, FIELD_SOURCES, SPORTS, type CatalogField, type FieldSource, type Item } from "@/db/schema";
+import { HOLD_REASONS } from "@/lib/recognition/types";
 
 /**
  * Where the value of each catalog field of an item came from, stored as JSON
@@ -89,6 +90,10 @@ export const firstSuggestionSchema = z.object({
    * so no new column is needed; old suggestions have none.
    */
   unsure: z.array(z.enum(CATALOG_FIELDS)).max(CATALOG_FIELDS.length).optional().catch(undefined),
+  /** Why the card must wait for the owner whatever the catalog says (ReadEvidence.hold). */
+  hold: z.array(z.enum(HOLD_REASONS)).max(HOLD_REASONS.length).optional().catch(undefined),
+  /** Filled fields the reader did not read on the card (key card list, Wikidata). */
+  notRead: z.array(z.enum(CATALOG_FIELDS)).max(CATALOG_FIELDS.length).optional().catch(undefined),
   /** Time in milliseconds. */
   at: z.number().int(),
 });
@@ -96,14 +101,21 @@ export type FirstSuggestion = z.infer<typeof firstSuggestionSchema>;
 
 export function buildFirstSuggestion(
   values: FieldValues,
-  meta: { confidence: number | null; reader: string | null; at: Date; unsure?: readonly CatalogField[] },
+  meta: {
+    confidence: number | null; reader: string | null; at: Date; unsure?: readonly CatalogField[];
+    hold?: readonly (typeof HOLD_REASONS)[number][]; notRead?: readonly CatalogField[];
+  },
 ): string {
   const fields: Record<string, unknown> = {};
   for (const f of CATALOG_FIELDS) if (isFilled(values[f])) fields[f] = values[f];
   const unsure = CATALOG_FIELDS.filter((f) => isFilled(values[f]) && meta.unsure?.includes(f));
+  const notRead = CATALOG_FIELDS.filter((f) => isFilled(values[f]) && meta.notRead?.includes(f));
+  const hold = HOLD_REASONS.filter((h) => meta.hold?.includes(h));
   return JSON.stringify({
     v: 1, fields, confidence: meta.confidence, reader: meta.reader ? meta.reader.slice(0, 40) : null, at: meta.at.getTime(),
     ...(unsure.length > 0 ? { unsure } : {}),
+    ...(hold.length > 0 ? { hold } : {}),
+    ...(notRead.length > 0 ? { notRead } : {}),
   });
 }
 
@@ -114,9 +126,31 @@ export function buildFirstSuggestion(
  */
 export function fieldsToCheck(item: Pick<Item, CatalogField | "fieldSources" | "firstSuggestion">): CatalogField[] {
   const first = parseFirstSuggestion(item.firstSuggestion);
-  if (!first?.unsure?.length) return [];
   const marks = parseFieldSources(item.fieldSources);
-  return first.unsure.filter((f) => sourceOf(item, f, marks) === "reading" && String(item[f]) === String(first.fields[f]));
+  // A blank filled from the catalog's set list is always checked by the owner.
+  const fromList = CATALOG_FIELDS.filter((f) => sourceOf(item, f, marks) === "checklist");
+  const unsure = (first?.unsure ?? []).filter((f) => sourceOf(item, f, marks) === "reading" && String(item[f]) === String(first!.fields[f]));
+  return CATALOG_FIELDS.filter((f) => unsure.includes(f) || fromList.includes(f));
+}
+
+/**
+ * The filled fields whose value was NOT read from the card nor given by the
+ * owner: filled from the catalog, its set list, the key card list or
+ * Wikidata, or a `reading` value that is not what the reader read (an older
+ * unlink relabelled catalog values `reading`). A verified match never rests
+ * on these (S1a rule C).
+ */
+export function notReadFields(item: Pick<Item, CatalogField | "fieldSources" | "firstSuggestion">): CatalogField[] {
+  const first = parseFirstSuggestion(item.firstSuggestion);
+  const marks = parseFieldSources(item.fieldSources);
+  return CATALOG_FIELDS.filter((f) => {
+    const source = sourceOf(item, f, marks);
+    if (source === null || source === "owner") return false;
+    if (source !== "reading") return true;
+    if (!first) return false;
+    if (first.notRead?.includes(f)) return true;
+    return first.fields[f] === undefined || String(first.fields[f]) !== String(item[f]);
+  });
 }
 
 /** Reads a stored first suggestion. Null when there is none (items from before the catalog) or it cannot be read. */

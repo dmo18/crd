@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SPORTS } from "@/db/schema";
+import { CATALOG_FIELDS, ITEM_STATUSES, SPORTS, VERSION_SOURCES, VERSION_STATES } from "@/db/schema";
 import type { Candidate } from "./match";
 import type { CatalogCard, CatalogFailure } from "./types";
 
@@ -58,10 +58,31 @@ const storedSchema = z.object({
  * whether the app linked it by itself (a verified match), with what the item
  * had before, so Undo can put it back.
  */
+const snapshotSchema = z.object({
+  status: z.enum(ITEM_STATUSES),
+  confidence: z.number().min(0).max(1).nullable(),
+  // The rest was added later (review fix 3): older records hold only the status and confidence.
+  title: z.string().optional(),
+  fieldSources: z.string().nullable().optional(),
+  /** The version answer: its state, its source and the stored options. */
+  version: z.object({
+    state: z.enum(VERSION_STATES).nullable(),
+    source: z.enum(VERSION_SOURCES).nullable(),
+    options: z.string().nullable(),
+  }).optional(),
+  /** Only the catalog fields the link changed. */
+  fields: z.partialRecord(z.enum(CATALOG_FIELDS), z.union([z.string(), z.number(), z.null()])).optional(),
+});
+/** What an item held, or what a link wrote on it, for the parts a link changes. */
+export type LinkSnapshot = z.infer<typeof snapshotSchema>;
+
 const linkedSchema = z.object({
   position: z.number().int().min(0).max(MAX_STORED_CANDIDATES - 1),
   auto: z.boolean(),
-  before: z.object({ status: z.enum(["needs_review", "confirmed"]), confidence: z.number().min(0).max(1).nullable() }).nullable().catch(null),
+  /** What the item had before the link, so Undo and Unlink put it back. */
+  before: snapshotSchema.nullable().catch(null),
+  /** What the link wrote: a part the owner changed since then is left as the owner made it. */
+  wrote: snapshotSchema.nullable().optional().catch(null),
 });
 export type LinkedInfo = z.infer<typeof linkedSchema>;
 
@@ -105,13 +126,18 @@ export function serializeCatalog(
   return JSON.stringify({ v: 1, at: at.getTime(), status, reason: status === "not_checked" ? v.reason ?? "failed" : null, items, ...linked });
 }
 
-/** Reads what is stored. Null when there is nothing, it cannot be read, or it is older than 30 days. */
-export function parseCatalog(raw: string | null | undefined, now: Date = new Date()): StoredCatalog | null {
+/**
+ * Reads what is stored. Null when there is nothing, it cannot be read, or it
+ * is older than 30 days. `anyAge`: a link's own record is read at any age
+ * (Undo puts back what the item had, however long ago it was linked).
+ */
+export function parseCatalog(raw: string | null | undefined, now: Date = new Date(), opts: { anyAge?: boolean } = {}): StoredCatalog | null {
   if (!raw) return null;
   try {
     const r = storedSchema.safeParse(JSON.parse(raw));
     if (!r.success) return null;
-    if (now.getTime() - r.data.at > CANDIDATE_DAYS * 24 * 60 * 60 * 1000) return null;
+    const old = now.getTime() - r.data.at > CANDIDATE_DAYS * 24 * 60 * 60 * 1000;
+    if (old && !(opts.anyAge && r.data.status === "linked")) return null;
     const items: StoredCandidate[] = [];
     for (const it of r.data.items) {
       const c = storedCandidateSchema.safeParse(it);

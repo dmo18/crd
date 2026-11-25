@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FindResult } from "@/lib/catalog/find";
-import type { LookupResult } from "@/lib/catalog/lookup";
 import type { Candidate } from "@/lib/catalog/match";
 import type { RecognitionPhoto, RecognizedItem } from "@/lib/recognition/types";
 import { FakeCatalog } from "../../../tests/helpers/fake-catalog";
@@ -13,7 +12,7 @@ import type { OcrResult, TextReader } from "./ocr";
  */
 const lookupCard = vi.fn<(...args: unknown[]) => Promise<FindResult>>();
 vi.mock("@/lib/catalog/find", async (orig) => ({ ...(await orig<typeof import("@/lib/catalog/find")>()), findCard: (...a: unknown[]) => lookupCard(...a) }));
-const { FreeRecognizer, catalogPart, AUTO_FILL_SURE } = await import("./recognizer");
+const { FreeRecognizer } = await import("./recognizer");
 
 function reader(text: string): TextReader {
   return {
@@ -31,7 +30,6 @@ const card: Candidate = {
   otherPlayers: [], variation: null, tags: [], score: 3, why: "Number and name agree",
 };
 const result = (over: Partial<FindResult>): FindResult => ({ candidates: [], match: null, matches: 0, fills: [], notes: [], callsUsed: 1, stopped: null, ...over });
-const old = (over: Partial<LookupResult>): LookupResult => ({ sure: null, sureBy: null, candidates: [], callsUsed: 1, stopped: null, ...over });
 const without = (item: RecognizedItem) => {
   const rest = { ...item };
   delete rest.catalog;
@@ -63,13 +61,6 @@ describe("FreeRecognizer catalog step", () => {
     expect(item.catalog).toEqual({ status: "candidates", candidates: [card] });
   });
 
-  it("the old sure path stays off: with automatic filling switched on (off in the app), a sure answer becomes a sure card", () => {
-    const r = old({ sure: card, sureBy: "number", candidates: [card] });
-    expect(AUTO_FILL_SURE).toBe(false);
-    expect(catalogPart(r, 0.7, true)).toEqual({ status: "sure", card, confidence: 0.75 });
-    expect(catalogPart(r, 0.7)).toEqual({ status: "candidates", candidates: [card] });
-  });
-
   it("exactly one verified match is passed on as matched (the scan links it); the fields stay as read", async () => {
     lookupCard.mockResolvedValue(result({ match: card, matches: 1, candidates: [card] }));
     const plain = await run();
@@ -85,6 +76,29 @@ describe("FreeRecognizer catalog step", () => {
     expect(item.player).toBe("Ken Griffey Jr.");
     expect(item.evidence?.certainty?.cardNumber).toBe("unsure");
     expect(item.notes).toContain("set list: 336");
+  });
+
+  it("a blank filled from the set list is named as such, so the item never stores it as read from the card", async () => {
+    lookupCard.mockResolvedValue(result({ fills: [{ field: "cardNumber", value: "336", sure: true }, { field: "player", value: "Ken Griffey Jr.", sure: true }] }));
+    const item = await run({ catalog: new FakeCatalog() });
+    // The player was read and only confirmed; the number was blank and filled.
+    expect(item.evidence?.checklist).toEqual(["cardNumber"]);
+  });
+
+  it("holds back what no catalog link may lift: a REPRINT, hard to read text; a plain clean read has none", async () => {
+    expect((await run()).evidence?.hold).toBeUndefined();
+    expect((await run({}, `${TEXT}\nREPRINT`)).evidence?.hold).toEqual(["reprint"]);
+    const blurry: TextReader = { async read(img, o) { return { ...(await reader(TEXT).read(img, o)), confidence: 0.4 }; } };
+    expect((await run({ reader: blurry })).evidence?.hold).toEqual(["hard_to_read"]);
+  });
+
+  it("tells the look up which values did not come from the card (Wikidata's sport)", async () => {
+    lookupCard.mockResolvedValue(result({}));
+    const facts = { name: "Ken Griffey Jr.", wikidataId: "Q1", description: null, sports: ["baseball" as const], teams: [], careerStart: 1989, careerEnd: 2010, hallOfFame: true, birthYear: 1969 };
+    const item = await run({ catalog: new FakeCatalog(), lookup: async () => facts }, "KEN GRIFFEY JR.\n© 1990 THE TOPPS COMPANY, INC.");
+    expect(item.sport).toBe("baseball");
+    expect(item.evidence?.notRead).toEqual(["sport"]);
+    expect(lookupCard.mock.calls[0][0]).toMatchObject({ notRead: ["sport"] });
   });
 
   it("candidates only: kept as they came, the reading stands", async () => {

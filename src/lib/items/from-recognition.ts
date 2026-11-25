@@ -1,7 +1,7 @@
 import type { CatalogField, NewItem, ValueSource } from "@/db/schema";
 import { CERTAIN_FIELDS, REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
 import { serializeCatalog } from "@/lib/catalog/candidates";
-import { buildFirstSuggestion, sourcesFor } from "@/lib/catalog/sources";
+import { buildFirstSuggestion, sourcesFor, type FieldSources } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
 import { rookieFromScan } from "./rookie";
 import { suggestionFromRead } from "./serial";
@@ -38,6 +38,13 @@ export function itemFromRecognition(
     team: isCard ? r.team : null,
     variation: r.variation,
   };
+  // Blanks the catalog's set list filled (rule D) are the catalog's values, not the card's:
+  // marked `checklist` and never kept in firstSuggestion as read from the card.
+  const fromList = new Set<CatalogField>(isCard ? (r.evidence?.checklist ?? []) : []);
+  const cardRead: typeof read = { ...read };
+  for (const f of fromList) cardRead[f] = null;
+  const marks = JSON.parse(sourcesFor(read, "reading")) as FieldSources;
+  for (const f of fromList) if (marks[f]) marks[f] = "checklist";
   const serial = isCard ? (r.evidence?.serial ?? (r.serialNumber ? { text: r.serialNumber } : null)) : null;
   const suggestion = suggestionFromRead(serial, r.year);
   const serialSuggestion = suggestion ? JSON.stringify(suggestion) : null;
@@ -54,10 +61,11 @@ export function itemFromRecognition(
     title: buildTitle(r),
     ...read,
     yearEnd: r.kind === "bulk" ? r.yearEnd : null,
-    fieldSources: sourcesFor(read, "reading"),
+    fieldSources: JSON.stringify(marks),
     catalogCandidates,
-    firstSuggestion: buildFirstSuggestion(read, {
+    firstSuggestion: buildFirstSuggestion(cardRead, {
       confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now, unsure: isCard ? unsureFields(r) : [],
+      hold: isCard ? r.evidence?.hold ?? [] : [], notRead: isCard ? r.evidence?.notRead ?? [] : [],
     }),
     ...rookieFromScan(isCard, r.isRookie, r.evidence),
     isError: isCard && r.isError,

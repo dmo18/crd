@@ -65,6 +65,7 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
 
   return (
     <section className="flex flex-col gap-2" aria-label={`Catalog for ${title}`}>
+      {view.hold.map((h) => <p key={h} className="text-sm font-semibold break-words">{h}</p>)}
       {view.linked ? (
         <div className="flex flex-col gap-1">
           <p className="text-sm"><span className="text-muted">Catalog card: </span><span className="font-semibold break-words">{view.linked.line}</span></p>

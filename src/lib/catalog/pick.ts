@@ -4,28 +4,27 @@ import { CATALOG_FIELDS, catalogCards, catalogSources, type CatalogField, type I
 import { countAuditSince, recordAudit } from "@/lib/audit/store";
 import { itemLabel } from "@/lib/audit/subjects";
 import { liveItem } from "@/lib/items/live";
-import { CERTAIN_FIELDS, REVIEW_THRESHOLD } from "@/lib/recognition/types";
+import { CERTAIN_FIELDS, HOLD_WORDS, REVIEW_THRESHOLD, type HoldReason } from "@/lib/recognition/types";
 import { applyCatalogCard, type CatalogDifference } from "./apply";
-import { candidateCard, parseCatalog, serializeCatalog, type LinkedInfo, type NotCheckedReason, type StoredCandidate } from "./candidates";
+import { candidateCard, parseCatalog, serializeCatalog, type LinkSnapshot, type NotCheckedReason, type StoredCandidate } from "./candidates";
 import { sourceUrl } from "./clean";
 import { cardLine } from "./line";
 import { findCard } from "./find";
 import { getCatalog } from "./provider";
 import { saveCatalogCardIn } from "./store";
-import type { Catalog, CatalogCard } from "./types";
+import type { Catalog } from "./types";
 import { normalizeText } from "./normalize";
-import { fieldsToCheck, isFilled, parseFieldSources, parseFirstSuggestion, sourceOf } from "./sources";
+import { fieldsToCheck, isFilled, notReadFields, parseFieldSources, parseFirstSuggestion, sourceOf, type FieldSources } from "./sources";
 import { buildTitle } from "@/lib/title";
 import { baseWithVersions, buildVersionOptions, catalogVersionCards, catalogVersionName, hasSeveralVersions, isVersionRow, parseVersions, readTexts, serializeVersions } from "./versions";
 import { knownVersionsFor } from "./versions-known";
 
 /**
  * The catalog in Review: candidates wait for the owner's one tap ("This one").
- * Automatic filling of a sure card is OFF (AUTO_FILL_SURE in
- * src/lib/free/recognizer.ts, see PLAN 10.6 fifth review): applyScanCard is
- * kept for a later switch-on but is not reached today. Every rule
- * goes through `applyCatalogCard` (the filling rule), so an `owner` field is
- * never changed and a `reading` field only through "Use the catalog's values".
+ * Only exactly one verified match is linked by the app itself (S1a rule C).
+ * Every rule goes through `applyCatalogCard` (the filling rule), so an
+ * `owner` field is never changed and a `reading` field only through "Use the
+ * catalog's values".
  */
 
 const GONE = "This item no longer exists.";
@@ -35,28 +34,6 @@ export const NOT_ON_LIST = "That choice is no longer on the list. Look at the li
 export const LOOKUP_WAIT = "Wait a few seconds before looking this card up again.";
 export const LOOKUP_HOURLY = "Too many catalog look ups this hour. Try again later.";
 export const LOOKUP_NEEDS = "Add a player or a card number first, then look it up again.";
-
-/**
- * Files a sure catalog card on an item a scan just made, inside the scan's
- * transaction: the card is kept, the item linked, empty fields filled and
- * marked `catalog`, and the confidence set as the matching rule says.
- * Returns false (and changes nothing) when the card cannot be kept; the
- * caller then keeps it as a candidate.
- */
-export function applyScanCard(tx: Db, item: Item, card: CatalogCard, confidence: number, now: Date): boolean {
-  const saved = saveCatalogCardIn(tx, card, now);
-  if (!saved.ok) return false;
-  const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get();
-  if (!row) return false;
-  const { patch, differences } = applyCatalogCard(item, row);
-  // Confirmed only when the catalog agrees with every field the reader read;
-  // otherwise it waits in Review with the differences and "Use the catalog's values".
-  const confirmed = differences.length === 0 && confidence >= REVIEW_THRESHOLD;
-  tx.update(items).set({
-    ...patch, confidence, status: confirmed ? "confirmed" : "needs_review", catalogCandidates: null, updatedAt: now,
-  }).where(eq(items.id, item.id)).run();
-  return true;
-}
 
 export type PickResult =
   | { ok: true; line: string; differences: CatalogDifference[]; confirmed: boolean }
@@ -76,74 +53,92 @@ export function pickCandidate(itemId: number, position: number, sourceId: string
 /**
  * The same inside a caller's transaction. `auto`: the app links a verified
  * match by itself (S1a rule C); the list is kept with the link so Undo can
- * bring it back and the item page can show what the catalog knows.
+ * bring it back and the item page can show what the catalog knows. `hold`:
+ * the card must wait for the owner (a hold back of the reader), so the
+ * automatic link never raises its status or confidence.
  */
 export function pickCandidateIn(
-  tx: Db, itemId: number, position: number, sourceId: string, now: Date = new Date(), auto: LinkedInfo["before"] | false = false,
+  tx: Db, itemId: number, position: number, sourceId: string, now: Date = new Date(), opts: { auto?: boolean; hold?: boolean } = {},
 ): PickResult {
-  {
-    const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
-    if (!item) return { ok: false, error: GONE };
-    if (item.kind !== "card") return { ok: false, error: NOT_A_CARD };
-    if (item.catalogCardId != null) return { ok: false, error: ALREADY_LINKED };
-    const stored = parseCatalog(item.catalogCandidates, now);
-    const chosen = (stored?.status === "candidates" || stored?.status === "linked") && Number.isInteger(position) && position >= 0 ? stored.items[position] : undefined;
-    // The list may have changed since the owner looked at it: the card shown must still be at that place.
-    if (!chosen || chosen.sourceId !== sourceId) return { ok: false, error: NOT_ON_LIST };
-    const card = candidateCard(chosen);
-    const saved = saveCatalogCardIn(tx as unknown as Db, card, now);
-    if (!saved.ok) return { ok: false, error: saved.error };
-    const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get()!;
-    const applied = applyCatalogCard(item, row);
-    const patch: Partial<Item> = { ...applied.patch };
-    let differences = applied.differences;
-    // The owner tapped that very row: a row that shows a version ("Topps Tiffany") is the owner's choice of
-    // that version, but only when the item's variation names it. A base row leaves the version question as it
-    // was (PLAN Milestone 11, "A pick in Review"; review fix 3).
-    let version: Partial<Item> = {};
-    if (isVersionRow(chosen)) {
-      const after = { ...item, ...patch } as Item;
-      const name = catalogVersionName(after, chosen);
-      const have = after.variation?.trim() ? normalizeText(after.variation) : "";
-      if (name && have && ` ${have} `.includes(` ${normalizeText(name)} `)) {
-        version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
-      } else if (name && sourceOf(item, "variation") !== "owner") {
-        // Empty or only read by the reader: the owner's tap writes the version name, as chooseVersion does.
-        const marks = parseFieldSources(after.fieldSources) ?? {};
-        // A link the app made by itself names the version from the catalog, not from the owner.
-        marks.variation = auto === false ? "owner" : "catalog";
-        patch.variation = name;
-        patch.fieldSources = JSON.stringify(marks);
-        patch.title = buildTitle({ ...after, variation: name });
-        differences = differences.filter((d) => d.field !== "variation");
-        version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
-      } else if (name) {
-        // The owner's own variation says something else: nothing is decided, the difference is shown.
-        differences = [...differences.filter((d) => d.field !== "variation"), { field: "variation", itemValue: after.variation ?? "", catalogValue: name }];
-      }
-    }
-    const confirmed = differences.length === 0;
-    // The list stays with the link (status `linked`): the item page shows what the catalog knows, Unlink brings the list back.
-    const kept = serializeCatalog({ status: "linked", items: stored!.items, linked: { position, auto: auto !== false, before: auto || null } }, now);
-    let extra: Partial<Item> = {};
-    if (auto !== false) {
-      // The catalog is the second, independent sign for the fields it agrees on:
-      // they count as confirmed (marked `catalog`), so "Check this" goes away.
-      // Unlink marks them `reading` again, and their "Check this" comes back.
-      const after = { ...item, ...patch } as Item;
+  const auto = opts.auto === true;
+  const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
+  if (!item) return { ok: false, error: GONE };
+  if (item.kind !== "card") return { ok: false, error: NOT_A_CARD };
+  if (item.catalogCardId != null) return { ok: false, error: ALREADY_LINKED };
+  const stored = parseCatalog(item.catalogCandidates, now);
+  const chosen = (stored?.status === "candidates" || stored?.status === "linked") && Number.isInteger(position) && position >= 0 ? stored.items[position] : undefined;
+  // The list may have changed since the owner looked at it: the card shown must still be at that place.
+  if (!chosen || chosen.sourceId !== sourceId) return { ok: false, error: NOT_ON_LIST };
+  const card = candidateCard(chosen);
+  const saved = saveCatalogCardIn(tx as unknown as Db, card, now);
+  if (!saved.ok) return { ok: false, error: saved.error };
+  const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get()!;
+  const applied = applyCatalogCard(item, row);
+  const patch: Partial<Item> = { ...applied.patch };
+  let differences = applied.differences;
+  // The owner tapped that very row: a row that shows a version ("Topps Tiffany") is the owner's choice of
+  // that version, but only when the item's variation names it. A base row leaves the version question as it
+  // was (PLAN Milestone 11, "A pick in Review"; review fix 3).
+  let version: Partial<Item> = {};
+  if (isVersionRow(chosen)) {
+    const after = { ...item, ...patch } as Item;
+    const name = catalogVersionName(after, chosen);
+    const have = after.variation?.trim() ? normalizeText(after.variation) : "";
+    if (name && have && ` ${have} `.includes(` ${normalizeText(name)} `)) {
+      version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
+    } else if (name && sourceOf(item, "variation") !== "owner") {
+      // Empty or only read by the reader: the owner's tap writes the version name, as chooseVersion does.
       const marks = parseFieldSources(after.fieldSources) ?? {};
-      let changed = false;
-      for (const f of CONFIRMED_BY_MATCH) {
-        if (marks[f] === "reading" && isFilled(after[f]) && sameValue(after[f], row[f])) { marks[f] = "catalog"; changed = true; }
-      }
-      if (changed) extra = { fieldSources: JSON.stringify(marks) };
-      if (confirmed) extra.confidence = Math.max(item.confidence ?? 0, REVIEW_THRESHOLD);
+      // A link the app made by itself names the version from the catalog, not from the owner.
+      marks.variation = auto ? "catalog" : "owner";
+      patch.variation = name;
+      patch.fieldSources = JSON.stringify(marks);
+      patch.title = buildTitle({ ...after, variation: name });
+      differences = differences.filter((d) => d.field !== "variation");
+      version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
+    } else if (name) {
+      // The owner's own variation says something else: nothing is decided, the difference is shown.
+      differences = [...differences.filter((d) => d.field !== "variation"), { field: "variation", itemValue: after.variation ?? "", catalogValue: name }];
     }
-    tx.update(items).set({
-      ...patch, ...version, ...extra, catalogCandidates: kept, ...(confirmed ? { status: "confirmed" as const } : {}), updatedAt: now,
-    }).where(and(eq(items.id, itemId), liveItem)).run();
-    return { ok: true, line: cardLine(row), differences, confirmed };
   }
+  const confirmed = differences.length === 0;
+  let extra: Partial<Item> = {};
+  if (auto) {
+    // The catalog is the second, independent sign for the fields it agrees on:
+    // they count as confirmed (marked `catalog`), so "Check this" goes away.
+    // Undo puts back the marks they had.
+    const after = { ...item, ...patch } as Item;
+    const marks = parseFieldSources(after.fieldSources) ?? {};
+    let changed = false;
+    for (const f of CONFIRMED_BY_MATCH) {
+      if (marks[f] === "reading" && isFilled(after[f]) && sameValue(after[f], row[f])) { marks[f] = "catalog"; changed = true; }
+    }
+    if (changed) extra = { fieldSources: JSON.stringify(marks) };
+    // A card held back by the reader (a reprint, one side of a many-cards scan, hard to read text...) still waits for the owner.
+    if (confirmed && !opts.hold) extra.confidence = Math.max(item.confidence ?? 0, REVIEW_THRESHOLD);
+  }
+  const raise = confirmed && !(auto && opts.hold);
+  const written = { ...item, ...patch, ...version, ...extra, ...(raise ? { status: "confirmed" as const } : {}) } as Item;
+  const changedFields = CATALOG_FIELDS.filter((f) => f in patch && patch[f] !== item[f]);
+  // The list stays with the link (status `linked`): the item page shows what the catalog knows, Unlink brings the list back.
+  // What the item had and what the link wrote are kept with it, so Undo and Unlink put the item back exactly.
+  const kept = serializeCatalog({
+    status: "linked", items: stored!.items,
+    linked: { position, auto, before: snapshotOf(item, changedFields), wrote: snapshotOf(written, changedFields) },
+  }, now);
+  tx.update(items).set({
+    ...patch, ...version, ...extra, catalogCandidates: kept, ...(raise ? { status: "confirmed" as const } : {}), updatedAt: now,
+  }).where(and(eq(items.id, itemId), liveItem)).run();
+  return { ok: true, line: cardLine(row), differences, confirmed: raise };
+}
+
+/** The parts of an item a link changes. `fields`: the catalog fields it filled. */
+function snapshotOf(item: Item, fields: readonly CatalogField[]): LinkSnapshot {
+  return {
+    status: item.status, confidence: item.confidence, title: item.title, fieldSources: item.fieldSources,
+    version: { state: item.versionState, source: item.versionSource, options: item.versionOptions },
+    fields: Object.fromEntries(fields.map((f) => [f, item[f] ?? null])),
+  };
 }
 
 /** The fields a verified match confirms (S1a rule C). */
@@ -153,15 +148,25 @@ function sameValue(a: unknown, b: unknown): boolean {
   return typeof a === "string" && typeof b === "string" ? a.trim().toLowerCase() === b.trim().toLowerCase() : a === b;
 }
 
+/** Why the reader said this card must wait for the owner (kept in firstSuggestion). */
+export function holdReasons(item: Pick<Item, "firstSuggestion">): HoldReason[] {
+  return parseFirstSuggestion(item.firstSuggestion)?.hold ?? [];
+}
+
 /**
  * S1a rule C: a scan or "Look up again" found exactly one verified match,
  * stored first in the item's list. Linked as "This is my card" would, inside
- * the caller's transaction, remembering the status and confidence before so
- * Undo can put them back. False when it could not be linked (the list stays).
+ * the caller's transaction, remembering what the item had before so Undo can
+ * put it back. False when it could not be linked (the list stays).
+ * A card the reader held back keeps waiting for the owner; a card marked
+ * REPRINT is never linked by itself (a reprint is not the original card the
+ * catalog entry describes): the entry stays a suggestion.
  */
 export function autoLinkIn(tx: Db, itemId: number, now: Date = new Date()): boolean {
   const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
   if (!item || item.kind !== "card" || item.catalogCardId != null) return false;
+  const hold = holdReasons(item);
+  if (hold.includes("reprint")) return false;
   const stored = parseCatalog(item.catalogCandidates, now);
   const first = stored?.status === "candidates" ? stored.items[0] : undefined;
   if (!first) return false;
@@ -171,13 +176,22 @@ export function autoLinkIn(tx: Db, itemId: number, now: Date = new Date()): bool
   const hasVersions = stored!.items.some((c) => c.sourceId !== first.sourceId && isPremiumSibling(item, first, c));
   // A read version word with a base first: nothing is assumed, nothing is linked (the question stays as it is).
   if (!assumed && hasVersions && catalogVersionName(item, first) === "" && readNamesVersion(item)) return false;
-  const before = { status: item.status === "confirmed" ? "confirmed" as const : "needs_review" as const, confidence: item.confidence };
-  const res = pickCandidateIn(tx, itemId, 0, first.sourceId, now, before);
+  const res = pickCandidateIn(tx, itemId, 0, first.sourceId, now, { auto: true, hold: hold.length > 0 });
   if (!res.ok) return false;
   if (assumed) {
     const linked = tx.select().from(items).where(eq(items.id, itemId)).get()!;
     const options = buildVersionOptions(linked, [...[assumed.base, ...assumed.versions].map(candidateCard)]);
-    tx.update(items).set({ versionOptions: serializeVersions({ catalog: "ok", options, assumed: true }, now) }).where(eq(items.id, itemId)).run();
+    const versionOptions = serializeVersions({ catalog: "ok", options, assumed: true }, now);
+    // The link's record says it wrote these options too, so Undo takes them away again.
+    const kept = parseCatalog(linked.catalogCandidates, now, { anyAge: true });
+    const info = kept?.linked;
+    const catalogCandidates = kept && info?.wrote
+      ? serializeCatalog({
+        status: "linked", items: kept.items,
+        linked: { ...info, wrote: { ...info.wrote, version: { state: linked.versionState, source: linked.versionSource, options: versionOptions } } },
+      }, new Date(kept.at))
+      : linked.catalogCandidates;
+    tx.update(items).set({ versionOptions, catalogCandidates }).where(eq(items.id, itemId)).run();
   }
   return true;
 }
@@ -193,9 +207,12 @@ function readNamesVersion(item: Item): boolean {
 
 /**
  * Undo of a link the app made by itself, and Unlink: the link goes, the list
- * comes back to pick from, the catalog's marks become `reading` (so "Check
- * this" shows again). After an automatic link, the status and confidence
- * the item had before come back too.
+ * comes back to pick from, and every part the link changed is put back as it
+ * was before (the fields it filled, the title, the field marks, the version
+ * answer), at any age of the link. A part the owner changed since the link is
+ * left as the owner made it. After an automatic link, the status and
+ * confidence the item had before come back too. Older links, kept without
+ * what they changed, only turn the catalog's marks into `reading`.
  */
 export function undoLink(itemId: number, db: Db = getDb(), now: Date = new Date()): { ok: boolean } {
   return db.transaction((tx) => {
@@ -203,27 +220,80 @@ export function undoLink(itemId: number, db: Db = getDb(), now: Date = new Date(
     if (!item) return { ok: false };
     // Not linked (any more): nothing to undo, as the plain Unlink always was.
     if (item.catalogCardId == null) return { ok: true };
-    const stored = parseCatalog(item.catalogCandidates, now);
+    const stored = parseCatalog(item.catalogCandidates, now, { anyAge: true });
+    const info = stored?.status === "linked" ? stored.linked : null;
     const patch: Partial<Item> = { catalogCardId: null, updatedAt: now };
-    // An assumed normal version goes with the link it came from.
-    if (parseVersions(item.versionOptions, now)?.assumed) patch.versionOptions = null;
-    const marks = parseFieldSources(item.fieldSources);
-    if (marks) {
-      let changed = false;
-      for (const f of CATALOG_FIELDS) if (marks[f] === "catalog") { marks[f] = "reading"; changed = true; }
-      if (changed) patch.fieldSources = JSON.stringify(marks);
+    if (info?.before && info.wrote) {
+      Object.assign(patch, restoreLink(item, info.before, info.wrote, info.auto, now));
+    } else {
+      // An older link: an assumed normal version goes with it, the catalog's marks become `reading`.
+      if (parseVersions(item.versionOptions, now)?.assumed) patch.versionOptions = null;
+      const marks = parseFieldSources(item.fieldSources);
+      if (marks) {
+        let changed = false;
+        for (const f of CATALOG_FIELDS) if (marks[f] === "catalog") { marks[f] = "reading"; changed = true; }
+        if (changed) patch.fieldSources = JSON.stringify(marks);
+      }
+      if (info?.auto && info.before) {
+        patch.status = info.before.status;
+        patch.confidence = info.before.confidence;
+      }
     }
     if (stored?.status === "linked") {
+      // The list comes back with its own age: a list older than 30 days is not shown again.
       patch.catalogCandidates = stored.items.length > 0 ? serializeCatalog({ status: "candidates", items: stored.items }, new Date(stored.at)) : null;
-      const before = stored.linked?.auto ? stored.linked.before : null;
-      if (before) {
-        patch.status = before.status;
-        patch.confidence = before.confidence;
-      }
     }
     const res = tx.update(items).set(patch).where(and(eq(items.id, itemId), liveItem)).run();
     return { ok: res.changes > 0 };
   }, { behavior: "immediate" });
+}
+
+/** The parts a link changed, put back where the item still holds what the link wrote. Pure. */
+function restoreLink(item: Item, before: LinkSnapshot, wrote: LinkSnapshot, auto: boolean, now: Date): Partial<Item> {
+  const patch: Partial<Item> = {};
+  const same = (a: unknown, b: unknown) => (a ?? null) === (b ?? null);
+  const nowMarks = parseFieldSources(item.fieldSources) ?? {};
+  const beforeMarks = parseFieldSources(before.fieldSources) ?? {};
+  const wroteMarks = parseFieldSources(wrote.fieldSources) ?? {};
+  const marks: FieldSources = { ...nowMarks };
+  let allBack = true;
+  const values: Partial<Record<CatalogField, unknown>> = {};
+  for (const f of CATALOG_FIELDS) {
+    const filled = wrote.fields !== undefined && f in wrote.fields;
+    const valueKept = !filled || same(item[f], wrote.fields![f]);
+    if (filled && valueKept) values[f] = before.fields?.[f] ?? null;
+    if (filled && !valueKept) allBack = false;
+    // A mark goes back only where the owner did not change the field since (an owner change marks it `owner`).
+    if (nowMarks[f] === wroteMarks[f] && valueKept) {
+      if (beforeMarks[f]) marks[f] = beforeMarks[f];
+      else delete marks[f];
+    } else if (nowMarks[f] !== wroteMarks[f]) {
+      allBack = false;
+    }
+  }
+  // A catalog mark left over (the owner took the catalog's values after the link) is the reader's again, as Unlink always did.
+  for (const f of CATALOG_FIELDS) if (marks[f] === "catalog") { marks[f] = "reading"; allBack = false; }
+  Object.assign(patch, values);
+  const marksJson = allBack ? before.fieldSources ?? null : JSON.stringify(marks);
+  if (marksJson !== item.fieldSources) patch.fieldSources = marksJson;
+  if (same(item.title, wrote.title) && before.title !== undefined) {
+    patch.title = allBack ? before.title : buildTitle({ ...item, ...patch });
+  }
+  const was = before.version;
+  const put = wrote.version;
+  if (was && put) {
+    // The version answer goes back unless the owner answered it since; an assumed normal version always goes with the link.
+    const assumedNow = parseVersions(item.versionOptions, now)?.assumed === true;
+    const untouched = same(item.versionState, put.state) && same(item.versionSource, put.source);
+    if (untouched && (same(item.versionOptions, put.options) || assumedNow)) {
+      Object.assign(patch, { versionState: was.state, versionSource: was.source, versionOptions: was.options });
+    }
+  }
+  if (auto) {
+    if (same(item.status, wrote.status)) patch.status = before.status;
+    if (same(item.confidence, wrote.confidence)) patch.confidence = before.confidence;
+  }
+  return patch;
 }
 
 /**
@@ -308,7 +378,9 @@ export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Cat
     // The item's fields of the moment. A field the reader was not sure of (and nobody changed) counts as unsure.
     const r = await findCard({
       sport: item.sport, year: item.year, brand: item.brand, setName: item.setName, cardNumber: item.cardNumber,
-      player: item.player, team: item.team, variation: item.variation || parseFirstSuggestion(item.firstSuggestion)?.fields.variation || null, unsure: fieldsToCheck(item).filter((f): f is (typeof CERTAIN_FIELDS)[number] => (CERTAIN_FIELDS as readonly string[]).includes(f)),
+      player: item.player, team: item.team, variation: item.variation || parseFirstSuggestion(item.firstSuggestion)?.fields.variation || null, unsure: fieldsToCheck(item).filter(isCertainField),
+      // A value from the catalog or its set list never confirms itself: only what the card reads or the owner gave counts.
+      notRead: notReadFields(item).filter(isCertainField),
     }, "now", { catalog: deps.catalog ?? getCatalog() });
     found = r.candidates.length;
     if (r.match) matched = cardLine(r.match);
@@ -335,6 +407,10 @@ export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Cat
   }, { behavior: "immediate" });
 }
 
+function isCertainField(f: CatalogField): f is (typeof CERTAIN_FIELDS)[number] {
+  return (CERTAIN_FIELDS as readonly string[]).includes(f);
+}
+
 /** The plain result line of "Look up again" (S1a rule G). */
 export function lookUpAgainLine(r: LookupAgainResult): string {
   if (!r.ok) return r.error;
@@ -356,6 +432,8 @@ export type ReviewCatalogView = {
   canLookUp: boolean;
   /** The candidates hold more than one version of the same card: "Choose the version" is offered. */
   severalVersions: boolean;
+  /** Why this card waits for the owner whatever the catalog says, in plain words. */
+  hold: string[];
 };
 
 export const FIELD_WORDS: Record<CatalogField, string> = {
@@ -387,6 +465,7 @@ export function reviewCatalogView(item: Item, db: Db = getDb(), now: Date = new 
     })),
     canLookUp: item.catalogCardId == null && Boolean(item.player?.trim() || item.cardNumber?.trim()),
     severalVersions: hasSeveralVersions(stored?.items ?? []),
+    hold: holdReasons(item).map((h) => HOLD_WORDS[h]),
   };
 }
 
@@ -407,6 +486,8 @@ export type LinkedFacts = {
   rookie: boolean;
   /** Fields the catalog confirmed after a verified match. */
   confirmed: CatalogField[];
+  /** Why this card waits for the owner although it is linked, in plain words. */
+  hold: string[];
 };
 
 const ROOKIE_WORDING = /\bRC\b|\brookie\b/i;
@@ -438,5 +519,6 @@ export function linkedFacts(item: Item, db: Db = getDb(), now: Date = new Date()
     verified: row.verified !== false,
     rookie: chosen ? catalogSaysRookie(chosen) : false,
     confirmed: auto ? CONFIRMED_BY_MATCH.filter((f) => marks?.[f] === "catalog" && isFilled(item[f]) && sameValue(item[f], row[f])) : [],
+    hold: holdReasons(item).map((h) => HOLD_WORDS[h]),
   };
 }

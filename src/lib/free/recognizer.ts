@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import type { Sport } from "@/db/schema";
 import { findCard, type FindResult } from "@/lib/catalog/find";
-import { createScanBudget, lookupConfidence, type LookupResult } from "@/lib/catalog/lookup";
+import { createScanBudget } from "@/lib/catalog/lookup";
 import type { Catalog } from "@/lib/catalog/types";
 import { errorKind, log } from "@/lib/log";
 import { checkPhotoCount } from "@/lib/recognition/limits";
@@ -10,6 +10,7 @@ import {
   RecognitionError,
   recognizedItemSchema,
   type FieldCertainty,
+  type HoldReason,
   type Box,
   type RecognitionPhoto,
   type RecognitionRequest,
@@ -135,26 +136,6 @@ function stoppable(inner: Catalog): Catalog & { stop(): void } {
 }
 
 /**
- * Owner safety rule (PLAN, 10.6 after the fifth review): no catalog card is
- * ever filled without the owner's tap. A "sure" answer from the look up only
- * moves that card to the top of the suggestions. Switch on again only with
- * a new review of the sure rule.
- */
-export const AUTO_FILL_SURE = false;
-
-/** The look up's answer as the catalog part of a recognized card. */
-export function catalogPart(result: LookupResult, readingConfidence: number, autoFill = AUTO_FILL_SURE): RecognizedCatalog {
-  if (result.sure && autoFill) return { status: "sure", card: result.sure, confidence: lookupConfidence(result, readingConfidence) };
-  if (result.sure) {
-    const sure = result.sure;
-    return { status: "candidates", candidates: [sure, ...result.candidates.filter((c) => c.sourceId !== sure.sourceId)] };
-  }
-  if (result.candidates.length > 0) return { status: "candidates", candidates: result.candidates };
-  if (result.stopped) return { status: "not_checked", reason: result.stopped };
-  return { status: "none" };
-}
-
-/**
  * The S1a look up's answer as the catalog part of a recognized card: exactly
  * one verified match is linked when the item is filed (status `matched`,
  * the match first); anything else is a list for the owner's tap.
@@ -170,14 +151,17 @@ export function findPart(result: FindResult): RecognizedCatalog {
 export function applyFills(item: RecognizedItem, result: Pick<FindResult, "fills" | "notes">): void {
   if (result.fills.length === 0 && result.notes.length === 0) return;
   const certainty: FieldCertainty = { ...(item.evidence?.certainty ?? {}) };
+  const checklist = [...(item.evidence?.checklist ?? [])];
   for (const fill of result.fills) {
     const now = item[fill.field];
     // Only a blank is filled; an equal value is only confirmed. A read value is never replaced.
     if (now != null && now !== "" && String(now) !== fill.value) continue;
+    // A blank filled from the set list is the catalog's value, not the card's: it is kept apart (source `checklist`).
+    if ((now == null || now === "") && !checklist.includes(fill.field)) checklist.push(fill.field);
     item[fill.field] = fill.value;
     certainty[fill.field] = fill.sure ? "sure" : "unsure";
   }
-  item.evidence = { ...(item.evidence ?? {}), certainty };
+  item.evidence = { ...(item.evidence ?? {}), certainty, ...(checklist.length > 0 ? { checklist } : {}) };
   if (result.notes.length > 0) item.notes = [item.notes, ...result.notes].filter(Boolean).join(" ").slice(0, 600);
 }
 
@@ -311,6 +295,7 @@ export class FreeRecognizer implements Recognizer {
           sport: item.sport, year: item.year, yearFromStats, brand: item.brand, setName: item.setName, cardNumber: item.cardNumber,
           player: item.player ?? names[0] ?? null, team: item.team, variation: item.variation,
           unsure: CERTAIN_FIELDS.filter((f) => item[f] != null && item[f] !== "" && certainty[f] !== "sure"),
+          notRead: item.evidence?.notRead ?? [],
         }, "background", { catalog: gate, scan }), left);
         if (result === TIMED_OUT) {
           late = true;
@@ -637,6 +622,22 @@ export class FreeRecognizer implements Recognizer {
       item.rarityNotes = "Marked REPRINT: a later copy, usually worth far less than the original card.";
     }
     item.confidence = Math.min(0.95, confidence);
+    // The hold backs above that no catalog link may lift (S1a rule C keeps them).
+    const hold: HoldReason[] = [];
+    if (parsed.isReprint) hold.push("reprint");
+    if (opts.lone) hold.push("one_side");
+    if (textConfidence < 0.5) hold.push("hard_to_read");
+    if (errorCheck) hold.push("error_check");
+    if (!key && match) hold.push("key_list_guess");
+    // Filled fields the card itself did not give (the key card list or Wikidata).
+    const notRead = CERTAIN_FIELDS.filter((f) => {
+      const value = item[f];
+      if (value == null || value === "") return false;
+      if (f === "player") return readPlayer == null || normalizeName(String(value)) !== normalizeName(readPlayer);
+      if (f === "team") return value !== parsed.team;
+      const read = parsed[f];
+      return read == null || String(read) !== String(value);
+    });
     const names: string[] = [];
     for (const n of [player, ...parsed.playerCandidates]) if (n && !names.includes(n)) names.push(n);
     const evidence: ReadEvidence = {};
@@ -644,6 +645,8 @@ export class FreeRecognizer implements Recognizer {
     // The key list hit is passed on explicitly; the item layer never guesses it from the reader's name.
     if (key) evidence.keyCard = { isRookie: key.isRookie };
     if (parsed.isReprint) evidence.reprint = true;
+    if (hold.length > 0) evidence.hold = hold;
+    if (notRead.length > 0) evidence.notRead = notRead;
     if (parsed.rookieWord) evidence.rookieWord = true;
     if (parsed.serialRead) {
       const { text, line, weak, why } = parsed.serialRead;
