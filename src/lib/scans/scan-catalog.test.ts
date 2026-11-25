@@ -5,6 +5,8 @@ import { createDb, type Db } from "@/db";
 import { catalogCards, catalogSources, items, scans, type Item } from "@/db/schema";
 import { parseCatalog } from "@/lib/catalog/candidates";
 import { pickCandidate, undoLink } from "@/lib/catalog/pick";
+import { versionView } from "@/lib/catalog/version-view";
+import { chooseVersion, parseVersions } from "@/lib/catalog/versions";
 import type { OcrResult, TextReader } from "@/lib/free/ocr";
 import { FreeRecognizer } from "@/lib/free/recognizer";
 import { REVIEW_THRESHOLD } from "@/lib/recognition/types";
@@ -71,18 +73,41 @@ describe("a scan with the catalog (fake, recorded answers, no network)", () => {
     expect(again.items[0]).toMatchObject({ sourceId: "551033" });
   });
 
-  it("S1a: base and Tiffany both agree, so nothing is linked: the versions wait for the owner", async () => {
+  it("base and Tiffany both agree: the base is linked, the version stays an open question, assumed and not the owner's answer", async () => {
     const griffey = recordedSearch("search_1990_topps_griffey.json");
     const base = griffey.find((c) => c.sourceId === "551033")!;
     const tiffany = { ...base, sourceId: "551885", brand: "Topps", variation: "Tiffany", url: "https://mycardfolio.com/sports/baseball/1990/topps-tiffany-2131/base-set-9181/336-ken-griffey-jr-551885", sourceSetId: "9181" };
     const catalog = new FakeCatalog({ searches: { "1990 topps 336 griffey": [base, tiffany] } });
     const item = await scanWith(WITH_NUMBER, catalog);
-    expect(item.catalogCardId).toBeNull();
-    expect(db.select().from(catalogCards).all()).toHaveLength(0);
-    const stored = parseCatalog(item.catalogCandidates)!;
-    expect(stored.status).toBe("candidates");
-    expect(stored.items.map((c) => c.sourceId)).toEqual(["551033", "551885"]);
+    expect(item.catalogCardId).not.toBeNull();
+    expect(db.select().from(catalogSources).get()?.sourceId).toBe("551033");
+    expect(item).toMatchObject({ versionState: null, versionSource: null, variation: null });
+    const list = parseVersions(item.versionOptions)!;
+    expect(list.assumed).toBe(true);
+    expect(list.options.map((o) => o.name)).toEqual(["The normal card (base)", "Tiffany", "O-Pee-Chee", "Another version", "Not sure yet"]);
+    expect(list.options[1].card?.sourceId).toBe("551885");
+    const view = versionView(item);
+    expect(view).toMatchObject({ assumed: true, stateLine: "Assumed the normal version. Tap to change." });
     expect(catalog.calls).toEqual(["search:1990 Topps 336 Griffey"]);
+
+    // Undo of the automatic link takes the assumption with it and brings the list back.
+    expect(undoLink(item.id, db)).toEqual({ ok: true });
+    const back = db.select().from(items).where(eq(items.id, item.id)).get()!;
+    expect(back).toMatchObject({ catalogCardId: null, versionOptions: null });
+    expect(parseCatalog(back.catalogCandidates)!.items.map((c) => c.sourceId)).toEqual(["551033", "551885"]);
+  });
+
+  it("the owner's tap on the normal card in the list makes it the owner's answer", async () => {
+    const griffey = recordedSearch("search_1990_topps_griffey.json");
+    const base = griffey.find((c) => c.sourceId === "551033")!;
+    const tiffany = { ...base, sourceId: "551885", brand: "Topps", variation: "Tiffany", sourceSetId: "9181" };
+    const item = await scanWith(WITH_NUMBER, new FakeCatalog({ searches: { "1990 topps 336 griffey": [base, tiffany] } }));
+    const at = parseVersions(item.versionOptions)!.at;
+    expect(chooseVersion(item.id, { position: 0, listAt: at }, db)).toMatchObject({ ok: true, state: "confirmed", source: "owner" });
+    const after = db.select().from(items).where(eq(items.id, item.id)).get()!;
+    expect(after).toMatchObject({ versionState: "confirmed", versionOptions: null });
+    expect(after.catalogCardId).toBe(item.catalogCardId);
+    expect(versionView(after).assumed).toBe(false);
   });
 
   it("without a sure card the ranked candidates are kept for Review; a pick links, fills the empty number and confirms", async () => {

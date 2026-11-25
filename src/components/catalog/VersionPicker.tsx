@@ -21,7 +21,7 @@ export function VersionPicker({ itemId, title, view }: { itemId: number; title: 
     <section id="version" className="scroll-mt-4" aria-labelledby="version-heading">
       <Card className="flex flex-col gap-3">
         <h2 id="version-heading" className="text-lg font-semibold">Which version is it?</h2>
-        <p className="text-sm break-words">{view.stateLine}</p>
+        <p className={view.assumed ? "text-sm font-semibold break-words" : "text-sm break-words"}>{view.stateLine}</p>
         {view.several ? <p className="text-sm font-semibold">There is more than one version of this card.</p> : null}
         <form action={show}>
           <input type="hidden" name="id" value={itemId} />
@@ -35,11 +35,11 @@ export function VersionPicker({ itemId, title, view }: { itemId: number; title: 
             <input type="hidden" name="listAt" value={view.list.at} />
             {view.list.catalogLine ? <p className="text-sm text-muted">{view.list.catalogLine}</p> : null}
             <fieldset className="flex flex-col gap-2">
-              <legend className="pb-1 text-sm font-semibold">Pick one, then tap Save</legend>
+              <legend className="pb-1 text-sm font-semibold">{view.assumed ? "The normal version is selected for now. Tap Save to keep it, or pick another" : "Pick one, then tap Save"}</legend>
               {view.list.options.map((o) => (
                 <div key={o.position} className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2 p-3">
                   <label htmlFor={`version-${o.position}`} className="flex min-h-11 items-center gap-3 text-base font-semibold">
-                    <input id={`version-${o.position}`} type="radio" name="position" value={o.position} required className="size-6 shrink-0 accent-accent" />
+                    <input id={`version-${o.position}`} type="radio" name="position" value={o.position} required defaultChecked={view.assumed && o.kind === "base"} className="size-6 shrink-0 accent-accent" />
                     <span className="break-words">{o.name}</span>
                   </label>
                   {o.evidence.map((e, i) => (

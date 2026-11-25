@@ -309,7 +309,7 @@ export class FreeRecognizer implements Recognizer {
         const certainty = item.evidence?.certainty ?? {};
         const result = await within(findCard({
           sport: item.sport, year: item.year, yearFromStats, brand: item.brand, setName: item.setName, cardNumber: item.cardNumber,
-          player: item.player ?? names[0] ?? null, team: item.team,
+          player: item.player ?? names[0] ?? null, team: item.team, variation: item.variation,
           unsure: CERTAIN_FIELDS.filter((f) => item[f] != null && item[f] !== "" && certainty[f] !== "sure"),
         }, "background", { catalog: gate, scan }), left);
         if (result === TIMED_OUT) {

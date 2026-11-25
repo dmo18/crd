@@ -8,6 +8,8 @@ export type VersionView = {
   /** "Version: Tiffany, you chose it, from MyCardfolio" or "Version: not chosen". */
   stateLine: string;
   several: boolean;
+  /** The app linked the normal card by itself and the question is open: the normal card is preselected, not the owner's answer. */
+  assumed: boolean;
   list: null | {
     at: number;
     /** One plain line when the catalog gave nothing (off, paused, busy, ...). Null when it answered. */
@@ -32,7 +34,10 @@ export const CATALOG_LINES: Record<Exclude<CatalogStatus, "ok">, string> = {
   failed: "The catalog did not answer properly. These choices are from the known list.",
 };
 
-export function stateLine(item: Pick<Item, "versionState" | "versionSource" | "variation">): string {
+export const ASSUMED_LINE = "Assumed the normal version. Tap to change.";
+
+export function stateLine(item: Pick<Item, "versionState" | "versionSource" | "variation">, assumed = false): string {
+  if (assumed) return ASSUMED_LINE;
   if (item.versionState === "not_sure") return "Version: not sure yet";
   if (item.versionState === "confirmed") {
     const what = item.variation?.trim() || "the normal card";
@@ -44,8 +49,11 @@ export function stateLine(item: Pick<Item, "versionState" | "versionSource" | "v
 export function versionView(item: Item, now: Date = new Date()): VersionView {
   const stored = parseVersions(item.versionOptions, now);
   const candidates = item.catalogCardId == null ? parseCatalog(item.catalogCandidates, now) : null;
+  // Assumed only while nothing was chosen, nothing is typed as a version and the card is still linked.
+  const assumed = stored?.assumed === true && item.versionState == null && !item.variation?.trim() && item.catalogCardId != null;
   return {
-    stateLine: stateLine(item),
+    assumed,
+    stateLine: stateLine(item, assumed),
     several: hasSeveralVersions(candidates?.items ?? []),
     list: stored ? {
       at: stored.at,

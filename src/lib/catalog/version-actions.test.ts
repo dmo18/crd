@@ -169,11 +169,35 @@ describe("a version picked in Review", () => {
 });
 
 describe("no path decides a version for the owner", () => {
-  it("Look up again and Show versions leave the version unanswered", async () => {
+  it("Look up again and Show versions leave the version unanswered (an assumed normal card is not an answer)", async () => {
     const id = insert({ catalogCandidates: null });
     await lookUpAgain(id, { db, catalog: new FakeCatalog({ searches: SEARCHES }) });
     await versions.loadVersionOptions(id, { db, catalog: new FakeCatalog({ searches: SEARCHES }) });
-    expect(get(id)).toMatchObject({ versionState: null, versionSource: null, variation: null, isParallel: false, catalogCardId: null });
+    // Base and Tiffany came back: the base card is linked, the version is assumed, nothing is chosen.
+    expect(get(id)).toMatchObject({ versionState: null, versionSource: null, variation: null, isParallel: false });
+    expect(get(id).catalogCardId).not.toBeNull();
+    expect(versions.parseVersions(get(id).versionOptions)?.assumed).toBe(true);
+  });
+
+  it("a version the card itself reads (Tiffany) is not assumed away: nothing is linked and the question stays", async () => {
+    const id = insert({
+      catalogCandidates: null, variation: "Tiffany",
+      fieldSources: JSON.stringify({ sport: "reading", year: "reading", brand: "reading", cardNumber: "reading", player: "reading", variation: "reading" }),
+    });
+    await lookUpAgain(id, { db, catalog: new FakeCatalog({ searches: SEARCHES }) });
+    expect(get(id)).toMatchObject({ catalogCardId: null, versionOptions: null, versionState: null });
+    expect(pick.reviewCatalogView(get(id), db)?.severalVersions).toBe(true);
+  });
+
+  it("Show versions again keeps the assumption, and Unlink removes it", async () => {
+    const id = insert({ catalogCandidates: null });
+    await lookUpAgain(id, { db, catalog: new FakeCatalog({ searches: SEARCHES }) });
+    expect(get(id).catalogCardId).not.toBeNull();
+    versions.resetShowVersionsLimitForTests();
+    await show(id);
+    expect(versions.parseVersions(get(id).versionOptions)?.assumed).toBe(true);
+    expect(pick.undoLink(id, db).ok).toBe(true);
+    expect(get(id)).toMatchObject({ catalogCardId: null, versionOptions: null });
   });
 
   it("only the choose path and the owner's pick in Review write the version state", () => {

@@ -245,10 +245,20 @@ describe("C: a verified match", () => {
     expect(pickMatch(r, offerCandidates(r, [base336])).match).toBeNull();
   });
 
-  it("earlier failures do not link: base and Tiffany (two versions), or only Tiffany for a plain Topps read", () => {
+  it("base and Tiffany: the plain base card is the match (the version question stays open); only Tiffany for a plain Topps read still does not link", () => {
     const tiffany = WITT.find((c) => c.variation === "Tiffany")!;
     const tiff336 = { ...tiffany, sourceId: "551885", cardNumber: "336", player: "Ken Griffey Jr." };
-    expect(pickMatch(griffeyRead, offerCandidates(griffeyRead, [base336, tiff336]))).toEqual({ match: null, matches: 2 });
+    const both = pickMatch(griffeyRead, offerCandidates(griffeyRead, [base336, tiff336]));
+    expect(both).toMatchObject({ matches: 2, assumedBase: true });
+    expect(both.match?.sourceId).toBe("551033");
+    // The card itself reads the version: nothing is assumed.
+    expect(pickMatch({ ...griffeyRead, variation: "Tiffany" }, offerCandidates(griffeyRead, [base336, tiff336]))).toEqual({ match: null, matches: 2 });
+    expect(pickMatch({ ...griffeyRead, brand: "Topps Tiffany" }, offerCandidates(griffeyRead, [base336, tiff336])).match).toBeNull();
+    // Two plain base entries, or a version word that is not on the known list: no link.
+    const base2 = { ...base336, sourceId: "551034", sourceSetId: "777", setName: "Major League Debut" };
+    expect(pickMatch(griffeyRead, offerCandidates(griffeyRead, [base336, base2, tiff336])).match).toBeNull();
+    const odd = { ...tiff336, variation: "Rainbow Special" };
+    expect(pickMatch(griffeyRead, offerCandidates(griffeyRead, [base336, odd])).match).toBeNull();
     expect(pickMatch(griffeyRead, offerCandidates(griffeyRead, [tiff336]))).toEqual({ match: null, matches: 1 });
   });
 
@@ -276,9 +286,11 @@ describe("C: a verified match", () => {
     expect(isVerifiedMatch(griffeyRead, offer(listing))).toBe(false);
   });
 
-  it("Chipper Jones #333: base, Desert Shield and Tiffany all agree, so it is a version question, not a link", () => {
+  it("Chipper Jones #333: base, Desert Shield and Tiffany all agree, so the base is linked and the version question stays open", () => {
     const r = read({ year: 1991, brand: "Topps", cardNumber: "333", player: "Chipper Jones" });
-    expect(pickMatch(r, offerCandidates(r, JONES))).toEqual({ match: null, matches: 3 });
+    const got = pickMatch(r, offerCandidates(r, JONES));
+    expect(got).toMatchObject({ matches: 3, assumedBase: true });
+    expect(got.match?.variation).toBeNull();
   });
 });
 

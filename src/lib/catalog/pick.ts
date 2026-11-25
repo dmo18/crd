@@ -14,9 +14,10 @@ import { getCatalog } from "./provider";
 import { saveCatalogCardIn } from "./store";
 import type { Catalog, CatalogCard } from "./types";
 import { normalizeText } from "./normalize";
-import { fieldsToCheck, isFilled, parseFieldSources, sourceOf } from "./sources";
+import { fieldsToCheck, isFilled, parseFieldSources, parseFirstSuggestion, sourceOf } from "./sources";
 import { buildTitle } from "@/lib/title";
-import { catalogVersionName, hasSeveralVersions, isVersionRow } from "./versions";
+import { baseWithVersions, buildVersionOptions, catalogVersionCards, catalogVersionName, hasSeveralVersions, isVersionRow, parseVersions, readTexts, serializeVersions } from "./versions";
+import { knownVersionsFor } from "./versions-known";
 
 /**
  * The catalog in Review: candidates wait for the owner's one tap ("This one").
@@ -164,8 +165,30 @@ export function autoLinkIn(tx: Db, itemId: number, now: Date = new Date()): bool
   const stored = parseCatalog(item.catalogCandidates, now);
   const first = stored?.status === "candidates" ? stored.items[0] : undefined;
   if (!first) return false;
+  // One base entry with premium versions of the same card: the base is linked, the version stays an open question.
+  const group = baseWithVersions(item, catalogVersionCards(item, stored!.items.filter((c) => c.verified)), readTexts(item));
+  const assumed = group && group.base.sourceId === first.sourceId ? group : null;
+  const hasVersions = stored!.items.some((c) => c.sourceId !== first.sourceId && isPremiumSibling(item, first, c));
+  // A read version word with a base first: nothing is assumed, nothing is linked (the question stays as it is).
+  if (!assumed && hasVersions && catalogVersionName(item, first) === "" && readNamesVersion(item)) return false;
   const before = { status: item.status === "confirmed" ? "confirmed" as const : "needs_review" as const, confidence: item.confidence };
-  return pickCandidateIn(tx, itemId, 0, first.sourceId, now, before).ok;
+  const res = pickCandidateIn(tx, itemId, 0, first.sourceId, now, before);
+  if (!res.ok) return false;
+  if (assumed) {
+    const linked = tx.select().from(items).where(eq(items.id, itemId)).get()!;
+    const options = buildVersionOptions(linked, [...[assumed.base, ...assumed.versions].map(candidateCard)]);
+    tx.update(items).set({ versionOptions: serializeVersions({ catalog: "ok", options, assumed: true }, now) }).where(eq(items.id, itemId)).run();
+  }
+  return true;
+}
+
+function isPremiumSibling(item: Item, _base: StoredCandidate, c: StoredCandidate): boolean {
+  return c.verified && catalogVersionCards(item, [c]).length === 1 && catalogVersionName(item, c) !== "";
+}
+
+function readNamesVersion(item: Item): boolean {
+  const known = knownVersionsFor(item).map((r) => normalizeText(r.name));
+  return readTexts(item).some((r) => known.some((k) => ` ${r} `.includes(` ${k} `)));
 }
 
 /**
@@ -182,6 +205,8 @@ export function undoLink(itemId: number, db: Db = getDb(), now: Date = new Date(
     if (item.catalogCardId == null) return { ok: true };
     const stored = parseCatalog(item.catalogCandidates, now);
     const patch: Partial<Item> = { catalogCardId: null, updatedAt: now };
+    // An assumed normal version goes with the link it came from.
+    if (parseVersions(item.versionOptions, now)?.assumed) patch.versionOptions = null;
     const marks = parseFieldSources(item.fieldSources);
     if (marks) {
       let changed = false;
@@ -283,7 +308,7 @@ export async function lookUpAgain(itemId: number, deps: { db?: Db; catalog?: Cat
     // The item's fields of the moment. A field the reader was not sure of (and nobody changed) counts as unsure.
     const r = await findCard({
       sport: item.sport, year: item.year, brand: item.brand, setName: item.setName, cardNumber: item.cardNumber,
-      player: item.player, team: item.team, unsure: fieldsToCheck(item).filter((f): f is (typeof CERTAIN_FIELDS)[number] => (CERTAIN_FIELDS as readonly string[]).includes(f)),
+      player: item.player, team: item.team, variation: item.variation || parseFirstSuggestion(item.firstSuggestion)?.fields.variation || null, unsure: fieldsToCheck(item).filter((f): f is (typeof CERTAIN_FIELDS)[number] => (CERTAIN_FIELDS as readonly string[]).includes(f)),
     }, "now", { catalog: deps.catalog ?? getCatalog() });
     found = r.candidates.length;
     if (r.match) matched = cardLine(r.match);

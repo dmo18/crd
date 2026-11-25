@@ -65,7 +65,8 @@ export type VersionOption = {
 /** How the catalog part went: `not_asked` when the item lacks year, brand or player. */
 export type CatalogStatus = "ok" | "none" | "not_asked" | CatalogFailure;
 export const CATALOG_STATUSES = ["ok", "none", "not_asked", "off", "paused", "cap", "busy", "failed"] as const satisfies readonly CatalogStatus[];
-export type StoredVersions = { at: number; catalog: CatalogStatus; options: VersionOption[] };
+/** `assumed`: the app linked the normal card by itself and the question is still open (nothing is the owner's answer). */
+export type StoredVersions = { at: number; catalog: CatalogStatus; options: VersionOption[]; assumed?: boolean };
 
 /** The item facts the list is built from. */
 export type VersionItem = Pick<Item, "kind" | "sport" | "year" | "brand" | "setName" | "cardNumber" | "player" | "team" | "variation" | "fieldSources" | "firstSuggestion">;
@@ -95,15 +96,42 @@ export function catalogVersionName(item: Pick<VersionItem, "brand" | "setName">,
  * only, same year, same player, same card number (when the item has one).
  * Unverified listings are never options.
  */
-export function catalogVersionCards(item: VersionItem, cards: readonly CatalogCard[]): CatalogCard[] {
+export function catalogVersionCards<C extends Pick<CatalogCard, "verified" | "year" | "player" | "cardNumber">>(
+  item: Pick<VersionItem, "year" | "cardNumber" | "player">, cards: readonly C[],
+): C[] {
   const number = item.cardNumber?.trim() ? printedCardNumber(item.cardNumber) : null;
   return cards.filter((c) =>
     c.verified && c.year != null && c.year === item.year && samePlayer(item.player, c.player) &&
     (number === null || (c.cardNumber != null && printedCardNumber(c.cardNumber) === number)));
 }
 
+/**
+ * One base entry plus premium versions of the same card. `cards` are the
+ * verified matches (or stored candidates). The base is the one entry that
+ * is the plain product; every other entry must be the same year, number and
+ * player, and its product the base product plus a word of the known versions
+ * list for this year and brand ("Tiffany", "Glossy", "Desert Shield", "Gold").
+ * Null for no base, two bases, any entry that is not a known version, or when
+ * the card's own reading names a version (`readNames`, the words read).
+ */
+export function baseWithVersions<C extends Pick<CatalogCard, "verified" | "year" | "player" | "cardNumber" | "brand" | "variation" | "setName">>(
+  item: Pick<VersionItem, "sport" | "year" | "brand" | "setName" | "cardNumber" | "player">, cards: readonly C[], readNames: readonly string[] = [],
+): { base: C; versions: C[] } | null {
+  const same = catalogVersionCards(item, cards);
+  if (same.length < 2 || same.length !== cards.length) return null;
+  const known = knownVersionsFor(item).map((r) => normalizeText(r.name));
+  if (known.length === 0) return null;
+  const reads = readNames.map(normalizeText).filter(Boolean);
+  if (reads.some((r) => known.some((k) => ` ${r} `.includes(` ${k} `)))) return null;
+  const bases = same.filter((c) => catalogVersionName(item, c) === "");
+  if (bases.length !== 1) return null;
+  const versions = same.filter((c) => c !== bases[0]);
+  const premium = versions.every((c) => known.includes(normalizeText(catalogVersionName(item, c))));
+  return premium ? { base: bases[0], versions } : null;
+}
+
 /** Version words the reader left on the item: its `reading` variation and the first suggestion's variation. */
-function readTexts(item: VersionItem): string[] {
+export function readTexts(item: VersionItem): string[] {
   const out: string[] = [];
   if (item.variation?.trim() && sourceOf(item, "variation") === "reading") out.push(item.variation);
   const first = parseFirstSuggestion(item.firstSuggestion)?.fields.variation;
@@ -232,10 +260,11 @@ const storedSchema = z.object({
   at: z.number().int(),
   catalog: z.enum(CATALOG_STATUSES),
   options: z.array(optionSchema).min(1).max(MAX_VERSION_OPTIONS),
+  assumed: z.boolean().optional(),
 });
 
-export function serializeVersions(v: { catalog: CatalogStatus; options: VersionOption[] }, at: Date): string {
-  return JSON.stringify({ v: 1, at: at.getTime(), catalog: v.catalog, options: v.options.slice(0, MAX_VERSION_OPTIONS) });
+export function serializeVersions(v: { catalog: CatalogStatus; options: VersionOption[]; assumed?: boolean }, at: Date): string {
+  return JSON.stringify({ v: 1, at: at.getTime(), catalog: v.catalog, options: v.options.slice(0, MAX_VERSION_OPTIONS), ...(v.assumed ? { assumed: true } : {}) });
 }
 
 /** Reads the stored list. Null when there is none, it cannot be read, or it is older than 30 days. */
@@ -245,7 +274,7 @@ export function parseVersions(raw: string | null | undefined, now: Date = new Da
     const r = storedSchema.safeParse(JSON.parse(raw));
     if (!r.success) return null;
     if (now.getTime() - r.data.at > VERSION_DAYS * 24 * 60 * 60 * 1000) return null;
-    return { at: r.data.at, catalog: r.data.catalog, options: r.data.options };
+    return { at: r.data.at, catalog: r.data.catalog, options: r.data.options, ...(r.data.assumed ? { assumed: true } : {}) };
   } catch {
     return null;
   }
@@ -335,6 +364,9 @@ export async function loadVersionOptions(itemId: number, deps: { db?: Db; catalo
   }
   const options = buildVersionOptions(item, found);
   const versions: StoredVersions = { at: now().getTime(), catalog: status, options };
+  // An open "assumed the normal version" stays assumed when the owner only looks at the list again.
+  const keepAssumed = item.versionState == null && item.catalogCardId != null && parseVersions(item.versionOptions, now())?.assumed === true;
+  if (keepAssumed) versions.assumed = true;
   const stored = serializeVersions(versions, new Date(versions.at));
   const res = db.update(items).set({ versionOptions: stored }).where(and(eq(items.id, itemId), liveItem)).run();
   if (res.changes === 0) return { ok: false, error: GONE };

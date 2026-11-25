@@ -4,6 +4,7 @@ import type { CertainField } from "@/lib/recognition/types";
 import { MAX_STORED_CANDIDATES, type OfferCandidate } from "./candidates";
 import { cleanCardNumber, setIdFromUrl } from "./clean";
 import { createScanBudget, type ScanBudget } from "./lookup";
+import { baseWithVersions } from "./versions";
 import { firstFits, parseName, type Candidate } from "./match";
 import { createMyCardfolio } from "./mycardfolio";
 import { normalizeBrand, normalizeName, normalizeText } from "./normalize";
@@ -33,6 +34,8 @@ export type FindRead = {
   cardNumber: string | null;
   player: string | null;
   team: string | null;
+  /** The version words the card reads ("Tiffany"), when any. A read version is never assumed away. */
+  variation?: string | null;
   unsure: readonly CertainField[];
 };
 
@@ -44,7 +47,7 @@ export type ChecklistFill = { field: "player" | "team" | "cardNumber"; value: st
 export type FindResult = {
   /** Up to 5, in the order to show, the verified match first. */
   candidates: OfferCandidate[];
-  /** Exactly one verified match, the one to link. Null with none or with several (then a version question). */
+  /** The one to link: exactly one verified match, or the plain base entry when the other matches are premium versions of it. Null otherwise (then a version question). */
   match: OfferCandidate | null;
   /** How many verified matches there were (2 or more: "Which version is it?"). */
   matches: number;
@@ -249,12 +252,19 @@ export function isVerifiedMatch(read: FindRead, c: OfferCandidate): boolean {
 
 /**
  * The one match to link, or null. Two or more matches are versions of one
- * card (base and a parallel): the owner chooses. A single match that is a
+ * card (base and a parallel): the owner chooses, except one plain base entry
+ * with known premium versions of it, where the base is linked and the version
+ * question stays open (`assumedBase`). A single match that is a
  * version the card does not name (only "Topps Tiffany" came back for a read
  * "Topps") is not linked either.
  */
-export function pickMatch(read: FindRead, offers: readonly OfferCandidate[]): { match: OfferCandidate | null; matches: number } {
+export function pickMatch(read: FindRead, offers: readonly OfferCandidate[]): { match: OfferCandidate | null; matches: number; assumedBase?: boolean } {
   const all = offers.filter((c) => isVerifiedMatch(read, c));
+  if (all.length >= 2) {
+    // One plain base entry plus premium versions of the same card: the base is linked, the version question stays open.
+    const group = baseWithVersions(read, all, [read.variation ?? "", read.brand ?? "", read.setName ?? ""]);
+    if (group && extraWords(read, group.base).length === 0) return { match: group.base, matches: all.length, assumedBase: true };
+  }
   if (all.length !== 1) return { match: null, matches: all.length };
   const only = all[0];
   return { match: extraWords(read, only).length === 0 ? only : null, matches: 1 };
