@@ -1,5 +1,16 @@
 # Status
 
+## Walk-through fixes (2026-11-25, branch work/product, not deployed)
+- Catalog: an unverified listing never replaces the card's details ("Use the catalog's values" is not offered for it; its facts sit under "From an unverified listing. Not checked."). A catalog product word ("Prizm", "Stadium Club") maps to maker as brand and product as set. Accents, case, punctuation and suffix forms are no difference; the more complete spelling stays.
+- Broken "Catalog not checked" sentence fixed; text slips (double period after Jr., see above, It is or They are, MyCardfolio named once, Normal size zoom); Look up again no longer repeats Not found.
+- More page: About values rewritten; no setting names or file names.
+- Manage undo: import undo says what it did; a delete already put back by hand is no longer offered.
+- Duplicates: same player and number with nothing contradicting is asked as a maybe.
+- Not found page inside the app. Import: formula-looking cells are row problems.
+- Price guide: about 180 more players, letter and hyphen card numbers count as inserts, more key rookies (1991 Upper Deck #55 Chipper Jones), each priced card carries a rookie mark; a matching key rookie is offered as the rookie question.
+- Year: a misread season row right under the stat table still counts (Haslett 1985). Item page offers "Trim the photo" when the app did not cut a photo.
+- Many cards: each cut-out is stored exactly as read (own outline, no neighbour), turned by the one card rules (a card lying on its side is stood up); a paired back is read again as a back at one card size, kept only when better. Known: in the owner's two-card photo the Mills copyright line is too small to read at any size the working copy allows, so year and brand stay blank there.
+
 ## Milestone 12R: make reading right (live 2026-11-16, commit 9084b93, tag m12r-live)
 - Live through Coolify after a data backup (/root/cardvault-db-backups/pre-12r). Reader self test passes inside the live container as uid 1001. Not yet proven live: a full scan through the app (needs the owner's login).
 - Bench: zero wrong fields on all 19 test cards; sure fill for year and number is under the bar, so most cards wait in Review with a "Check this" note.

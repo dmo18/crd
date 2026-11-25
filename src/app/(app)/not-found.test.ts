@@ -10,6 +10,6 @@ describe("the app's not found page (review fix 12)", () => {
     expect(html).toContain('href="/"');
     expect(html).toContain("Back to your cards");
     expect(html).not.toContain("404");
-    expect(html).not.toMatch(/[–—]/);
+    expect(html).not.toMatch(/[\u2013\u2014]/);
   });
 });
