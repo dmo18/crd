@@ -2,7 +2,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
 import type { Box, ReadFix } from "@/lib/recognition/types";
-import { cornerBoxes, cropBox, findCard, grow, joinSpacedLetters, keepCornerLine, mapBox, overlapShare, spacedBands, toView } from "./card-picture";
+import { cornerBoxes, cropBox, findCard, joinSpacedLetters, keepCornerLine, mapBox, overlapShare, spacedBands, toView } from "./card-picture";
 import { ReaderDownError, WorkerClient, type OcrEngine, type ReaderStatus, type WorkerLine, type WorkerRead } from "./ocr-worker";
 
 /**
@@ -318,12 +318,43 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
   return sink.fix ? { ...result, fix: sink.fix } : result;
 }
 
+/**
+ * The text boxes that belong to the card found: those on it, and every box
+ * that reaches them across a gap smaller than STRAY_GAP (print on a border
+ * the finder missed stays). What is left is a cluster well apart from the
+ * card; it is dropped only when it touches the photo's edge (a piece of
+ * another card reaching into the photo).
+ */
+function linesOfCard(boxes: Box[], card: Box): Box[] {
+  const near = (a: Box, b: Box) => {
+    const dx = Math.max(0, a.x - (b.x + b.w), b.x - (a.x + a.w));
+    const dy = Math.max(0, a.y - (b.y + b.h), b.y - (a.y + a.h));
+    return dx < STRAY_GAP && dy < STRAY_GAP;
+  };
+  const kept = boxes.filter((b) => overlapShare(b, card) > 0);
+  let rest = boxes.filter((b) => !kept.includes(b));
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const b of rest) {
+      if (kept.some((k) => near(b, k))) {
+        kept.push(b);
+        grew = true;
+      }
+    }
+    rest = rest.filter((b) => !kept.includes(b));
+  }
+  return kept;
+}
+
 /** The share of confident lines the found card must hold for the finder to be believed. */
 const CARD_HOLDS_TEXT = 0.7;
 /** A card found covering this share of the photo fills the frame: text well clear of it is another card's. */
 const FRAME_CARD = 0.25;
-/** "Well clear": this far (share of the photo) outside the card found. */
-const STRAY_GAP = 0.05;
+/** "Well clear": this much empty photo (share of its sides) between such text and the card's own. */
+const STRAY_GAP = 0.15;
+/** Text this close to the photo's edge (share of its sides) touches it. */
+const EDGE_TOUCH = 0.02;
 
 async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions, sink: { fix?: ReadFix }): Promise<OcrResult> {
   const base = await oriented(image);
@@ -366,14 +397,29 @@ async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions,
   // a Mills back over the top of a Milacki back): when the card found fills
   // much of the photo and holds most of the text, lines well clear of it are
   // not this card's print. They are left out of the read and of the crop.
-  const strayFrom = cardSure && !options.quick && found && found.w * found.h >= FRAME_CARD ? grow(found, STRAY_GAP) : null;
+  const strayFrom = cardSure && !options.quick && found && found.w * found.h >= FRAME_CARD ? found : null;
   let firstLines = first;
   if (strayFrom) {
-    const mine = (b: Box) => overlapShare(b, strayFrom) > 0;
-    if (best.some((l) => !mine(l.box))) {
-      best = best.filter((l) => mine(l.box));
-      sure = sure.filter((l) => mine(l.box));
-      firstLines = { ...first, lines: first.lines.filter((l) => { const b = boxOf(l.box, first.width, first.height); return b != null && mine(b); }) };
+    const keep = linesOfCard(best.map((l) => l.box), strayFrom);
+    const mine = (b: Box) => keep.some((k) => overlapShare(b, k) > 0.5);
+    // The piece reaches in from the photo's edge on its own side of the card:
+    // above the card and touching the top, below it and touching the bottom,
+    // and so on. Only text on such a side goes; print the finder left off the
+    // card (its border) stays.
+    const f = strayFrom;
+    const sideOf = (b: Box) =>
+      b.y + b.h <= f.y ? "top" : b.y >= f.y + f.h ? "bottom" : b.x + b.w <= f.x ? "left" : b.x >= f.x + f.w ? "right" : null;
+    const touches = (b: Box, side: string) =>
+      side === "top" ? b.y <= EDGE_TOUCH : side === "bottom" ? b.y + b.h >= 1 - EDGE_TOUCH : side === "left" ? b.x <= EDGE_TOUCH : b.x + b.w >= 1 - EDGE_TOUCH;
+    const sides = new Set(best.flatMap((l) => {
+      const side = sideOf(l.box);
+      return !mine(l.box) && side && touches(l.box, side) ? [side] : [];
+    }));
+    const stray = (b: Box) => !mine(b) && sides.has(sideOf(b) ?? "");
+    if (sides.size > 0) {
+      best = best.filter((l) => !stray(l.box));
+      sure = sure.filter((l) => !stray(l.box));
+      firstLines = { ...first, lines: first.lines.filter((l) => { const b = boxOf(l.box, first.width, first.height); return b != null && !stray(b); }) };
       try {
         card = cropBox(found, sure.map((l) => l.box));
       } catch {
