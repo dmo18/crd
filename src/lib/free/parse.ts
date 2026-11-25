@@ -1208,11 +1208,11 @@ function onCard(b: LineBox, side: Line[]): LineBox {
  * Not a stat (another number on the same row beside it), not a decimal, not
  * a position ("1B"), never a year (four digits).
  */
-function numberFromCorner(l: Line, side: Line[]): CornerNumber | null {
+function numberFromCorner(l: Line, side: Line[], withinPrint = false): CornerNumber | null {
   const t = l.tokens;
   const traded = t.length === 2 && /^[Tt]$/.test(t[1]);
   if (t.length !== 1 && !traded) return null;
-  const b = onCard(l.box, side);
+  const b = withinPrint ? onCard(l.box, side) : l.box;
   const top = b.y < CORNER_Y;
   const bottom = b.y + b.h > 1 - CORNER_Y;
   const corner = b.x < CORNER_X || b.x + b.w > 1 - CORNER_X;
@@ -1268,7 +1268,12 @@ type NumberFind = { number: string; sure: boolean };
  * corner that gives a different number contradicts it: no number.
  */
 function findCardNumber(back: Line[], front: Line[]): NumberFind | null {
-  const cornerLines = back.map((l) => ({ l, c: numberFromCorner(l, back) })).filter((x): x is { l: Line; c: CornerNumber } => x.c !== null);
+  const inCorners = (withinPrint: boolean) =>
+    back.map((l) => ({ l, c: numberFromCorner(l, back, withinPrint) })).filter((x): x is { l: Line; c: CornerNumber } => x.c !== null);
+  // Corners of the picture first; only when none holds a number, corners of
+  // the print (a card cut from a photo of several, with desk around it).
+  let cornerLines = inCorners(false);
+  if (cornerLines.length === 0) cornerLines = inCorners(true);
   const markers = (side: Line[]) => side.flatMap((l) => {
     const n = numberFromMarkers(l);
     return n && !jerseyNumber(l, side) ? [{ l, n }] : [];

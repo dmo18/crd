@@ -828,6 +828,21 @@ describe("owner scan 8 rules", () => {
     expect(parseCardText(null, back).cardNumber).toBe("101");
   });
 
+  it("a number in a corner of the picture wins; corners of the print are tried only without one", () => {
+    // A small card in the picture: "55" sits in the picture's top left corner,
+    // a logo year "91" only near the print's top right corner.
+    const back = ocr([
+      ["55", 0.11, 0.17, 0.05, 0.04, 0.99],
+      ["TOP", 0.12, 0.48, 0.15, 0.08],
+      ["91", 0.22, 0.54, 0.09, 0.07, 0.99],
+      ["Shortstop", 0.27, 0.19, 0.2, 0.03],
+      ["The Braves were hoping Chipper Jones was the good hitting", 0.32, 0.44, 0.3, 0.03],
+      ["Larry Wayne Jones, Jr. became the first player from Florida", 0.38, 0.44, 0.31, 0.03],
+      ["TEAM AVG G AB", 0.73, 0.25, 0.3, 0.04],
+    ]);
+    expect(parseCardText(null, back).cardNumber).toBe("55");
+  });
+
   it("only the end of the front's name read (DAWAY): the back's large name ending so, unsure", () => {
     const front = ocr([["WARHOR", 0.5, 0.4, 0.2, 0.04], ["10", 0.55, 0.45, 0.05, 0.04], ["DAWAY", 0.1, 0.3, 0.2, 0.04]]);
     const back = ocr([
