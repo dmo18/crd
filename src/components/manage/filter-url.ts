@@ -32,3 +32,10 @@ export function selectionFilters(f: Base): Record<string, unknown> {
 export function filterKey(f: Base): string {
   return JSON.stringify(selectionFilters(f));
 }
+
+/** The link query for "Export what I am looking at": the filters only (sort and page do not change which items). */
+export function exportQuery(f: Base): string {
+  const sp = filterParams(f);
+  sp.delete("sort");
+  return sp.toString();
+}

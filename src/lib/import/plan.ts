@@ -11,7 +11,7 @@ import { CONDITION_LABELS, KIND_LABELS, PRODUCT_LABELS, RARITY_LABELS, SEAL_LABE
 import { liveItem } from "@/lib/items/live";
 import { withRookie } from "@/lib/items/rookie";
 import { serialColumns, splitSerial } from "@/lib/items/serial";
-import { editableFields, itemEditSchema } from "@/lib/items/update";
+import { clearVersionOnNewVariation, editableFields, itemEditSchema } from "@/lib/items/update";
 import { formatCents } from "@/lib/money";
 import { buildTitle } from "@/lib/title";
 import {
@@ -251,10 +251,7 @@ function updatePatch(existing: Item, c: Checked, problem: (m: string) => void): 
   const yearEnd = ("yearEnd" in patch ? patch.yearEnd : existing.yearEnd) as number | null;
   if (year != null && yearEnd != null && yearEnd < year) problem("Last year: The last year cannot be before the first year.");
   // A new variation means the version must be chosen again (as the item form does).
-  if ("variation" in patch) {
-    const same = (a: unknown) => String(a ?? "").trim().toLowerCase();
-    if (same(patch.variation) !== same(existing.variation)) { patch.versionState = null; patch.versionSource = null; }
-  }
+  clearVersionOnNewVariation(existing, patch);
   for (const k of Object.keys(patch) as (keyof Item)[]) if (patch[k] === existing[k]) delete patch[k];
   return { patch };
 }
