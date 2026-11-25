@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-19 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1990 Upper Deck 355 Ricci",
+  "limit": 10,
+  "sport": "Hockey",
+  "year": "1990"
+ },
+ "elapsed_ms": 552,
+ "status": 200,
+ "bytes": 181,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1990 Upper Deck 355 Ricci\",\n  \"count\": 0,\n  \"results\": []\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

@@ -1,0 +1,25 @@
+{
+ "note": "Recorded 2026-11-19 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1982 Topps 2",
+  "limit": 5,
+  "sport": "Football",
+  "year": "1982"
+ },
+ "elapsed_ms": 3148,
+ "status": 200,
+ "bytes": 714,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1982 Topps 2\",\n  \"count\": 1,\n  \"results\": [\n    {\n      \"card_id\": \"610976\",\n      \"sport\": \"Football\",\n      \"year\": \"1982\",\n      \"product\": \"Topps\",\n      \"set\": \"Base Set\",\n      \"card_number\": \"2\",\n      \"subjects\": [\n        {\n          \"subject_name\": \"Dan Fouts\",\n          \"team_name\": \"\"\n        }\n      ],\n      \"card_details\": \"\",\n      \"url\": \"https://mycardfolio.com/sports/football/1982/topps-2330/base-set-9378/2-dan-fouts-610976\",\n      \"image_url\": \"https://media.mycardfolio.com/detail/610976.jpg\"\n    }\n  ]\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}

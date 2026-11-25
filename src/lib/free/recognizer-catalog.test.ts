@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { FindResult } from "@/lib/catalog/find";
 import type { LookupResult } from "@/lib/catalog/lookup";
 import type { Candidate } from "@/lib/catalog/match";
 import type { RecognitionPhoto, RecognizedItem } from "@/lib/recognition/types";
@@ -10,8 +11,8 @@ import type { OcrResult, TextReader } from "./ocr";
  * hold whatever the matching rule decides: only the public result of
  * lookupCard (a sure card or candidates) is used.
  */
-const lookupCard = vi.fn<(...args: unknown[]) => Promise<LookupResult>>();
-vi.mock("@/lib/catalog/lookup", async (orig) => ({ ...(await orig<typeof import("@/lib/catalog/lookup")>()), lookupCard: (...a: unknown[]) => lookupCard(...a) }));
+const lookupCard = vi.fn<(...args: unknown[]) => Promise<FindResult>>();
+vi.mock("@/lib/catalog/find", async (orig) => ({ ...(await orig<typeof import("@/lib/catalog/find")>()), findCard: (...a: unknown[]) => lookupCard(...a) }));
 const { FreeRecognizer, catalogPart, AUTO_FILL_SURE } = await import("./recognizer");
 
 function reader(text: string): TextReader {
@@ -29,7 +30,8 @@ const card: Candidate = {
   verified: true, sport: "baseball", year: 1990, brand: "Topps", setName: null, cardNumber: "336", player: "Ken Griffey Jr.",
   otherPlayers: [], variation: null, tags: [], score: 3, why: "Number and name agree",
 };
-const result = (over: Partial<LookupResult>): LookupResult => ({ sure: null, sureBy: null, candidates: [], callsUsed: 1, stopped: null, ...over });
+const result = (over: Partial<FindResult>): FindResult => ({ candidates: [], match: null, matches: 0, fills: [], notes: [], callsUsed: 1, stopped: null, ...over });
+const old = (over: Partial<LookupResult>): LookupResult => ({ sure: null, sureBy: null, candidates: [], callsUsed: 1, stopped: null, ...over });
 const without = (item: RecognizedItem) => {
   const rest = { ...item };
   delete rest.catalog;
@@ -51,29 +53,38 @@ describe("FreeRecognizer catalog step", () => {
   });
 
   it("looks the read card up in the background line with what was read, and leaves the fields as read", async () => {
-    lookupCard.mockResolvedValue(result({ sure: card, sureBy: "number", candidates: [card] }));
+    lookupCard.mockResolvedValue(result({ candidates: [card] }));
     const plain = await run();
     const item = await run({ catalog: new FakeCatalog() });
     const [read, line] = lookupCard.mock.calls[0];
-    expect(read).toMatchObject({ year: 1990, brands: ["Topps"], sport: "baseball", cardNumber: null });
-    expect((read as { names: string[] }).names[0]).toBe("Ken Griffey Jr.");
+    expect(read).toMatchObject({ year: 1990, brand: "Topps", sport: "baseball", cardNumber: null, player: "Ken Griffey Jr." });
     expect(line).toBe("background");
     expect(without(item)).toEqual(without(plain));
-    // Owner safety rule: a sure answer is only the top suggestion.
     expect(item.catalog).toEqual({ status: "candidates", candidates: [card] });
   });
 
-  it("with automatic filling switched on (off in the app), a sure answer becomes a sure card", () => {
-    const r = result({ sure: card, sureBy: "number", candidates: [card] });
+  it("the old sure path stays off: with automatic filling switched on (off in the app), a sure answer becomes a sure card", () => {
+    const r = old({ sure: card, sureBy: "number", candidates: [card] });
     expect(AUTO_FILL_SURE).toBe(false);
     expect(catalogPart(r, 0.7, true)).toEqual({ status: "sure", card, confidence: 0.75 });
     expect(catalogPart(r, 0.7)).toEqual({ status: "candidates", candidates: [card] });
   });
 
-  it("a sure answer by number is still only a suggestion", async () => {
-    lookupCard.mockResolvedValue(result({ sure: card, sureBy: "number", candidates: [card] }));
+  it("exactly one verified match is passed on as matched (the scan links it); the fields stay as read", async () => {
+    lookupCard.mockResolvedValue(result({ match: card, matches: 1, candidates: [card] }));
+    const plain = await run();
     const item = await run({ catalog: new FakeCatalog() });
-    expect(item.catalog).toMatchObject({ status: "candidates" });
+    expect(item.catalog).toEqual({ status: "matched", candidates: [card] });
+    expect(without(item)).toEqual(without(plain));
+  });
+
+  it("a checklist fill writes only a blank field, marked unsure, with a note", async () => {
+    lookupCard.mockResolvedValue(result({ fills: [{ field: "cardNumber", value: "336", sure: false }, { field: "player", value: "Someone Else", sure: true }], notes: ["Card number filled from the catalog's set list: 336. Check it."] }));
+    const item = await run({ catalog: new FakeCatalog() });
+    expect(item.cardNumber).toBe("336");
+    expect(item.player).toBe("Ken Griffey Jr.");
+    expect(item.evidence?.certainty?.cardNumber).toBe("unsure");
+    expect(item.notes).toContain("set list: 336");
   });
 
   it("candidates only: kept as they came, the reading stands", async () => {

@@ -91,6 +91,11 @@ export type RecognizedCatalog =
   /** One card the matching rule is sure of. `confidence`: the item's figure once it is applied. */
   | { status: "sure"; card: CatalogCard; confidence: number }
   | { status: "candidates"; candidates: Candidate[] }
+  /**
+   * Exactly one verified match (S1a rule C): the scan links `candidates[0]`
+   * as the owner's "This is my card" would, with Undo on the item page.
+   */
+  | { status: "matched"; candidates: Candidate[] }
   | { status: "none" }
   | { status: "not_checked"; reason: NotCheckedReason };
 

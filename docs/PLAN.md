@@ -2342,3 +2342,36 @@ Owner's try (one photo of two fronts, one of their backs) gave three items, one 
 - Result on the owner's photos (real reader): two cards. Billy Mills #24, sport other, front and back; year and brand blank (the "1991 Impel" line is too small to read in this photo). Tim Hardaway 1993 Fleer #65 basketball, front and back; player, year, number unsure. Both wait in Review.
 - Time: 36 s for the two cards on a quiet server (fronts 3 to 6 s, backs 11 to 14 s), 88 s while other work ran. Nine cards with backs: about 2.5 minutes quiet (estimate, not measured).
 - Bench on single cards unchanged (same output as before on all three sets, zero wrong).
+
+## S1a catalog (2026-11-19): fewer calls, right player only, one verified match is linked
+
+Code: `src/lib/catalog/find.ts` (replaces `lookupCard` for scans and "Look up
+again"; `lookup.ts` stays only for its scan budget and old tests).
+- A. Searches per card, in order, at most 3: "year product number surname",
+  "year product surname", and "year product number" only when the name is
+  missing or unsure. Product: a read set name that is a product of the maker
+  and product table in `src/lib/free/parse.ts` (`PRODUCT_NAMES`, "Prizm"),
+  else the maker. Accents stripped. No filler searches. A search stops the
+  list once a clean card of the read player is found. Stored answers first.
+- B. Offered only: the read player (surname equal, Jr. and Sr. and first
+  names not against each other), never group or leaders cards, once per id
+  and per same sport, year, product, number and player. A year or number
+  against a sure reading is dropped; against an unsure one it is shown below
+  with the difference in plain words. Unverified listings (not an all digit
+  id, or a product that is the player's name) last and marked.
+- C. Verified match: clean entry, player, number and year exactly as read,
+  maker or product agrees (a read product must be the catalog's product),
+  sport not against, year not from the stat rows. Exactly one, and not a
+  version the card does not name: linked as "This is my card" would, the
+  agreeing year, brand, number and player marked `catalog` (so "Check this"
+  goes), status and confidence before kept for Undo. Two or more: versions
+  for the owner. AUTO_FILL_SURE stays false and its path is not used.
+- D. Sure year and maker or product, and a number with no trustworthy
+  player (or a player with no number): the base set's checklist (set id
+  from a clean answer, one call, kept 30 days in the stored answers) fills
+  the blank as unsure, or confirms an unsure read player. A checklist entry
+  against a sure value changes nothing and is noted.
+- The list stays on the item with the link (`catalogCandidates` status
+  `linked`, no migration): the item page shows set, number, team, card
+  details and "Open in the catalog"; Unlink and Undo bring the list back.
+- Tests: `src/lib/catalog/find.test.ts`, earlier wrong-sure cases included.

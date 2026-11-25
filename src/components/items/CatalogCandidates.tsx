@@ -28,6 +28,7 @@ function CandidateRow({ id, row, action, pending }: { id: number; row: Row; acti
     <li className="flex flex-col gap-1 rounded-xl border border-border bg-surface-2 p-3">
       <p className="font-semibold break-words">{row.line}</p>
       {row.verified ? null : <div><Badge tone="warn">Unverified listing</Badge></div>}
+      {row.differs ? <p className="text-sm break-words">{row.differs}</p> : null}
       <SourceLink url={row.url} />
       <form action={action}>
         <input type="hidden" name="id" value={id} />

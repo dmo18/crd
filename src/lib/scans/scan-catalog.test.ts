@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { catalogCards, catalogSources, items, scans, type Item } from "@/db/schema";
 import { parseCatalog } from "@/lib/catalog/candidates";
-import { pickCandidate } from "@/lib/catalog/pick";
+import { pickCandidate, undoLink } from "@/lib/catalog/pick";
 import type { OcrResult, TextReader } from "@/lib/free/ocr";
 import { FreeRecognizer } from "@/lib/free/recognizer";
 import { REVIEW_THRESHOLD } from "@/lib/recognition/types";
@@ -45,23 +45,44 @@ const reading = (row: Item) => ({
 });
 
 describe("a scan with the catalog (fake, recorded answers, no network)", () => {
-  it("a sure answer is only the top suggestion: nothing is linked or filled without the owner's tap", async () => {
+  it("S1a: exactly one verified match is linked by the scan as This is my card would; Undo puts the item back", async () => {
+    // The recorded answer (limit 5) has the clean base card 551033 and no Tiffany row: one verified match.
     const catalog = new FakeCatalog();
     const item = await scanWith(WITH_NUMBER, catalog);
     expect(catalog.lines.every((l) => l === "background")).toBe(true);
-    expect(db.select().from(catalogCards).all()).toHaveLength(0);
-    expect(db.select().from(catalogSources).all()).toHaveLength(0);
-    expect(item.catalogCardId).toBeNull();
+    expect(db.select().from(catalogSources).all().map((s) => s.sourceId)).toEqual(["551033"]);
+    expect(item.catalogCardId).not.toBeNull();
     const stored = parseCatalog(item.catalogCandidates)!;
-    expect(stored.status).toBe("candidates");
-    expect(stored.items[0]).toMatchObject({ sourceId: "551033", cardNumber: "336" });
-    // The reading stands as read, with its own marks and confidence.
-    expect(item).toMatchObject({ player: "Ken Griffey Jr.", cardNumber: "336" });
-    expect(Object.values(marks(item)).every((m) => m === "reading")).toBe(true);
+    expect(stored).toMatchObject({ status: "linked", linked: { position: 0, auto: true, before: { status: "needs_review", confidence: 0.6 } } });
+    // Nothing read is changed; the agreeing fields are confirmed by the catalog, the empty sport is filled.
+    expect(item).toMatchObject({ player: "Ken Griffey Jr.", cardNumber: "336", year: 1990, brand: "Topps", status: "confirmed" });
+    expect(marks(item)).toMatchObject({ player: "catalog", cardNumber: "catalog", year: "catalog", brand: "catalog" });
+    expect(item.confidence).toBe(REVIEW_THRESHOLD);
     const first = JSON.parse(item.firstSuggestion!);
     // 12R.4: one sign each for year, brand and number, the name on one side only.
     expect(first.confidence).toBe(0.6);
-    void REVIEW_THRESHOLD;
+
+    expect(undoLink(item.id, db)).toEqual({ ok: true });
+    const back = db.select().from(items).where(eq(items.id, item.id)).get()!;
+    expect(back).toMatchObject({ catalogCardId: null, status: "needs_review", confidence: 0.6, player: "Ken Griffey Jr.", cardNumber: "336" });
+    expect(Object.values(marks(back)).every((m) => m === "reading")).toBe(true);
+    const again = parseCatalog(back.catalogCandidates)!;
+    expect(again.status).toBe("candidates");
+    expect(again.items[0]).toMatchObject({ sourceId: "551033" });
+  });
+
+  it("S1a: base and Tiffany both agree, so nothing is linked: the versions wait for the owner", async () => {
+    const griffey = recordedSearch("search_1990_topps_griffey.json");
+    const base = griffey.find((c) => c.sourceId === "551033")!;
+    const tiffany = { ...base, sourceId: "551885", brand: "Topps", variation: "Tiffany", url: "https://mycardfolio.com/sports/baseball/1990/topps-tiffany-2131/base-set-9181/336-ken-griffey-jr-551885", sourceSetId: "9181" };
+    const catalog = new FakeCatalog({ searches: { "1990 topps 336 griffey": [base, tiffany] } });
+    const item = await scanWith(WITH_NUMBER, catalog);
+    expect(item.catalogCardId).toBeNull();
+    expect(db.select().from(catalogCards).all()).toHaveLength(0);
+    const stored = parseCatalog(item.catalogCandidates)!;
+    expect(stored.status).toBe("candidates");
+    expect(stored.items.map((c) => c.sourceId)).toEqual(["551033", "551885"]);
+    expect(catalog.calls).toEqual(["search:1990 Topps 336 Griffey"]);
   });
 
   it("without a sure card the ranked candidates are kept for Review; a pick links, fills the empty number and confirms", async () => {
@@ -80,7 +101,8 @@ describe("a scan with the catalog (fake, recorded answers, no network)", () => {
     const r = pickCandidate(item.id, 0, "551033", db);
     expect(r).toMatchObject({ ok: true, confirmed: true, differences: [] });
     const after = db.select().from(items).where(eq(items.id, item.id)).get()!;
-    expect(after).toMatchObject({ cardNumber: "336", status: "confirmed", catalogCandidates: null, firstSuggestion: item.firstSuggestion });
+    expect(after).toMatchObject({ cardNumber: "336", status: "confirmed", firstSuggestion: item.firstSuggestion });
+    expect(parseCatalog(after.catalogCandidates)).toMatchObject({ status: "linked", linked: { auto: false } });
     expect(after.catalogCardId).not.toBeNull();
     expect(marks(after).cardNumber).toBe("catalog");
     expect(marks(after).player).toBe("reading");

@@ -20,6 +20,7 @@ import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
 import { checkLine, confidenceLabel, valueSourceLabel } from "@/lib/items/labels";
 import { fieldsToCheck } from "@/lib/catalog/sources";
+import { linkedFacts } from "@/lib/catalog/pick";
 import { soldListingLinks } from "@/lib/links";
 import { parsePullList } from "@/lib/items/from-recognition";
 import { recognitionMode } from "@/lib/env";
@@ -38,9 +39,10 @@ const ROLE_NAMES = { front: "Front", back: "Back", crop: "Close-up", source: "Or
 const ROLE_ORDER = { crop: 0, front: 1, back: 2, source: 3 } as const;
 
 /** The two questions a scan leaves: serial number and rookie card. They show only when there is something to answer. */
-function AskBlock({ item }: { item: Item }) {
+function AskBlock({ item, catalogRookie }: { item: Item; catalogRookie: boolean }) {
   const serial = parseSuggestion(item.serialSuggested);
-  const rookie = rookieAsk(item);
+  // A clean catalog entry that marks it a rookie card is only a suggestion in the question (S1a rule F).
+  const rookie = rookieAsk(item, catalogRookie ? ["RC"] : []);
   if (!serial && !rookie) return null;
   return (
     <section className="flex flex-col gap-3" aria-label="Questions about this card">
@@ -206,7 +208,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
 
       {item.kind === "card" ? <VersionPicker itemId={item.id} title={item.title} view={versionView(item)} /> : null}
 
-      {item.kind === "card" ? <AskBlock item={item} /> : null}
+      {item.kind === "card" ? <AskBlock item={item} catalogRookie={linkedFacts(item, db)?.rookie ?? false} /> : null}
 
       <CatalogBlock item={item} />
 

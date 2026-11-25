@@ -33,6 +33,11 @@ export const storedCandidateSchema = z.object({
   cardNumber: text(30),
   player: text(120),
   variation: text(120),
+  /** Team and card details text (rookie or variation wording) as the catalog has them. Missing on older lists. */
+  team: text(80),
+  details: text(120),
+  /** How it differs from what the card reads, in plain words ("The catalog says number 67. The card reads 65."). */
+  differs: text(200),
   score: z.number().finite().catch(0),
   why: z.string().max(200).catch(""),
 });
@@ -42,37 +47,62 @@ const storedSchema = z.object({
   v: z.literal(1),
   /** Time of the look up in milliseconds. */
   at: z.number().int(),
-  status: z.enum(["candidates", "none", "not_checked"]),
+  status: z.enum(["candidates", "none", "not_checked", "linked"]),
   reason: z.enum(NOT_CHECKED_REASONS).nullable().catch(null),
   items: z.array(z.unknown()).max(MAX_STORED_CANDIDATES),
+  linked: z.unknown().optional(),
 });
+
+/**
+ * Kept after a link (status `linked`): which row of the list was linked, and
+ * whether the app linked it by itself (a verified match), with what the item
+ * had before, so Undo can put it back.
+ */
+const linkedSchema = z.object({
+  position: z.number().int().min(0).max(MAX_STORED_CANDIDATES - 1),
+  auto: z.boolean(),
+  before: z.object({ status: z.enum(["needs_review", "confirmed"]), confidence: z.number().min(0).max(1).nullable() }).nullable().catch(null),
+});
+export type LinkedInfo = z.infer<typeof linkedSchema>;
 
 export type StoredCatalog = {
   at: number;
-  status: "candidates" | "none" | "not_checked";
+  status: "candidates" | "none" | "not_checked" | "linked";
   reason: NotCheckedReason | null;
   items: StoredCandidate[];
+  /** Only with status `linked`. */
+  linked: LinkedInfo | null;
 };
 
+/** A candidate as kept, plus how it differs from the card's reading. */
+export type OfferCandidate = Candidate & { differs?: string | null };
+
 /** The slim copy of one candidate that is kept on the item. */
-export function slimCandidate(c: Candidate | CatalogCard): StoredCandidate {
-  const cut = (v: string | null, max: number) => (v == null ? null : v.slice(0, max));
+export function slimCandidate(c: OfferCandidate | CatalogCard | StoredCandidate): StoredCandidate {
+  const cut = (v: string | null | undefined, max: number) => (v == null ? null : v.slice(0, max));
+  const opt = (v: string | null | undefined, max: number) => (v == null || v.trim() === "" ? null : v.trim().slice(0, max));
   return {
     source: c.source, sourceId: c.sourceId, url: c.url.slice(0, 400), sourceSetId: c.sourceSetId, verified: c.verified,
     sport: c.sport, year: c.year, brand: cut(c.brand, 80), setName: cut(c.setName, 120), cardNumber: cut(c.cardNumber, 30),
     player: cut(c.player, 120), variation: cut(c.variation, 120),
+    team: opt("team" in c ? c.team : null, 80), details: opt("details" in c ? c.details : null, 120),
+    differs: opt("differs" in c ? c.differs : null, 200),
     score: "score" in c && Number.isFinite(c.score) ? c.score : 0, why: "why" in c ? String(c.why).slice(0, 200) : "",
   };
 }
 
 /** JSON for `items.catalogCandidates`. Candidates that do not pass the shape check are left out. */
-export function serializeCatalog(v: { status: StoredCatalog["status"]; reason?: NotCheckedReason | null; items?: (Candidate | CatalogCard)[] }, at: Date): string {
+export function serializeCatalog(
+  v: { status: StoredCatalog["status"]; reason?: NotCheckedReason | null; items?: (OfferCandidate | CatalogCard | StoredCandidate)[]; linked?: LinkedInfo | null },
+  at: Date,
+): string {
   const items = (v.items ?? [])
     .map(slimCandidate)
     .filter((c) => storedCandidateSchema.safeParse(c).success)
     .slice(0, MAX_STORED_CANDIDATES);
   const status = v.status === "candidates" && items.length === 0 ? "none" : v.status;
-  return JSON.stringify({ v: 1, at: at.getTime(), status, reason: status === "not_checked" ? v.reason ?? "failed" : null, items });
+  const linked = status === "linked" && v.linked ? { linked: v.linked } : {};
+  return JSON.stringify({ v: 1, at: at.getTime(), status, reason: status === "not_checked" ? v.reason ?? "failed" : null, items, ...linked });
 }
 
 /** Reads what is stored. Null when there is nothing, it cannot be read, or it is older than 30 days. */
@@ -88,7 +118,11 @@ export function parseCatalog(raw: string | null | undefined, now: Date = new Dat
       if (c.success) items.push(c.data);
     }
     const status = r.data.status === "candidates" && items.length === 0 ? "none" : r.data.status;
-    return { at: r.data.at, status, reason: status === "not_checked" ? r.data.reason ?? "failed" : null, items: status === "candidates" ? items : [] };
+    const linked = status === "linked" ? linkedSchema.safeParse(r.data.linked) : null;
+    return {
+      at: r.data.at, status, reason: status === "not_checked" ? r.data.reason ?? "failed" : null,
+      items: status === "candidates" || status === "linked" ? items : [], linked: linked?.success ? linked.data : null,
+    };
   } catch {
     return null;
   }
@@ -99,7 +133,7 @@ export function candidateCard(c: StoredCandidate): CatalogCard {
   return {
     source: c.source, sourceId: c.sourceId, url: c.url, sourceSetId: c.sourceSetId, verified: c.verified,
     sport: c.sport, year: c.year, brand: c.brand, setName: c.setName, cardNumber: c.cardNumber, player: c.player,
-    otherPlayers: [], variation: c.variation, tags: [],
+    otherPlayers: [], variation: c.variation, tags: [], team: c.team, details: c.details,
   };
 }
 

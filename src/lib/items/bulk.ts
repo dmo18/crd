@@ -321,8 +321,8 @@ function planChanges(tx: Tx, rows: Item[], action: BulkAction, ctx: Ctx): Change
         out.push({
           // Checking an item ends its catalog question; undo puts the candidates back.
           id: row.id, title: row.title,
-          patch: action.status === "confirmed" && row.catalogCandidates != null ? { status: action.status, catalogCandidates: null } : { status: action.status },
-          old: action.status === "confirmed" && row.catalogCandidates != null ? { status: row.status, catalogCandidates: row.catalogCandidates } : { status: row.status },
+          patch: action.status === "confirmed" && row.catalogCandidates != null && row.catalogCardId == null ? { status: action.status, catalogCandidates: null } : { status: action.status },
+          old: action.status === "confirmed" && row.catalogCandidates != null && row.catalogCardId == null ? { status: row.status, catalogCandidates: row.catalogCandidates } : { status: row.status },
           before: label(row.status), after: label(action.status),
         });
       }

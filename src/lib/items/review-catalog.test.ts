@@ -75,7 +75,9 @@ describe("This is my card (one tap pick in Review)", () => {
     const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0, sourceId: "551033" }));
     expect(r.message).toBeNull();
     const after = get(item.id);
-    expect(after).toMatchObject({ cardNumber: "336", sport: "baseball", status: "confirmed", catalogCandidates: null, firstSuggestion: item.firstSuggestion });
+    expect(after).toMatchObject({ cardNumber: "336", sport: "baseball", status: "confirmed", firstSuggestion: item.firstSuggestion });
+    // S1a: the list is kept with the link (status linked), for the item page and for Unlink.
+    expect(parseCatalog(after.catalogCandidates)).toMatchObject({ status: "linked", linked: { position: 0, auto: false } });
     expect(marks(after)).toEqual({ player: "reading", year: "reading", brand: "reading", cardNumber: "catalog", sport: "catalog" });
     expect(after.catalogCardId).toBe(db.select().from(catalogCards).get()!.id);
     expect(audit()).toContain("catalog_card_linked");
@@ -96,7 +98,8 @@ describe("This is my card (one tap pick in Review)", () => {
     const r = await actions.pickCandidateAction({ message: null }, form({ id: item.id, position: 0, sourceId: "551033" }));
     expect(r.message).toMatch(/differ/);
     let row = get(item.id);
-    expect(row).toMatchObject({ cardNumber: "33", status: "needs_review", catalogCandidates: null });
+    expect(row).toMatchObject({ cardNumber: "33", status: "needs_review" });
+    expect(parseCatalog(row.catalogCandidates)?.status).toBe("linked");
     const view = pick.reviewCatalogView(row, db)!;
     expect(view.linked?.differences).toEqual([{ label: "number", read: "33", catalog: "336" }]);
     expect(view.candidates).toEqual([]);

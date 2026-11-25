@@ -6,7 +6,7 @@ import { fixPhoto } from "@/lib/items/photos";
 import { planFix } from "./photo-fix";
 import { cropStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
 import { serializeCatalog } from "@/lib/catalog/candidates";
-import { applyScanCard } from "@/lib/catalog/pick";
+import { applyScanCard, autoLinkIn } from "@/lib/catalog/pick";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
 import { checkScanStreak } from "@/lib/audit/alert-rules";
@@ -149,6 +149,7 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
         const row = itemFromRecognition(r, { scanId, locationId: scan.locationId, valueSource, now: at, recognizer: recognizer.name });
         const item = tx.insert(items).values(row).returning().get();
         if (r.kind === "card" && r.catalog?.status === "sure") fileSureCard(tx as unknown as Db, item, r.catalog, at);
+        if (r.kind === "card" && r.catalog?.status === "matched") linkVerifiedMatch(tx as unknown as Db, item.id, at);
         if (row.estValueCents != null) {
           tx.insert(valuations).values({
             itemId: item.id, source: valueSource, lowCents: row.estLowCents, highCents: row.estHighCents,
@@ -198,6 +199,18 @@ function fileSureCard(tx: Db, item: typeof items.$inferSelect, part: { card: Rec
     tx.update(items).set({ catalogCandidates: serializeCatalog({ status: "candidates", items: [part.card] }, at) }).where(eq(items.id, item.id)).run();
   } catch {
     // The reading stands as it is.
+  }
+}
+/**
+ * Exactly one verified match (S1a rule C): linked as "This is my card" would,
+ * in a savepoint of its own. When it cannot be linked, the list stays for
+ * the owner's tap and the scan goes on. Never throws.
+ */
+function linkVerifiedMatch(tx: Db, itemId: number, at: Date): void {
+  try {
+    tx.transaction((sp) => { autoLinkIn(sp as unknown as Db, itemId, at); });
+  } catch (err) {
+    log.warn("catalog_match_link_failed", { itemId, error: errorKind(err) });
   }
 }
 type RecognizedCatalogCard = Extract<NonNullable<RecognizedItem["catalog"]>, { status: "sure" }>["card"];

@@ -1,0 +1,23 @@
+{
+ "note": "Recorded 2026-11-19 from https://mycardfolio.com/api/mcp (tools/call). Public card data only.",
+ "tool": "search_cards",
+ "arguments": {
+  "query": "1990 Upper Deck Ricci",
+  "limit": 10
+ },
+ "elapsed_ms": 397,
+ "status": 200,
+ "bytes": 177,
+ "response": {
+  "result": {
+   "content": [
+    {
+     "type": "text",
+     "text": "{\n  \"query\": \"1990 Upper Deck Ricci\",\n  \"count\": 0,\n  \"results\": []\n}"
+    }
+   ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+ }
+}
