@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { multiPhotos, recordedMulti } from "../../../tests/helpers/ocr-fixture";
 import { REVIEW_THRESHOLD, type RecognitionPhoto } from "@/lib/recognition/types";
 import type { CardShape } from "./find-cards";
-import { looksLikeBack, ONE_SIDE_NOTE, pairSides, type SideRead } from "./multi";
+import { looksLikeBack, ONE_SIDE_NOTE, pairScore, pairSides, type SideRead } from "./multi";
 import type { OcrLine, OcrResult, ReadOptions, TextReader } from "./ocr";
 import { FreeRecognizer } from "./recognizer";
 
@@ -156,6 +156,25 @@ describe("pairing fronts and backs (made-up cards)", () => {
     ];
     for (const s of sides) expect(looksLikeBack(s.text)).toBe(s.back);
     expect(pairSides(sides)).toEqual([[0, 4], [1, 5], [2, 3]]);
+  });
+
+  it("a surname only in another player's story is no pair; the front's given name with it, or the back's own name, is", () => {
+    const thomas = side(0, front("FRANK THOMAS", "WHITE SOX"), false);
+    // The back's heading is not read; its story mentions Thomas once.
+    const story = (text: string) => ocr([
+      ["HEIGHT: 6'1\" WEIGHT: 190 BORN: 4/5/66", 0.15],
+      [text, 0.3],
+      ["and he was named to the league all star team in his second season.", 0.34],
+      ["He led his club in hits and runs that year as well.", 0.38],
+      ["© 1990 THE TOPPS COMPANY, INC.", 0.92],
+    ]);
+    const other = side(1, story("He and Thomas shared first base in the minors"), true);
+    expect(looksLikeBack(other.text)).toBe(true);
+    expect(pairScore(thomas, other)).toBe(0);
+    expect(pairSides([thomas, other])).toEqual([]);
+    const own = side(1, story("Frank Thomas set a club record for walks"), true);
+    expect(pairScore(thomas, own)).toBeGreaterThan(0);
+    expect(pairSides([thomas, own])).toEqual([[0, 1]]);
   });
 
   it("two players sharing a surname are told apart by the given name, and not paired when nothing tells them apart", () => {

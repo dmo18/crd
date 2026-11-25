@@ -72,6 +72,18 @@ function capitalWords(read: OcrResult | null): Set<string> {
   return out;
 }
 
+/** The given name and the surname on one line of the back, next to each other or with one word between ("Frank E. Thomas"). */
+function namedTogether(read: OcrResult | null, given: string, surname: string): boolean {
+  for (const l of read?.lines ?? []) {
+    const ws = [...l.text.matchAll(/\p{L}[\p{L}'.-]*/gu)].map((m) => key(m[0].replace(/'s$/i, "")));
+    for (let i = 0; i < ws.length; i++) {
+      if (ws[i] !== given) continue;
+      if (ws[i + 1] === surname || ws[i + 2] === surname) return true;
+    }
+  }
+  return false;
+}
+
 function same(a: string | null, b: string | null): boolean | null {
   if (!a || !b) return null;
   return key(a) === key(b);
@@ -81,10 +93,13 @@ type Parsed = { front: ParsedCard; back: ParsedCard };
 
 /**
  * How well a front and a back fit as one card, 0 when they do not. The
- * surname read on the front must appear on the back as a name (in its
- * heading or text, with a capital); the back's heading naming the same
- * player and the given name on the back each add to it; maker and team
- * agreeing add a little, disagreeing take away.
+ * surname read on the front must appear on the back as a name (with a
+ * capital), and the back must be that player's own: its parsed name (the
+ * heading in large type at the top) has the surname, or the front's given
+ * name stands with the surname on one line. A bare surname in a story is
+ * not enough. The back's heading naming the same player and the given name
+ * on the back each add to it; maker and team agreeing add a little,
+ * disagreeing take away.
  */
 export function pairScore(front: SideRead, back: SideRead, parsed?: Parsed): number {
   const f = parsed?.front ?? parseCardText(front.text, null);
@@ -100,9 +115,13 @@ export function pairScore(front: SideRead, back: SideRead, parsed?: Parsed): num
   if (own.length > 0 && own[own.length - 1] !== surname) return 0;
   const onBack = capitalWords(back.text);
   if (!onBack.has(surname)) return 0;
+  // The surname alone in running text (another player's story) is not the back's own name: the back
+  // must name its player (its heading, parsed above), or show the front's given name with the surname.
+  const given = words.length >= 2 && words[0].length >= 2 ? words[0] : null;
+  if (own.length === 0 && !(given && namedTogether(back.text, given, surname))) return 0;
   let score = 1;
   if (both.playerAgree) score += 1;
-  if (words.length >= 2 && words[0].length >= 2 && onBack.has(words[0])) score += 1;
+  if (given && onBack.has(given)) score += 1;
   const brand = f.brand && b.brand ? normalizeBrand(f.brand) === normalizeBrand(b.brand) : null;
   const team = same(f.team ?? f.teamHint, b.team ?? b.teamHint);
   const sport = same(f.sport, b.sport);
