@@ -228,7 +228,7 @@ export function createScanStore(deps: ScanStoreDeps): ScanStore {
     const url = deps.createObjectURL(preview);
     jobs.set(key, { ...job, clientKey });
     previews.set(key, url);
-    dispatch({ type: "add", key, clientKey, name, previewUrl: url });
+    dispatch({ type: "add", key, clientKey, name, previewUrl: url, batch: job.batchKey ?? null });
     uploader.pump();
     return true;
   }

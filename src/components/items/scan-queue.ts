@@ -84,13 +84,15 @@ export type QueueEntry = {
   scan: ScanView | null;
   /** True while the page cannot ask about this scan because the owner is signed out. */
   signedOut: boolean;
+  /** The upload ("Many photos, one card each") this scan belongs to, or null for a scan saved on its own. */
+  batch: string | null;
 };
 
 /** Entries in the order they were added (oldest first). */
 export type QueueState = { entries: QueueEntry[] };
 
 export type QueueAction =
-  | { type: "add"; key: number; clientKey: string; name: string; previewUrl: string | null }
+  | { type: "add"; key: number; clientKey: string; name: string; previewUrl: string | null; batch?: string | null }
   | { type: "sending"; key: number }
   | { type: "uploadFailed"; key: number; message: string; failure?: UploadFailure }
   /** The page let go of the photo preview (the photo is no longer needed or can no longer be sent). */
@@ -128,7 +130,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       return {
         entries: [
           ...state.entries,
-          { key: action.key, clientKey: action.clientKey, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, attempt: 0, uploadedAt: null, error: null, failure: null, scan: null, signedOut: false },
+          { key: action.key, clientKey: action.clientKey, name: action.name, previewUrl: action.previewUrl, status: "waiting", scanId: null, attempt: 0, uploadedAt: null, error: null, failure: null, scan: null, signedOut: false, batch: action.batch ?? null },
         ],
       };
     case "sending":
@@ -357,6 +359,8 @@ export type ScanJob = {
   front?: File;
   back?: File;
   source: File[];
+  /** Same on every scan of one "Many photos, one card each" upload. */
+  batchKey?: string;
 };
 
 export function buildScanBody(job: ScanJob): FormData {
@@ -365,6 +369,7 @@ export function buildScanBody(job: ScanJob): FormData {
   body.set("clientKey", job.clientKey);
   if (job.hint.trim()) body.set("hint", job.hint.trim());
   if (job.locationId) body.set("locationId", job.locationId);
+  if (job.batchKey) body.set("batchKey", job.batchKey);
   if (job.front) body.set("front", job.front);
   if (job.back) body.set("back", job.back);
   for (const f of job.source) body.append("source", f);

@@ -11,9 +11,10 @@ import {
   entryState, hasUnsaved, KEEP_OPEN_MESSAGE, SIGNED_OUT_MESSAGE, listFull, liveText, retryKind, summary, summaryText, waitingText, type QueueEntry,
 } from "./scan-queue";
 import { useScanQueue } from "./ScanQueueProvider";
+import { BatchUpload } from "./BatchUpload";
 
 type Rules = Record<ScanMode, { min: number; max: number }>;
-type Choice = ScanMode | "rapid";
+type Choice = ScanMode | "rapid" | "batch";
 export type LocationOption = { id: number; name: string };
 
 const LOCATION_KEY = "crd.scan.location";
@@ -21,6 +22,7 @@ const BUTTON_LABEL = "inline-flex min-h-11 w-full cursor-pointer items-center ju
 
 const MODES: { value: Choice; title: string; text: string }[] = [
   { value: "single", title: "One card", text: "Front photo, and a back photo if you have one. The back makes it more accurate." },
+  { value: "batch", title: "Many photos, one card each", text: "Pick up to 60 photos from your gallery at once. Fronts only, or each card's front then its back. Each card is read on its own." },
   { value: "multi", title: "Many cards in one photo", text: "Lay cards flat, not overlapping. Up to about 9 per photo works best. The first photo shows the fronts. You can add a second photo of their backs, laid out any way." },
   { value: "sealed", title: "Sealed pack or box", text: "Never open it. Photograph the front, plus the seal or back if you can." },
   { value: "bulk", title: "Bulk lot", text: "Photograph the box or stack and its label. You get a count estimate and a list of cards worth pulling out." },
@@ -31,8 +33,9 @@ const MODE_NAME: Record<ScanMode, string> = { single: "One card", multi: "Many c
 
 export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: LocationOption[] }) {
   const [choice, setChoice] = useState<Choice>("single");
-  const mode: ScanMode = choice === "rapid" ? "single" : choice;
+  const mode: ScanMode = choice === "rapid" || choice === "batch" ? "single" : choice;
   const rapid = choice === "rapid";
+  const batch = choice === "batch";
   const [locationId, setLocationId] = useState("");
   const [front, setFront] = useState<File[]>([]);
   const [back, setBack] = useState<File[]>([]);
@@ -116,7 +119,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
         className="flex flex-col gap-6"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!rapid) save();
+          if (!rapid && !batch) save();
         }}
       >
         <fieldset className="flex flex-col gap-3">
@@ -159,7 +162,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
           </div>
         ) : null}
 
-        {rapid ? null : single ? (
+        {rapid || batch ? null : single ? (
           <div className="flex flex-col gap-5">
             <PhotoPicker label="Front" max={1} value={front} onChange={setFront} captureFirst />
             <PhotoPicker label="Back (optional)" max={1} value={back} onChange={setBack} />
@@ -190,7 +193,9 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
           <p id="scan-hint-help" className="text-xs text-muted">Optional. For example: 1989 Topps baseball</p>
         </div>
 
-        {rapid ? (
+        {batch ? (
+          <BatchUpload hint={hint} locationId={locationId} />
+        ) : rapid ? (
           <div className="flex flex-col gap-3">
             <label className={`${BUTTON_LABEL} bg-accent text-accent-text ${full ? "pointer-events-none opacity-50" : ""}`}>
               <span>Take photo</span>
