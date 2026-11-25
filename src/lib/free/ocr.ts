@@ -2,7 +2,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
 import type { Box, ReadFix } from "@/lib/recognition/types";
-import { cornerBoxes, cropBox, findCard, joinSpacedLetters, keepCornerLine, mapBox, overlapShare, spacedBands, toView } from "./card-picture";
+import { cornerBoxes, cropBox, findCard, grow, joinSpacedLetters, keepCornerLine, mapBox, overlapShare, spacedBands, toView } from "./card-picture";
 import { ReaderDownError, WorkerClient, type OcrEngine, type ReaderStatus, type WorkerLine, type WorkerRead } from "./ocr-worker";
 
 /**
@@ -320,6 +320,10 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
 
 /** The share of confident lines the found card must hold for the finder to be believed. */
 const CARD_HOLDS_TEXT = 0.7;
+/** A card found covering this share of the photo fills the frame: text well clear of it is another card's. */
+const FRAME_CARD = 0.25;
+/** "Well clear": this far (share of the photo) outside the card found. */
+const STRAY_GAP = 0.05;
 
 async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions, sink: { fix?: ReadFix }): Promise<OcrResult> {
   const base = await oriented(image);
@@ -356,8 +360,27 @@ async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions,
   } catch {
     card = null;
   }
-  const sure = best.filter((l) => l.confidence >= 0.6);
+  let sure = best.filter((l) => l.confidence >= 0.6);
   const cardSure = found != null && sure.length > 0 && sure.filter((l) => overlapShare(l.box, found!) >= 0.9).length >= CARD_HOLDS_TEXT * sure.length;
+  // A piece of another card at the edge of the photo (owner scan 11: part of
+  // a Mills back over the top of a Milacki back): when the card found fills
+  // much of the photo and holds most of the text, lines well clear of it are
+  // not this card's print. They are left out of the read and of the crop.
+  const strayFrom = cardSure && !options.quick && found && found.w * found.h >= FRAME_CARD ? grow(found, STRAY_GAP) : null;
+  let firstLines = first;
+  if (strayFrom) {
+    const mine = (b: Box) => overlapShare(b, strayFrom) > 0;
+    if (best.some((l) => !mine(l.box))) {
+      best = best.filter((l) => mine(l.box));
+      sure = sure.filter((l) => mine(l.box));
+      firstLines = { ...first, lines: first.lines.filter((l) => { const b = boxOf(l.box, first.width, first.height); return b != null && mine(b); }) };
+      try {
+        card = cropBox(found, sure.map((l) => l.box));
+      } catch {
+        card = null;
+      }
+    }
+  }
   const fix: ReadFix = {
     turn, turnTrusted: turnSure, card: options.quick ? null : found, cardTrusted: !options.quick && cardSure,
     lines: best.map((l) => l.box),
@@ -368,7 +391,7 @@ async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions,
   let view = base;
   // Boxes of the first read, placed on the card picture: the first read may
   // have seen spaced letters that the second read skipped.
-  let firstOnView = linesFrom(first, 1);
+  let firstOnView = linesFrom(firstLines, 1);
   if (turn || worthCrop) {
     const region = worthCrop ? card! : undefined;
     const upright = await part(base, { region, turn, edge: LONG_EDGE, maxUp: region ? MAX_UP : 1 });

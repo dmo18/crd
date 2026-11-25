@@ -384,3 +384,45 @@ describe("an engine that throws", () => {
     await expect(createTextReader(broken).read(await photo())).rejects.toThrow("down");
   });
 });
+
+describe("a piece of another card at the photo's edge (owner scan 11)", () => {
+  // A white card across the middle of a dark photo, and a piece of another white card at the top edge.
+  async function scene(): Promise<Buffer> {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="2000">
+      <rect width="100%" height="100%" fill="#202020"/>
+      <rect x="420" y="0" width="480" height="260" fill="#f4f4f0"/>
+      <rect x="20" y="800" width="860" height="680" fill="#f4f4f0"/>
+    </svg>`;
+    return sharp(Buffer.from(svg)).jpeg({ quality: 92 }).toBuffer();
+  }
+  const at = (text: string, x: number, y: number, w: number, h: number, W: number, H: number) => ({
+    text, score: 0.97, turned: false, box: [[x * W, y * H], [(x + w) * W, y * H], [(x + w) * W, (y + h) * H], [x * W, (y + h) * H]] as [number, number][],
+  });
+  const card: [string, number, number, number, number][] = [
+    ["ROBERT", 0.1, 0.42, 0.2, 0.03], ["MILACKI", 0.1, 0.45, 0.2, 0.03], ["101", 0.8, 0.42, 0.08, 0.03],
+    ["Born: July 28, 1964", 0.12, 0.5, 0.25, 0.015], ["Home: Lake Havasu Cty., AZ", 0.05, 0.53, 0.3, 0.015],
+    ["Orioles top winner in '91", 0.72, 0.5, 0.25, 0.015], ["RECENT MAJOR LEAGUE PERFORMANCE", 0.15, 0.64, 0.4, 0.02],
+    ["1991 Orioles 4.01 31 184", 0.1, 0.68, 0.5, 0.015],
+  ];
+  const piece: [string, number, number, number, number][] = [
+    ["president of Billy Mills", 0.75, 0.0, 0.07, 0.11], ["Olympic record", 0.9, 0.02, 0.06, 0.1], ["1964 Tokyo Olympic", 0.85, 0.0, 0.07, 0.12],
+  ];
+
+  it("leaves out the lines well clear of the card that fills the photo", async () => {
+    const engine: OcrEngine = {
+      async read(png) {
+        const { width = 1, height = 1 } = await sharp(png).metadata();
+        // The whole photo is tall; the card cut out of it is not.
+        const whole = height / width > 1.5;
+        const lines = whole ? [...card, ...piece] : card.map(([t, x, y, w, h]): [string, number, number, number, number] => [t, x, (y - 0.4) / 0.34, w, h / 0.34]);
+        return { width, height, lines: lines.map(([t, x, y, w, h]) => at(t, x, y, w, h, width, height)) };
+      },
+      status: () => "ready",
+      async close() {},
+    };
+    const result = await createTextReader(engine).read(await scene(), { back: true });
+    expect(result.text).toContain("MILACKI");
+    expect(result.text).not.toMatch(/Billy|Olympic|Tokyo/);
+    expect(result.fix?.cardTrusted).toBe(true);
+  });
+});
