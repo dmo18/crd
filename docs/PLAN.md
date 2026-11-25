@@ -2375,3 +2375,35 @@ again"; `lookup.ts` stays only for its scan budget and old tests).
   `linked`, no migration): the item page shows set, number, team, card
   details and "Open in the catalog"; Unlink and Undo bring the list back.
 - Tests: `src/lib/catalog/find.test.ts`, earlier wrong-sure cases included.
+
+## Product run (owner request 2026-11-19): a working product, not an alpha
+
+Owner's words: scans barely hit 30 percent, no links worked, no pricing or
+data. Rules added for this run: no keys, no registration, no paid services,
+no AI of any kind (the local text reader stays). Success is judged on real
+scans end to end: cards fully identified, working links, a price shown.
+A blank or unsure field counts as a miss.
+
+Stages (branch `work/product`):
+1. Reading and catalog. S1a catalog matching (above), S1b photos (turn,
+   crop only when trusted, original kept), S1c plain wording, many cards
+   (12R.7: each card read alone, fronts and backs paired by name). Built.
+2. Prices. No keyless sold-price feed exists, so: a built-in price guide
+   (rough, capped at $25,000, labelled "Price guide (rough)"), sales links
+   per card, quick value entry. Built.
+3. Batch scanning with group approval, "confirm all" in Review. Not started.
+4. Checklists and set progress. Not started.
+5. Import and export. S5a import with undo, export of the current view.
+   Built. Left: unknown versus no in yes/no columns, duplicates in one file.
+6. Reviews: one code review (9 findings, all fixed), hands-on walk-throughs
+   on 8 real scans before each go-live. Fixes from the second walk-through
+   are in commits 3aa4fe4 to df9ffef.
+7. Inventory filters, sold status, slab label reading and population links.
+   Not started.
+
+Go-live order: stages 1, 2, 5 and 6 first (this push), then 3, 4, 7 as
+separate pushes, each with a backup and a walk-through.
+
+Known limits told to the owner: the free catalog lacks many cards; guide
+prices are not checked against sales; outside links cannot be tested from
+the server (the owner tap-tests them).
