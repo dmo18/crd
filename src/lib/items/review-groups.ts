@@ -2,7 +2,9 @@ import type { CatalogField, Item } from "@/db/schema";
 import { HOLD_REASONS, type HoldReason } from "@/lib/recognition/types";
 import { fieldsToCheck, isFilled, parseFirstSuggestion } from "@/lib/catalog/sources";
 import { CARD_FIELD_LABELS } from "./labels";
-import type { DuplicateMatch } from "./duplicates";
+import { getDb, type Db } from "@/db";
+import { reviewCatalogView } from "@/lib/catalog/pick";
+import { findDuplicateMatches, type DuplicateMatch } from "./duplicates";
 
 /**
  * The three groups of the Review screen (Milestone 13):
@@ -48,11 +50,35 @@ export type GroupingFacts = {
   duplicate: DuplicateMatch | null;
   /** Labels of fields where a linked catalog card says something else. */
   catalogDifferences: readonly string[];
+  /** The catalog list is still open: choices to pick from and no linked card. Use `catalogPickOpen`. */
+  catalogPickOpen: boolean;
 };
+
+/** The words on a row whose catalog list still waits for a pick. */
+export const PICK_CATALOG_REASON = "Pick the matching catalog card";
+
+/**
+ * Whether the picker ("Is it one of these?") is shown for an item: the same
+ * test the Review screen uses. Lists that found nothing, were not checked,
+ * were dismissed (cleared) or are linked to a card are not open.
+ */
+export function catalogPickOpen(view: { status: "candidates" | "none" | "not_checked" | null; candidates: readonly unknown[] } | null): boolean {
+  return view !== null && view.status === "candidates" && view.candidates.length > 0;
+}
 
 function holds(item: Pick<Item, "firstSuggestion">): HoldReason[] {
   const list = parseFirstSuggestion(item.firstSuggestion)?.hold ?? [];
   return HOLD_REASONS.filter((h) => list.includes(h));
+}
+
+/** The facts for one item, read from the database (what the Review page also works out). */
+export function groupingFactsFor(item: Item, db: Db = getDb(), now: Date = new Date()): GroupingFacts {
+  const cat = reviewCatalogView(item, db, now);
+  return {
+    duplicate: findDuplicateMatches(item.id, db)[0] ?? null,
+    catalogDifferences: cat?.linked?.differences.map((d) => d.label) ?? [],
+    catalogPickOpen: catalogPickOpen(cat),
+  };
 }
 
 /** The group of one item waiting in Review, and why. */
@@ -72,6 +98,7 @@ export function reviewGroupOf(item: Item, facts: GroupingFacts): ReviewGrouping 
       : `May be a card you already have: ${facts.duplicate.item.title}`);
   }
   if (facts.catalogDifferences.length > 0) reasons.push(`The catalog says something else for: ${facts.catalogDifferences.join(", ")}`);
+  if (facts.catalogPickOpen) reasons.push(PICK_CATALOG_REASON);
   if (item.rookieState === "disputed") reasons.push("The rookie mark is in doubt");
   return { group: reasons.length === 0 ? "ready" : "look", reasons, check };
 }

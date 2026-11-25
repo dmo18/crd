@@ -6,7 +6,7 @@ import { valueText } from "@/components/items/ItemRow";
 import { ReviewGroups, type ReviewGroupView } from "@/components/items/ReviewGroups";
 import { UndoNotice } from "@/components/manage/UndoNotice";
 import { latestUndoable } from "@/lib/items/bulk";
-import { REVIEW_GROUP_TITLES, REVIEW_GROUPS, reviewGroupOf } from "@/lib/items/review-groups";
+import { catalogPickOpen, REVIEW_GROUP_TITLES, REVIEW_GROUPS, reviewGroupOf } from "@/lib/items/review-groups";
 import type { ReactNode } from "react";
 import { ReviewRowActions } from "@/components/items/ReviewRowActions";
 import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
@@ -48,7 +48,8 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
   const rowById = new Map(rows.map((r) => [r.id, r]));
   const catalogViews = new Map(rows.map((r) => [r.id, reviewCatalogView(r, db, now)]));
   const op = latestUndoable(db);
-  const undo = op ? { id: op.id, summary: op.summary, madeAt: op.at.getTime() } : null;
+  // Only a change made from Review is undone here; Manage changes are undone on Manage.
+  const undo = op && op.from === "review" ? { id: op.id, summary: op.summary, madeAt: op.at.getTime() } : null;
 
   // Each item's group, its row and, folded away under "More for this card", the questions and tools it had before.
   const groups: ReviewGroupView[] = REVIEW_GROUPS.map((id) => ({ id, ...REVIEW_GROUP_TITLES[id], rows: [] }));
@@ -57,7 +58,9 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
     const full = rowById.get(item.id)!;
     const dup = findDuplicateMatches(item.id, db)[0] ?? null;
     const cat = catalogViews.get(item.id) ?? null;
-    const grouping = reviewGroupOf(full, { duplicate: dup, catalogDifferences: cat?.linked?.differences.map((d) => d.label) ?? [] });
+    const grouping = reviewGroupOf(full, {
+      duplicate: dup, catalogDifferences: cat?.linked?.differences.map((d) => d.label) ?? [], catalogPickOpen: catalogPickOpen(cat),
+    });
     groups.find((g) => g.id === grouping.group)!.rows.push({
       id: item.id, title: item.title, thumb: item.thumb, value: valueText(item), check: grouping.check, reasons: grouping.reasons,
     });

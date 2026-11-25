@@ -14,7 +14,7 @@ import { deleteFailedScans } from "./remove";
 import { confirmItem, deleteItem } from "./update";
 import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 import { errorKind, log } from "@/lib/log";
-import { MAX_BULK_IDS } from "./bulk";
+import { applyBulk, MAX_BULK_IDS } from "./bulk";
 import { confirmFromReview } from "./review-confirm";
 
 const idSchema = z.coerce.number().int().positive().max(2_000_000_000);
@@ -157,7 +157,7 @@ const reviewIdsSchema = z.array(z.number().int().positive().max(2_000_000_000))
  * "Confirm selected" on Review: confirms the chosen items as read and clears
  * their "Check this" marks, as one change the Undo button can take back.
  */
-export async function confirmReviewItemsAction(ids: unknown): Promise<{ changed: number; opId: number; summary: string } | { error: string }> {
+export async function confirmReviewItemsAction(ids: unknown): Promise<{ changed: number; skipped: number; opId: number; summary: string } | { error: string }> {
   await requireOwner();
   const parsed = reviewIdsSchema.safeParse(ids);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Select the items again." };
@@ -174,5 +174,31 @@ export async function confirmReviewItemsAction(ids: unknown): Promise<{ changed:
   refresh();
   revalidatePath("/manage");
   revalidatePath("/");
-  return { changed: r.changed, opId: r.opId, summary: r.summary };
+  return { changed: r.changed, skipped: r.skipped, opId: r.opId, summary: r.summary };
+}
+
+/**
+ * "Delete selected" on Review: moves the chosen items to Recently deleted, but
+ * only those still waiting in Review at this moment. Others are skipped and
+ * counted. One change the Undo button on Review can take back.
+ */
+export async function deleteReviewItemsAction(ids: unknown): Promise<{ changed: number; skipped: number; opId: number; summary: string } | { error: string }> {
+  await requireOwner();
+  const parsed = reviewIdsSchema.safeParse(ids);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Select the items again." };
+  const unique = [...new Set(parsed.data)];
+  let r: ReturnType<typeof applyBulk>;
+  try {
+    r = applyBulk({ ids: unique }, { type: "delete" }, getDb(), new Date(), { fromReview: true });
+  } catch (err) {
+    log.error("review_delete_failed", { error: errorKind(err) });
+    return { error: "Something went wrong. Nothing was changed. Try again." };
+  }
+  if ("error" in r) return r;
+  await auditThisRequest("bulk_delete", "ok", r.summary);
+  refresh();
+  revalidatePath("/manage");
+  revalidatePath("/manage/deleted");
+  revalidatePath("/");
+  return { changed: r.changed, skipped: unique.length - r.changed, opId: r.opId, summary: r.summary };
 }

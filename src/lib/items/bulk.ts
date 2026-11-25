@@ -395,6 +395,8 @@ const undoSchema = z.object({
   v: z.literal(1),
   /** "import" for a spreadsheet import (src/lib/import), stored with action "set". */
   kind: z.literal("import").optional(),
+  /** "review" when the change was made from the Review screen; Undo is then offered there. */
+  from: z.literal("review").optional(),
   items: z.array(z.tuple([z.number().int().positive(), z.record(z.string(), z.unknown())])),
   /** Items an import added: undo moves them to Recently deleted. */
   created: z.array(z.number().int().positive()).optional(),
@@ -421,16 +423,25 @@ export function pruneOps(tx: Tx, now: Date): void {
  */
 export function applyBulk(
   sel: Selection, action: BulkAction, db: Db = getDb(), now: Date = new Date(),
-): { changed: number; opId: number; summary: string; ids: number[] } | Fail {
+  /** `fromReview`: made from the Review screen. Only items still waiting in Review are changed; the others are skipped. */
+  opts: { fromReview?: boolean } = {},
+): { changed: number; opId: number; summary: string; ids: number[]; skipped: number } | Fail {
   return db.transaction((txRaw) => {
     const tx = txRaw as unknown as Tx;
     const w = work(tx, sel, action, true);
     if ("error" in w) return w;
-    if (w.changes.length === 0) return { error: "Nothing here needs this change." };
+    let skipped = 0;
     const byId = new Map(w.rows.map((r) => [r.id, r]));
+    if (opts.fromReview) {
+      const before = w.changes.length;
+      w.changes = w.changes.filter((c) => byId.get(c.id)?.status === "needs_review");
+      skipped = before - w.changes.length;
+      if (w.changes.length === 0) return { error: "These are no longer waiting in Review." };
+    }
+    if (w.changes.length === 0) return { error: "Nothing here needs this change." };
     for (const c of w.changes) {
       const set = action.type === "delete" ? { deletedAt: now } : { ...c.patch, updatedAt: now };
-      const res = tx.update(items).set(set as Partial<Item>).where(and(eq(items.id, c.id), liveItem)).run();
+      const res = tx.update(items).set(set as Partial<Item>).where(and(eq(items.id, c.id), liveItem, ...(opts.fromReview ? [eq(items.status, "needs_review")] : []))).run();
       if (res.changes !== 1) throw new Error("bulk row changed during apply");
       if (c.newValueCents != null) {
         tx.insert(valuations).values({
@@ -442,17 +453,18 @@ export function applyBulk(
     const summary = summarize(action, w.changes.length, w.ctx);
     const undo = {
       v: 1,
+      ...(opts.fromReview ? { from: "review" } : {}),
       items: w.changes.map((c) => [c.id, toJson(action.type === "delete" ? c.old : { ...c.old, updatedAt: byId.get(c.id)!.updatedAt })]),
     };
     const op = tx.insert(bulkOps).values({
       at: now, action: action.type as BulkOpAction, summary, itemCount: w.changes.length, undo: JSON.stringify(undo),
     }).returning({ id: bulkOps.id }).get();
     pruneOps(tx, now);
-    return { changed: w.changes.length, opId: op.id, summary, ids: w.changes.map((c) => c.id) };
+    return { changed: w.changes.length, opId: op.id, summary, ids: w.changes.map((c) => c.id), skipped };
   }, { behavior: "immediate" });
 }
 
-export type UndoableOp = { id: number; at: Date; summary: string; itemCount: number; action: BulkOpAction };
+export type UndoableOp = { id: number; at: Date; summary: string; itemCount: number; action: BulkOpAction; from: "review" | null };
 
 /** The latest bulk change that can still be undone, or null. */
 export function latestUndoable(db: Db = getDb(), now: Date = new Date()): UndoableOp | null {
@@ -460,10 +472,20 @@ export function latestUndoable(db: Db = getDb(), now: Date = new Date()): Undoab
   const row = db.select({ id: bulkOps.id, at: bulkOps.at, summary: bulkOps.summary, itemCount: bulkOps.itemCount, action: bulkOps.action, undo: bulkOps.undo })
     .from(bulkOps).where(isNull(bulkOps.undoneAt)).orderBy(desc(bulkOps.id)).limit(1).get();
   if (!row || row.at.getTime() < now.getTime() - BULK_KEEP_DAYS * DAY_MS) return null;
-  const { undo, ...op } = row;
+  const { undo, ...rest } = row;
+  const op: UndoableOp = { ...rest, from: undoOrigin(undo) };
   // A delete whose items were all put back by hand from Recently deleted: its Undo would do nothing.
   if (op.action === "delete" && !deleteStillInBin(db, op.at, undo)) return null;
   return op;
+}
+
+/** "review" for a change made from the Review screen, else null. Unreadable data counts as not from Review. */
+function undoOrigin(undoJson: string): "review" | null {
+  try {
+    return undoSchema.parse(JSON.parse(undoJson)).from === "review" ? "review" : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Some item of a delete change is still in Recently deleted from that very change. */

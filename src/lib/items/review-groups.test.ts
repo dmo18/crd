@@ -5,8 +5,9 @@ import { bulkOps, items, type NewItem } from "@/db/schema";
 import { buildFirstSuggestion, fieldsToCheck, parseFieldSources, sourcesFor } from "@/lib/catalog/sources";
 import { latestUndoable, undoBulk } from "./bulk";
 import { findDuplicateMatches } from "./duplicates";
+import { applyBulk, latestUndoable as latest } from "./bulk";
 import { confirmFromReview } from "./review-confirm";
-import { reviewGroupOf } from "./review-groups";
+import { catalogPickOpen, groupingFactsFor, PICK_CATALOG_REASON, reviewGroupOf } from "./review-groups";
 
 let db: Db;
 beforeEach(() => { db = createDb(":memory:"); });
@@ -27,7 +28,7 @@ function scanned(values: Partial<NewItem> = {}, meta: { unsure?: ("year" | "bran
 
 const group = (id: number, differences: string[] = []) => {
   const item = db.select().from(items).where(eq(items.id, id)).get()!;
-  return reviewGroupOf(item, { duplicate: findDuplicateMatches(id, db)[0] ?? null, catalogDifferences: differences });
+  return reviewGroupOf(item, { duplicate: findDuplicateMatches(id, db)[0] ?? null, catalogDifferences: differences, catalogPickOpen: false });
 };
 
 describe("Review groups", () => {
@@ -115,5 +116,91 @@ describe("Confirm selected", () => {
     const owned = db.insert(items).values({ kind: "card", status: "confirmed", title: "Owned" }).returning().get();
     expect(confirmFromReview([owned.id], db)).toEqual({ error: "These are no longer waiting in Review." });
     expect(db.select().from(bulkOps).all()).toHaveLength(0);
+  });
+});
+
+const withList = (id: number, status: "candidates" | "none" | "not_checked", itemsList: object[] = []) =>
+  db.update(items).set({ catalogCandidates: JSON.stringify({ v: 1, at: Date.now(), status, reason: status === "not_checked" ? "off" : null, items: itemsList }) }).where(eq(items.id, id)).run();
+const choice = { source: "mycardfolio", sourceId: "s1", url: "https://example.test/c/1", sourceSetId: null, verified: true, sport: "baseball", year: 1989, brand: "Upper Deck", cardNumber: "1", player: "Ken Griffey Jr." };
+const groupOf = (id: number) => {
+  const item = db.select().from(items).where(eq(items.id, id)).get()!;
+  return reviewGroupOf(item, groupingFactsFor(item, db));
+};
+
+describe("Open catalog list", () => {
+  it("an open list is not ready and says why; nothing found, not checked or no list stay ready", () => {
+    const a = scanned();
+    withList(a.id, "candidates", [choice]);
+    expect(groupOf(a.id)).toMatchObject({ group: "look", reasons: [PICK_CATALOG_REASON] });
+    expect(PICK_CATALOG_REASON).toBe("Pick the matching catalog card");
+    for (const status of ["none", "not_checked"] as const) {
+      const b = scanned({ player: `P ${status}`, cardNumber: status === "none" ? "5" : "6" });
+      withList(b.id, status);
+      expect(groupOf(b.id).group).toBe("ready");
+    }
+    const c = scanned({ player: "No list", cardNumber: "7" });
+    db.update(items).set({ catalogCandidates: null }).where(eq(items.id, c.id)).run();
+    expect(groupOf(c.id).group).toBe("ready");
+  });
+
+  it("an empty candidates list reads as nothing found", () => {
+    const a = scanned();
+    withList(a.id, "candidates", []);
+    expect(groupOf(a.id).group).toBe("ready");
+  });
+
+  it("the picker test: only status candidates with choices", () => {
+    expect(catalogPickOpen(null)).toBe(false);
+    expect(catalogPickOpen({ status: "none", candidates: [] })).toBe(false);
+    expect(catalogPickOpen({ status: "candidates", candidates: [{}] })).toBe(true);
+  });
+
+  it("a dismissed list (cleared) and a linked item are not open", () => {
+    const a = scanned();
+    db.update(items).set({ catalogCandidates: JSON.stringify({ v: 1, at: Date.now(), status: "candidates", reason: null, items: [choice] }) }).where(eq(items.id, a.id)).run();
+    db.update(items).set({ catalogCandidates: null }).where(eq(items.id, a.id)).run();
+    expect(groupOf(a.id).reasons).not.toContain(PICK_CATALOG_REASON);
+  });
+});
+
+describe("Confirm selected only confirms ready cards", () => {
+  it("skips cards that are not ready and counts them; all skipped is a plain error with no change", () => {
+    const ok = scanned({ player: "Ready One", cardNumber: "20" });
+    const blank = scanned({ player: "Blank One", cardNumber: "21", brand: null });
+    const open = scanned({ player: "Open One", cardNumber: "22" });
+    withList(open.id, "candidates", [choice]);
+    const r = confirmFromReview([ok.id, blank.id, open.id], db, new Date(5000));
+    expect(r).toMatchObject({ changed: 1, skipped: 2 });
+    const st = (id: number) => db.select().from(items).where(eq(items.id, id)).get()!.status;
+    expect([st(ok.id), st(blank.id), st(open.id)]).toEqual(["confirmed", "needs_review", "needs_review"]);
+    expect(confirmFromReview([blank.id, open.id], db, new Date(6000))).toMatchObject({ error: expect.stringContaining("ready") });
+    expect(db.select().from(bulkOps).all()).toHaveLength(1);
+  });
+});
+
+describe("Delete selected from Review", () => {
+  it("deletes only items still in Review and skips the rest; marks the change as made from Review", () => {
+    const a = scanned({ player: "Del A", cardNumber: "30" });
+    const b = scanned({ player: "Del B", cardNumber: "31" });
+    db.update(items).set({ status: "confirmed" }).where(eq(items.id, b.id)).run();
+    const r = applyBulk({ ids: [a.id, b.id] }, { type: "delete" }, db, new Date(5000), { fromReview: true });
+    expect(r).toMatchObject({ changed: 1, skipped: 1 });
+    const row = (id: number) => db.select().from(items).where(eq(items.id, id)).get()!;
+    expect(row(a.id).deletedAt).not.toBeNull();
+    expect(row(b.id).deletedAt).toBeNull();
+    expect(latest(db, new Date(6000))).toMatchObject({ action: "delete", itemCount: 1, from: "review" });
+    const none = applyBulk({ ids: [b.id] }, { type: "delete" }, db, new Date(7000), { fromReview: true });
+    expect(none).toEqual({ error: "These are no longer waiting in Review." });
+  });
+});
+
+describe("Which changes Review offers to undo", () => {
+  it("a Review change is marked; a Manage change is not", () => {
+    const a = scanned({ player: "M A", cardNumber: "40" });
+    const b = scanned({ player: "M B", cardNumber: "41" });
+    applyBulk({ ids: [a.id] }, { type: "set", field: "team", value: "Mariners", onlyEmpty: false }, db, new Date(5000));
+    expect(latest(db, new Date(6000))?.from).toBeNull();
+    confirmFromReview([b.id], db, new Date(7000));
+    expect(latest(db, new Date(8000))?.from).toBe("review");
   });
 });

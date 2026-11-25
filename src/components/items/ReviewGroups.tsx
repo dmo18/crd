@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { UndoNotice, type UndoOffer } from "@/components/manage/UndoNotice";
 import { Button } from "@/components/ui";
-import { applyBulkAction } from "@/lib/items/bulk-actions";
-import { confirmReviewItemsAction } from "@/lib/items/review-actions";
+import { confirmReviewItemsAction, deleteReviewItemsAction } from "@/lib/items/review-actions";
 import type { ReviewGroupId } from "@/lib/items/review-groups";
 
 export type ReviewRowView = {
@@ -24,9 +23,20 @@ export type ReviewGroupView = { id: ReviewGroupId; title: string; help: string; 
 
 const items = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "item" : "items"}`;
 
+/** "2 need a look first." when the server skipped some, else an empty string. */
+function skippedLine(skipped: number, why: string): string {
+  return skipped > 0 ? ` ${skipped.toLocaleString("en-US")} ${why}` : "";
+}
+
 /** The words after "Confirm selected": what happened, and that Undo takes it back. */
-export function confirmedLine(n: number): string {
-  return `Confirmed ${items(n)} as read. Their Check this marks are cleared. Undo below takes it back.`;
+export function confirmedLine(n: number, skipped = 0): string {
+  const base = `Confirmed ${n.toLocaleString("en-US")}.${skippedLine(skipped, "need a look first.")}`;
+  return `${base} Their Check this marks are cleared. Undo below takes it back.`;
+}
+
+/** The words after "Delete selected". */
+export function deletedLine(n: number, skipped = 0): string {
+  return `Deleted ${items(n)}.${skippedLine(skipped, "not in Review any more, so left alone.")} They are in Recently deleted for 30 days. Undo below brings them back.`;
 }
 
 /**
@@ -46,6 +56,9 @@ export function ReviewGroups({ groups, details, undo }: { groups: ReviewGroupVie
   // Items that left the list (confirmed or deleted elsewhere) drop out of the selection.
   const selected = ticked.filter((id) => shown.has(id));
   const isTicked = (id: number) => selected.includes(id);
+  // "Confirm selected" only ever confirms cards in "Ready to confirm".
+  const readyIds = new Set(groups.filter((g) => g.id === "ready").flatMap((g) => g.rows.map((r) => r.id)));
+  const canConfirm = selected.every((id) => readyIds.has(id));
   const toggle = (id: number) => setTicked((t) => (t.includes(id) ? t.filter((x) => x !== id) : [...t, id]));
 
   function toggleGroup(g: ReviewGroupView) {
@@ -56,17 +69,18 @@ export function ReviewGroups({ groups, details, undo }: { groups: ReviewGroupVie
 
   async function run(kind: "confirm" | "delete") {
     if (selected.length === 0 || busy) return;
+    if (kind === "confirm" && !canConfirm) return;
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
       const r = kind === "confirm"
         ? await confirmReviewItemsAction(selected)
-        : await applyBulkAction({ selection: { ids: selected }, action: { type: "delete" } });
+        : await deleteReviewItemsAction(selected);
       if ("error" in r) setError(r.error);
       else {
         setTicked([]);
-        setMessage(kind === "confirm" ? confirmedLine(r.changed) : `Deleted ${items(r.changed)}. They are in Recently deleted for 30 days. Undo below brings them back.`);
+        setMessage(kind === "confirm" ? confirmedLine(r.changed, r.skipped) : deletedLine(r.changed, r.skipped));
       }
     } catch {
       setError("Could not reach the server. Nothing was changed.");
@@ -156,8 +170,9 @@ export function ReviewGroups({ groups, details, undo }: { groups: ReviewGroupVie
                 <p className="font-semibold" role="status">{items(selected.length)} selected</p>
                 <Button type="button" variant="ghost" onClick={() => setTicked([])}>Clear</Button>
               </div>
+              {canConfirm ? null : <p className="text-sm text-muted">Confirm works only on cards in Ready to confirm. Untick the others, or open them one by one.</p>}
               <div className="grid grid-cols-2 gap-2">
-                <Button type="button" disabled={busy} onClick={() => void run("confirm")}>{busy ? "Confirming" : "Confirm selected"}</Button>
+                <Button type="button" disabled={busy || !canConfirm} onClick={() => void run("confirm")}>{busy ? "Confirming" : "Confirm selected"}</Button>
                 <Button type="button" variant="danger" disabled={busy} onClick={() => setAskDelete(true)}>Delete selected</Button>
               </div>
             </div>
