@@ -1,4 +1,4 @@
-import { and, asc, count, eq, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import { images, items, valuations, type Item } from "@/db/schema";
@@ -82,6 +82,28 @@ function cardFieldsKey(item: DupRow): string | null {
   ].join("|");
 }
 
+/** Player and card number, for pairs whose other fields are partly blank. */
+function whoKey(item: DupRow): string | null {
+  const who = normalizeName(item.player ?? "");
+  const num = printedCardNumber(item.cardNumber ?? "");
+  return who && num ? `${who}|${num}` : null;
+}
+
+/**
+ * The same player and card number, and year, brand, set and sport each the
+ * same or blank on one side ("Possible duplicates" for a card read without
+ * its year or brand).
+ */
+function sameWithBlanks(a: DupRow, b: DupRow): boolean {
+  const k = whoKey(a);
+  if (!k || k !== whoKey(b)) return false;
+  const fits = (x: string, y: string) => x === "" || y === "" || x === y;
+  return fits(a.year == null ? "" : String(a.year), b.year == null ? "" : String(b.year))
+    && fits(normalizeBrand(a.brand ?? ""), normalizeBrand(b.brand ?? ""))
+    && fits(normalizeText(a.setName ?? ""), normalizeText(b.setName ?? ""))
+    && fits(a.sport ?? "", b.sport ?? "");
+}
+
 const UNGRADED = JSON.stringify(["", ""]);
 
 type Side = {
@@ -135,13 +157,16 @@ function classify(a: Side, b: Side, opts: { ignoreApart?: boolean } = {}): Dupli
   if (a.item.kind === "sealed") return a.sealed !== null && a.sealed === b.sealed ? "same" : null;
   if (a.item.kind !== "card") return null;
 
+  let loose = false;
   // 1. What card: the catalog card when both have one (two different ones are never duplicates).
   const ca = a.item.catalogCardId;
   const cb = b.item.catalogCardId;
   if (ca != null && cb != null) {
     if (ca !== cb) return null;
   } else if (a.fields === null || a.fields !== b.fields) {
-    return null;
+    // The same player and number with nothing that contradicts (a blank is no contradiction): only a question.
+    if (!sameWithBlanks(a.item, b.item)) return null;
+    loose = true;
   }
 
   // 4 first, as a hard stop: two different numbered copies are each their own card.
@@ -168,7 +193,7 @@ function classify(a: Side, b: Side, opts: { ignoreApart?: boolean } = {}): Dupli
     else return null;
   }
 
-  const open = versionOpen || gradeOpen;
+  const open = versionOpen || gradeOpen || loose;
   if (a.copy != null && b.copy != null) return open ? "maybe" : "same_numbered";
   // A serial copy on one side only: may be the same card with the number not typed in.
   if (a.copy != null || b.copy != null) return "maybe";
@@ -187,7 +212,12 @@ export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { i
       eq(items.kind, item.kind),
       eq(items.status, "confirmed"),
       ne(items.id, item.id),
-      item.catalogCardId != null ? or(sameYear, eq(items.catalogCardId, item.catalogCardId)) : sameYear,
+      or(
+        sameYear,
+        item.catalogCardId != null ? eq(items.catalogCardId, item.catalogCardId) : undefined,
+        // Same player and number with a blank year on one side (sameWithBlanks decides).
+        whoKey(item) ? (item.year == null ? isNotNull(items.cardNumber) : isNull(items.year)) : undefined,
+      ),
     ))
     .orderBy(asc(items.id)).all();
   const out: DuplicateMatch[] = [];
@@ -229,6 +259,10 @@ export function duplicateIds(db: Db = getDb()): number[] {
     const s = sideOf(row);
     if (s.sealed) put(`s${s.sealed}`, s);
     if (s.fields) put(`f${s.fields}`, s);
+    if (row.kind === "card") {
+      const who = whoKey(row);
+      if (who) put(`w${who}`, s);
+    }
     if (row.kind === "card" && row.catalogCardId != null) put(`c${row.catalogCardId}`, s);
   }
   const out = new Set<number>();

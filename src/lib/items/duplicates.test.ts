@@ -19,6 +19,23 @@ const kinds = (id: number) => findDuplicateMatches(id, db).map((m) => [m.item.id
 const row = (id: number) => db.select().from(items).where(eq(items.id, id)).get()!;
 
 describe("findDuplicates", () => {
+  it("the same player and number with a blank year or brand is a maybe; a real contradiction is not (review fix 9)", () => {
+    const mills = { sport: "other", year: 1991, brand: "Impel", setName: null, cardNumber: "24", player: "Billy Mills" } as const;
+    const full = add(mills);
+    const blank = add({ ...mills, status: "needs_review", year: null, brand: null });
+    add({ ...mills, cardNumber: "25" });
+    add({ ...mills, player: "Bob Mills" });
+    expect(kinds(blank)).toEqual([[full, "maybe"]]);
+    expect(duplicateIds(db)).toEqual([blank]);
+    // A year read on one and another year on the other contradict; so do two brands.
+    const year92 = add({ ...mills, status: "needs_review", year: 1992, brand: null });
+    expect(kinds(year92)).toEqual([]);
+    const topps = add({ ...mills, status: "needs_review", year: null, brand: "Topps" });
+    expect(kinds(topps)).toEqual([]);
+    // Never combined by itself: a maybe is a question.
+    expect(mergeInto(blank, full, db)).toMatchObject({ ok: false, problem: "maybe" });
+  });
+
   it("matches ignoring case and whitespace", () => {
     const a = add({ status: "needs_review", player: " ken GRIFFEY jr. ", brand: "upper deck " });
     const b = add();
