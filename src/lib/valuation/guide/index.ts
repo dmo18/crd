@@ -110,6 +110,30 @@ function finish(range: Range, tier: Exclude<GuidePrice, { ok: false }>["tier"], 
   return { ok: true, lowCents: low, highCents: high, valueCents, tier, trust, reason, basis: `Trust: ${trust}. ${reason} ${NOTE}` };
 }
 
+/**
+ * Sets that number their base cards with letters and a hyphen: Fleer Update
+ * ("U-27"), and draft sets ("BD-12", "BDC-12", "BDP-12").
+ */
+const BASE_LETTER_NUMBERS: { letters: RegExp; set: RegExp }[] = [
+  { letters: /^U$/, set: /\bupdate\b/i },
+  { letters: /^(?:BD|BDC|BDP)$/, set: /\bdraft\b/i },
+];
+
+/**
+ * A card number with letters and a hyphen before or after the digits
+ * ("SG-4", "RC-12", "T-5", "12-RC") is the numbering of an insert set,
+ * unless the set is known to number its base cards that way. A Traded
+ * number ("11T", no hyphen) and Topps Update's "US175" are base cards.
+ */
+export function insertByNumber(item: Pick<GuideFields, "cardNumber" | "setName" | "brand">): boolean {
+  const num = (item.cardNumber ?? "").trim().toUpperCase().replace(/^#/, "").replace(/\s+/g, "");
+  const m = /^([A-Z]{1,4})-(\d{1,4})$/.exec(num) ?? /^(\d{1,4})-([A-Z]{1,4})$/.exec(num);
+  if (!m) return false;
+  const letters = /^\d/.test(m[1]) ? m[2] : m[1];
+  const set = `${item.brand ?? ""} ${item.setName ?? ""}`;
+  return !BASE_LETTER_NUMBERS.some((b) => b.letters.test(letters) && b.set.test(set));
+}
+
 function cardGuide(item: GuideFields, facts: GuideFacts): GuidePrice {
   const year = item.year;
   if (year == null) return { ok: false, missing: GUIDE_MISSING.year };
@@ -127,6 +151,9 @@ function cardGuide(item: GuideFields, facts: GuideFacts): GuidePrice {
     sport: item.sport, year, brand: item.brand, setName: item.setName, cardNumber: item.cardNumber,
     player: item.player, isError: item.isError,
   });
+  // A listed key card is never an insert by its number ("U-27" of Fleer Update).
+  const byNumber = !key && !item.isInsert && insertByNumber(item);
+  const insert = item.isInsert || byNumber;
   if (key) {
     range = [key.lowCents, key.highCents];
     guideTier = "key_card";
@@ -134,7 +161,7 @@ function cardGuide(item: GuideFields, facts: GuideFacts): GuidePrice {
   } else {
     const era = ERAS.find((e) => year >= e.from && year <= e.to) ?? ERAS[ERAS.length - 1];
     range = era.base[tier];
-    const kind = item.isRookie ? "rookie card" : special || item.isError ? "card" : "base card";
+    const kind = item.isRookie ? "rookie card" : special || insert || item.isError ? "card" : "base card";
     words.push(tier === "common"
       ? `${item.isRookie ? "Common rookie card" : "Common card"} from ${year}, ${era.words}.`
       : `${PLAYER_TIER_WORDS[tier]}, ${kind} from ${year}, ${era.words}.`);
@@ -147,7 +174,7 @@ function cardGuide(item: GuideFields, facts: GuideFacts): GuidePrice {
     if (product) { range = scale(range, product.multiplier); words.push(`Priced up for ${product.words}.`); }
     const glossy = product?.multiplier === 5;
     if (item.isParallel && !glossy) { range = scale(range, PARALLEL_MULTIPLIER); words.push("Parallel version."); veryRough = true; }
-    if (item.isInsert) { range = scale(range, INSERT_MULTIPLIER); words.push("Insert card."); veryRough = true; }
+    if (insert) { range = scale(range, INSERT_MULTIPLIER); words.push(byNumber ? "Insert card, by its card number." : "Insert card."); veryRough = true; }
     if (item.isError) { range = scale(range, ERROR_MULTIPLIER); words.push("Marked as an error; most errors add little."); veryRough = true; }
 
     if (item.isAutograph || item.isMemorabilia) {

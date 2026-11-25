@@ -298,3 +298,46 @@ describe("guide rules on concrete cards", () => {
     expect(numericGrade("Authentic")).toBeNull();
   });
 });
+
+describe("review fix 5", () => {
+  it("current stars and recent Hall of Famers are no longer common cards", () => {
+    expect(listedTier("Ronald Acuña Jr.", "baseball", 2021)).toBe("star");
+    expect(listedTier("Victor Wembanyama", "basketball", 2023)).toBe("star");
+    expect(listedTier("Joe Burrow", "football", 2020)).toBe("star");
+    expect(listedTier("Auston Matthews", "hockey", 2016)).toBe("star");
+    expect(listedTier("Derek Jeter", "baseball", 1996)).toBe("great");
+    expect(listedTier("Dwyane Wade", "basketball", 2003)).toBe("hof");
+    expect(listedTier("Drew Brees", "football", 2001)).toBe("hof");
+    expect(listedTier("Jarome Iginla", "hockey", 1997)).toBe("hof");
+    expect(listedNames().length).toBeGreaterThanOrEqual(300);
+    // The son's card without "Jr." is not the father's after the father's years.
+    expect(listedTier("Tim Hardaway", "basketball", 2015)).toBeNull();
+    expect(ok(card({ year: 2021, brand: "Panini", setName: "Prizm", cardNumber: "100", player: "Ronald Acuña Jr.", sport: "baseball" })).reason).not.toMatch(/^Common card/);
+  });
+
+  it("a letter and hyphen card number counts as an insert, unless the set numbers its base cards so", () => {
+    const base = { year: 2021, brand: "Panini", setName: "Prizm", player: "Joe Nobody", sport: "baseball" as const };
+    for (const n of ["SG-4", "RC-12", "T-5", "12-RC"]) expect(ok(card({ ...base, cardNumber: n })).reason, n).toMatch(/Insert card, by its card number\./);
+    for (const n of ["11T", "US175", "100"]) expect(ok(card({ ...base, cardNumber: n })).reason, n).not.toMatch(/Insert card/);
+    expect(ok(card({ ...base, year: 1984, brand: "Fleer", setName: "Fleer Update", cardNumber: "U-100" })).reason).not.toMatch(/Insert/);
+    expect(ok(card({ ...base, year: 2019, brand: "Bowman", setName: "Bowman Draft", cardNumber: "BD-12" })).reason).not.toMatch(/Insert/);
+    // A listed key card stays a key card.
+    expect(ok(card({ year: 1984, brand: "Fleer", cardNumber: "U-27", player: "Roger Clemens", sport: "baseball" })).tier).toBe("key_card");
+  });
+
+  it("knows the 1991 Upper Deck Chipper Jones and a few more key rookies, each with a rookie mark", () => {
+    const chipper = findPricedCard({ year: 1991, brand: "Upper Deck", cardNumber: "55", player: "Chipper Jones" });
+    expect(chipper).toMatchObject({ rookie: true });
+    expect(findPricedCard({ year: 1982, brand: "Topps", cardNumber: "434", player: "Lawrence Taylor" })?.rookie).toBe(true);
+    expect(findPricedCard({ year: 1989, brand: "O-Pee-Chee", cardNumber: "113", player: "Joe Sakic" })?.rookie).toBe(true);
+    expect(findPricedCard({ year: 1987, brand: "Fleer", cardNumber: "59", player: "Michael Jordan" })?.rookie).toBe(false);
+    expect(findPricedCard({ year: 1952, brand: "Topps", cardNumber: "311", player: "Mickey Mantle" })?.rookie).toBe(false);
+    // Every listed card once: a card listed twice would be a tie and never match.
+    const keys = PRICED_CARDS.map((c) => `${c.year}|${c.setName}|${c.cardNumber}|${c.isError}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    // Key rookies of 1980 to 1995 for all four sports.
+    for (const sport of ["baseball", "basketball", "football", "hockey"] as const) {
+      expect(PRICED_CARDS.filter((c) => c.sport === sport && c.year >= 1980 && c.year <= 1995 && c.rookie).length, sport).toBeGreaterThanOrEqual(8);
+    }
+  });
+});

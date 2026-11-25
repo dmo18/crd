@@ -45,11 +45,29 @@ const LIST: Record<"baseball" | "basketball" | "football" | "hockey", Record<Lis
       ["Jim Thome", 1991, 2012], ["David Ortiz", 1997, 2016], ["Edgar Martinez", 1987, 2004], ["Trevor Hoffman", 1993, 2010],
       ["Albert Pujols", 2001, 2022], ["Willie McCovey", 1959, 1980], ["Harmon Killebrew", 1954, 1975], ["Frank Robinson", 1956, 1976],
       ["Juan Marichal", 1960, 1975],
+      // Recent Hall of Famers and players of the last 30 years certain to be (review fix 5).
+      ["Roy Halladay", 1998, 2013], ["Mike Mussina", 1991, 2008], ["Scott Rolen", 1996, 2012], ["Todd Helton", 1997, 2013],
+      ["Larry Walker", 1989, 2005], ["Joe Mauer", 2004, 2018], ["Adrian Beltre", 1998, 2018], ["Fred McGriff", 1986, 2004],
+      ["Tim Raines", 1979, 2002], ["Alan Trammell", 1977, 1996], ["Jack Morris", 1977, 1994], ["Billy Wagner", 1995, 2010],
+      ["CC Sabathia", 2001, 2019], ["Bert Blyleven", 1970, 1992], ["Dave Parker", 1973, 1991], ["Clayton Kershaw", 2008, 2025],
+      ["Justin Verlander", 2005, null], ["Max Scherzer", 2008, null], ["Miguel Cabrera", 2003, 2023],
     ],
     star: [
       ["Barry Bonds", 1986, 2007], ["Roger Clemens", 1984, 2007], ["Mark McGwire", 1986, 2001], ["Pete Rose", 1963, 1986],
       ["Bo Jackson", 1986, 1994], ["Don Mattingly", 1982, 1995], ["Jose Canseco", 1985, 2001], ["Alex Rodriguez", 1994, 2016],
       ["Sammy Sosa", 1989, 2007], ["Darryl Strawberry", 1983, 1999], ["Dwight Gooden", 1984, 2000], ["Aaron Judge", 2016, null],
+      // Stars of the last 30 years and of today (review fix 5).
+      ["Manny Ramirez", 1993, 2011], ["Gary Sheffield", 1988, 2009], ["Andruw Jones", 1996, 2012], ["Carlos Beltran", 1998, 2017],
+      ["Nomar Garciaparra", 1996, 2009], ["Jeff Kent", 1992, 2008], ["Andy Pettitte", 1995, 2013], ["Johan Santana", 2000, 2012],
+      ["Felix Hernandez", 2005, 2019], ["Hideki Matsui", 1993, 2012], ["Buster Posey", 2009, 2021], ["Joey Votto", 2007, 2024],
+      ["Mookie Betts", 2014, null], ["Bryce Harper", 2012, null], ["Manny Machado", 2012, null], ["Freddie Freeman", 2010, null],
+      ["Jose Altuve", 2011, null], ["Paul Goldschmidt", 2011, null], ["Nolan Arenado", 2013, null], ["Francisco Lindor", 2015, null],
+      ["Corey Seager", 2015, null], ["Juan Soto", 2018, null], ["Ronald Acuña Jr.", 2018, null], ["Fernando Tatis Jr.", 2019, null],
+      ["Vladimir Guerrero Jr.", 2019, null], ["Julio Rodriguez", 2022, null], ["Bobby Witt Jr.", 2022, null], ["Gunnar Henderson", 2022, null],
+      ["Elly De La Cruz", 2023, null], ["Paul Skenes", 2024, null], ["Yordan Alvarez", 2019, null], ["Pete Alonso", 2019, null],
+      ["Rafael Devers", 2017, null], ["Gerrit Cole", 2013, null], ["Jacob deGrom", 2014, null], ["Christian Yelich", 2013, null],
+      ["Kris Bryant", 2015, null], ["Giancarlo Stanton", 2010, null], ["Corbin Carroll", 2022, null], ["Adley Rutschman", 2022, null],
+      ["Yu Darvish", 2005, null], ["Yoshinobu Yamamoto", 2017, null], ["Jackson Chourio", 2024, null], ["Kyle Tucker", 2018, null],
     ],
   },
   basketball: {
@@ -67,8 +85,23 @@ const LIST: Record<"baseball" | "basketball" | "football" | "hockey", Record<Lis
       ["Kevin McHale", 1980, 1993], ["Robert Parish", 1976, 1997], ["Allen Iverson", 1996, 2010], ["Kevin Garnett", 1995, 2016],
       ["Dirk Nowitzki", 1998, 2019], ["Steve Nash", 1996, 2015], ["Jason Kidd", 1994, 2013], ["Gary Payton", 1990, 2007],
       ["Pete Maravich", 1970, 1980], ["Kevin Durant", 2007, null],
+      // Recent Hall of Famers and players of the last 30 years certain to be (review fix 5).
+      ["Dwyane Wade", 2003, 2019], ["Chris Bosh", 2003, 2017], ["Ray Allen", 1996, 2014], ["Paul Pierce", 1998, 2017],
+      ["Tony Parker", 1999, 2019], ["Manu Ginobili", 1995, 2018], ["Pau Gasol", 1998, 2019], ["Vince Carter", 1998, 2020],
+      ["Tracy McGrady", 1997, 2013], ["Yao Ming", 1997, 2011], ["Grant Hill", 1994, 2013], ["Alonzo Mourning", 1992, 2008],
+      ["Dikembe Mutombo", 1991, 2009], ["Chris Webber", 1993, 2008], ["Ben Wallace", 1996, 2012], ["Tim Hardaway", 1989, 2003],
+      ["Mitch Richmond", 1988, 2002], ["Carmelo Anthony", 2003, 2022], ["Dwight Howard", 2004, 2022], ["Chris Paul", 2005, null],
+      ["Russell Westbrook", 2008, null], ["James Harden", 2009, null], ["Kawhi Leonard", 2011, null], ["Giannis Antetokounmpo", 2013, null],
     ],
-    star: [],
+    star: [
+      // Stars of the last 30 years and of today (review fix 5).
+      ["Anfernee Hardaway", 1993, 2008], ["Derrick Rose", 2008, 2024], ["Blake Griffin", 2010, 2023], ["Nikola Jokic", 2015, null],
+      ["Luka Doncic", 2015, null], ["Joel Embiid", 2016, null], ["Jayson Tatum", 2017, null], ["Anthony Davis", 2012, null],
+      ["Damian Lillard", 2012, null], ["Kyrie Irving", 2011, null], ["Devin Booker", 2015, null], ["Ja Morant", 2019, null],
+      ["Zion Williamson", 2019, null], ["Victor Wembanyama", 2019, null], ["Shai Gilgeous-Alexander", 2018, null], ["Anthony Edwards", 2020, null],
+      ["Trae Young", 2018, null], ["Paul George", 2010, null], ["Jimmy Butler", 2011, null], ["Klay Thompson", 2011, null],
+      ["LaMelo Ball", 2019, null], ["Cooper Flagg", 2025, null],
+    ],
   },
   football: {
     great: [
@@ -84,8 +117,26 @@ const LIST: Record<"baseball" | "basketball" | "football" | "hockey", Record<Lis
       ["Marcus Allen", 1982, 1997], ["Tony Dorsett", 1977, 1988], ["Earl Campbell", 1978, 1985], ["Thurman Thomas", 1988, 2000],
       ["Warren Moon", 1978, 2000], ["Michael Irvin", 1988, 1999], ["Cris Carter", 1987, 2002], ["Bruce Smith", 1985, 2003],
       ["Junior Seau", 1990, 2009], ["Randy Moss", 1998, 2012], ["LaDainian Tomlinson", 2001, 2011], ["Marshall Faulk", 1994, 2006],
+      // Recent Hall of Famers and players of the last 30 years certain to be (review fix 5).
+      ["Drew Brees", 2001, 2020], ["Aaron Rodgers", 2005, null], ["Ray Lewis", 1996, 2012], ["Ed Reed", 2002, 2013],
+      ["Troy Polamalu", 2003, 2014], ["Charles Woodson", 1998, 2015], ["Brian Urlacher", 2000, 2012], ["Terrell Owens", 1996, 2010],
+      ["Larry Fitzgerald", 2004, 2020], ["Calvin Johnson", 2007, 2015], ["Marvin Harrison", 1996, 2008], ["Tony Gonzalez", 1997, 2013],
+      ["Kurt Warner", 1995, 2009], ["Edgerrin James", 1999, 2009], ["Curtis Martin", 1995, 2005], ["Jerome Bettis", 1993, 2005],
+      ["Shannon Sharpe", 1990, 2003], ["Michael Strahan", 1993, 2007], ["Champ Bailey", 1999, 2013], ["Isaac Bruce", 1994, 2009],
+      ["Andre Johnson", 2003, 2016], ["Aaron Donald", 2014, 2023],
     ],
-    star: [["Bo Jackson", 1987, 1990], ["Patrick Mahomes", 2017, null]],
+    star: [
+      ["Bo Jackson", 1987, 1990], ["Patrick Mahomes", 2017, null],
+      // Stars of the last 30 years and of today (review fix 5).
+      ["Eli Manning", 2004, 2019], ["Philip Rivers", 2004, 2020], ["Ben Roethlisberger", 2004, 2021], ["Michael Vick", 2001, 2015],
+      ["Rob Gronkowski", 2010, 2021], ["J.J. Watt", 2011, 2022], ["Cam Newton", 2011, 2021], ["Russell Wilson", 2012, null],
+      ["Lamar Jackson", 2018, null], ["Joe Burrow", 2020, null], ["Justin Herbert", 2020, null], ["Jalen Hurts", 2020, null],
+      ["C.J. Stroud", 2023, null], ["Caleb Williams", 2024, null], ["Jayden Daniels", 2024, null], ["Drake Maye", 2024, null],
+      ["Travis Kelce", 2013, null], ["Justin Jefferson", 2020, null], ["Ja'Marr Chase", 2021, null], ["CeeDee Lamb", 2020, null],
+      ["Tyreek Hill", 2016, null], ["Christian McCaffrey", 2017, null], ["Saquon Barkley", 2018, null], ["Derrick Henry", 2016, null],
+      ["T.J. Watt", 2017, null], ["Micah Parsons", 2021, null], ["Odell Beckham Jr.", 2014, null], ["Davante Adams", 2014, null],
+      ["Brock Purdy", 2022, null], ["Bijan Robinson", 2023, null], ["Puka Nacua", 2023, null], ["Marvin Harrison Jr.", 2024, null],
+    ],
   },
   hockey: {
     great: [
@@ -100,8 +151,21 @@ const LIST: Record<"baseball" | "basketball" | "football" | "hockey", Record<Lis
       ["Peter Forsberg", 1990, 2011], ["Mike Modano", 1988, 2011], ["Luc Robitaille", 1986, 2006], ["Bobby Hull", 1957, 1980],
       ["Phil Esposito", 1963, 1981], ["Stan Mikita", 1958, 1980], ["Ken Dryden", 1970, 1979], ["Guy Lafleur", 1971, 1991],
       ["Marcel Dionne", 1971, 1989], ["Jean Beliveau", 1950, 1971], ["Maurice Richard", 1942, 1960],
+      // Recent Hall of Famers and players of the last 30 years certain to be (review fix 5).
+      ["Jarome Iginla", 1996, 2017], ["Chris Pronger", 1993, 2012], ["Scott Niedermayer", 1991, 2010], ["Martin St. Louis", 1998, 2015],
+      ["Henrik Lundqvist", 2000, 2020], ["Roberto Luongo", 1999, 2019], ["Marian Hossa", 1997, 2017], ["Daniel Alfredsson", 1995, 2014],
+      ["Henrik Sedin", 2000, 2018], ["Daniel Sedin", 2000, 2018], ["Zdeno Chara", 1997, 2022], ["Mats Sundin", 1990, 2009],
+      ["Brendan Shanahan", 1987, 2009], ["Sergei Fedorov", 1990, 2009], ["Chris Chelios", 1984, 2010], ["Paul Kariya", 1994, 2010],
+      ["Joe Thornton", 1997, 2022], ["Evgeni Malkin", 2004, null],
     ],
-    star: [],
+    star: [
+      // Stars of the last 30 years and of today (review fix 5).
+      ["Auston Matthews", 2015, null], ["Nathan MacKinnon", 2013, null], ["Leon Draisaitl", 2014, null], ["Nikita Kucherov", 2011, null],
+      ["Cale Makar", 2019, null], ["Connor Bedard", 2023, null], ["Macklin Celebrini", 2024, null], ["David Pastrnak", 2014, null],
+      ["Steven Stamkos", 2008, null], ["Patrick Kane", 2007, null], ["Jonathan Toews", 2007, 2023], ["Carey Price", 2007, 2022],
+      ["Erik Karlsson", 2009, null], ["Kirill Kaprizov", 2015, null], ["Jack Hughes", 2019, null], ["Quinn Hughes", 2018, null],
+      ["Matthew Tkachuk", 2016, null], ["Mitch Marner", 2016, null], ["Andrei Vasilevskiy", 2014, null], ["Igor Shesterkin", 2016, null],
+    ],
   },
 };
 
@@ -120,6 +184,9 @@ const NAMESAKES: { name: string; sport: ListedSport; first: number; last: number
   { name: "Bruce Smith", sport: "football", first: 1945, last: 1948 },
   // The son; a card that leaves out his "Jr." reads like the father's name.
   { name: "Vladimir Guerrero", sport: "baseball", first: 2016, last: 2026 },
+  // The sons, when a card leaves out the "Jr.".
+  { name: "Tim Hardaway", sport: "basketball", first: 2013, last: 2026 },
+  { name: "Marvin Harrison", sport: "football", first: 2024, last: 2026 },
 ];
 
 /** Cards come out a few years before a player's first season (draft, minor league, college and Olympic cards). */

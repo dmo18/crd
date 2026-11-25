@@ -146,3 +146,20 @@ describe("state and isRookie never disagree after any write path", () => {
     expect(inStep(get(id))).toBe(true);
   });
 });
+
+describe("a known key rookie of the price guide is offered as a question (review fix 14)", () => {
+  const blank = { kind: "card" as const, isRookie: false, rookieState: null, rookieSource: null, rookieNote: null, rarityNotes: null };
+  it("suggests yes for a matching key rookie, never sets it", async () => {
+    const { rookieAsk } = await import("./rookie");
+    const chipper = { ...blank, sport: "baseball" as const, year: 1991, brand: "Upper Deck", setName: null, cardNumber: "55", player: "Chipper Jones" };
+    expect(rookieAsk(chipper)).toEqual({
+      lines: ["The built-in price guide lists 1991 Upper Deck #55 Chipper Jones as a rookie card"], suggested: "yes", current: null,
+    });
+    // Another player on that number, no player, or a card that is not his rookie: nothing.
+    expect(rookieAsk({ ...chipper, player: "Ken Griffey Jr." })).toBeNull();
+    expect(rookieAsk({ ...chipper, player: null })).toBeNull();
+    expect(rookieAsk({ ...blank, sport: "basketball" as const, year: 1987, brand: "Fleer", setName: null, cardNumber: "59", player: "Michael Jordan" })).toBeNull();
+    // The owner's answer is final.
+    expect(rookieAsk({ ...chipper, ...withRookie("no", "owner") })).toBeNull();
+  });
+});

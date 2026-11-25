@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ReadEvidence } from "@/lib/recognition/types";
 import { ROOKIE_SOURCES, ROOKIE_STATES, type Item, type RookieSource, type RookieState } from "@/db/schema";
+import { findPricedCard, type PricedCard } from "@/lib/valuation/guide/key-prices";
 
 /**
  * The rookie mark. `rookieState` holds the answer and `isRookie` stays true
@@ -127,14 +128,33 @@ export function rookieFromScan(isCard: boolean, readerSaysRookie: boolean, evide
 /** What the "Rookie card?" question shows for an item, or null when it asks nothing. */
 export type RookieAsk = { lines: string[]; suggested: RookieState | null; current: RookieState | null };
 
+/** The line when the built-in price guide lists the card as a rookie card. */
+export const GUIDE_ROOKIE_LINE = (c: PricedCard) => `The built-in price guide lists ${c.year} ${c.setName} #${c.cardNumber} ${c.player} as a rookie card`;
+
+/**
+ * A listed key rookie that the card's year, brand, number and player all
+ * match (the price guide's own list), or null.
+ */
+export function guideRookieCard(item: Partial<Pick<Item, "sport" | "year" | "brand" | "setName" | "cardNumber" | "player" | "isError">>): PricedCard | null {
+  if (!item.player?.trim() || !item.cardNumber?.trim() || item.year == null || !item.brand?.trim()) return null;
+  const hit = findPricedCard({
+    sport: item.sport ?? null, year: item.year, brand: item.brand, setName: item.setName ?? null,
+    cardNumber: item.cardNumber, player: item.player, isError: item.isError ?? false,
+  });
+  return hit?.rookie ? hit : null;
+}
+
 export function rookieAsk(
-  item: Pick<Item, "kind" | "isRookie" | "rookieState" | "rookieSource" | "rookieNote" | "rarityNotes">,
+  item: Pick<Item, "kind" | "isRookie" | "rookieState" | "rookieSource" | "rookieNote" | "rarityNotes">
+    & Partial<Pick<Item, "sport" | "year" | "brand" | "setName" | "cardNumber" | "player" | "isError">>,
   catalogTags: readonly string[] = [],
 ): RookieAsk | null {
   if (item.kind !== "card") return null;
   const view = readRookie(item);
   // The owner's answer is final. An old item with no recorded mark asks nothing.
   if (view.source === "owner") return null;
+  // A known key rookie of the price guide (year, brand, number and player agree) is offered, never set.
+  const guide = view.source === "key_list" || view.state === "yes" ? null : guideRookieCard(item);
   const keyHit = view.source === "key_list" && (view.state === "yes" || view.state === "no" || view.state === "unknown");
   const readNote = view.state === null && view.source === "reading" ? view.note : null;
   const reprint = keyHit && view.state === "unknown";
@@ -146,6 +166,8 @@ export function rookieAsk(
   });
   const lines = ev.lines.map((l) => l.text);
   if (readNote != null && readNote !== ROOKIE_WORD_NOTE) lines.push(readNote);
+  if (guide) lines.unshift(GUIDE_ROOKIE_LINE(guide));
   if (lines.length === 0) return null;
-  return { lines, suggested: ev.suggested ?? (readNote ? "unknown" : null), current: view.state };
+  const suggested = ev.suggested ?? (readNote ? "unknown" : null);
+  return { lines, suggested: guide && (suggested === null || suggested === "unknown") ? "yes" : suggested, current: view.state };
 }

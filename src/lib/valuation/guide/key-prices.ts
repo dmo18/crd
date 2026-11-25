@@ -1,5 +1,6 @@
 import type { Sport } from "@/db/schema";
 import { normalizeBrand, normalizeCardNumber, normalizeName } from "@/lib/catalog/normalize";
+import { KEY_CARDS } from "@/lib/free/key-cards";
 
 /**
  * Key cards that break the guide's rules: famous rookies and errors.
@@ -26,6 +27,8 @@ export type PricedCard = {
   highCents: number;
   /** True for a listed error version: matched only when the item is marked as an error. */
   isError: boolean;
+  /** The player's rookie card as collectors count it (from the key card list where it lists the card). */
+  rookie: boolean;
 };
 
 const B: Sport = "baseball";
@@ -35,8 +38,20 @@ const H: Sport = "hockey";
 
 /** Ranges are written in whole dollars for readability and kept in cents. */
 function p(sport: Sport, year: number, brand: string, setName: string, cardNumber: string, player: string, lowDollars: number, highDollars: number, error = false): PricedCard {
-  return { sport, year, brand, setName, cardNumber, player, lowCents: lowDollars * 100, highCents: highDollars * 100, isError: error };
+  const k = `${year}|${normalizeBrand(setName)}|${normalizeCardNumber(cardNumber)}`;
+  const listed = KEY_CARDS.find((c) => `${c.year}|${normalizeBrand(c.setName)}|${normalizeCardNumber(c.cardNumber)}` === k);
+  const rookie = listed ? listed.isRookie : !NOT_ROOKIE.has(k);
+  return { sport, year, brand, setName, cardNumber, player, lowCents: lowDollars * 100, highCents: highDollars * 100, isError: error, rookie };
 }
+
+/**
+ * Listed cards that are not the player's rookie card, outside the key card
+ * list's years (year, set and number as the key below).
+ */
+const NOT_ROOKIE = new Set([
+  [1948, "Leaf", "3"], [1952, "Topps", "311"], [1952, "Topps", "261"], [1952, "Topps", "1"], [1953, "Topps", "82"],
+  [1954, "Topps", "1"], [1956, "Topps", "135"], [1980, "O-Pee-Chee", "250"],
+].map(([y, set, n]) => `${y}|${normalizeBrand(String(set))}|${normalizeCardNumber(String(n))}`));
 
 export const PRICED_CARDS: readonly PricedCard[] = [
   // Baseball before 1980
@@ -136,6 +151,11 @@ export const PRICED_CARDS: readonly PricedCard[] = [
   p(B, 1993, "Upper Deck", "SP", "279", "Derek Jeter", 100, 500),
   p(B, 1994, "Upper Deck", "SP", "15", "Alex Rodriguez", 20, 100),
 
+  // Added in review fix 5: key rookies of 1980 to 1995 that were missing.
+  p(B, 1991, "Upper Deck", "Upper Deck", "55", "Chipper Jones", 5, 40),
+  p(B, 1991, "Topps", "Topps", "333", "Chipper Jones", 3, 20),
+  p(B, 1994, "Upper Deck", "Upper Deck", "24", "Alex Rodriguez", 5, 30),
+
   // Baseball after 1995
   p(B, 2011, "Topps", "Topps Update", "US175", "Mike Trout", 50, 300),
 
@@ -177,6 +197,9 @@ export const PRICED_CARDS: readonly PricedCard[] = [
   p(F, 1971, "Topps", "Topps", "156", "Terry Bradshaw", 50, 800),
   p(F, 1976, "Topps", "Topps", "148", "Walter Payton", 100, 1500),
   p(F, 1981, "Topps", "Topps", "216", "Joe Montana", 100, 600),
+  p(F, 1982, "Topps", "Topps", "434", "Lawrence Taylor", 30, 200),
+  p(F, 1984, "Topps", "Topps", "280", "Eric Dickerson", 5, 30),
+  p(F, 1985, "Topps", "Topps", "251", "Warren Moon", 5, 30),
   p(F, 1984, "Topps", "Topps", "63", "John Elway", 30, 150),
   p(F, 1984, "Topps", "Topps", "123", "Dan Marino", 30, 150),
   p(F, 1984, "Topps", "Topps USFL", "36", "Jim Kelly", 50, 300),
@@ -211,6 +234,8 @@ export const PRICED_CARDS: readonly PricedCard[] = [
   p(H, 1986, "O-Pee-Chee", "O-Pee-Chee", "53", "Patrick Roy", 50, 250),
   p(H, 1986, "Topps", "Topps", "53", "Patrick Roy", 20, 100),
   p(H, 1988, "O-Pee-Chee", "O-Pee-Chee", "66", "Brett Hull", 10, 50),
+  p(H, 1989, "O-Pee-Chee", "O-Pee-Chee", "113", "Joe Sakic", 10, 60),
+  p(H, 1989, "Topps", "Topps", "113", "Joe Sakic", 5, 40),
   p(H, 1990, "Upper Deck", "Upper Deck", "356", "Jaromir Jagr", 3, 15),
   p(H, 2005, "Upper Deck", "Young Guns", "201", "Sidney Crosby", 300, 1500),
   p(H, 2005, "Upper Deck", "Young Guns", "443", "Alex Ovechkin", 150, 800),
