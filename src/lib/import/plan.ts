@@ -142,6 +142,16 @@ function readRow(cells: string[], mapping: ColumnChoice[]): Partial<Record<Impor
   return out;
 }
 
+/**
+ * Fields whose cell starts with "=" as typed (not the guarded form the export writes)
+ * is a spreadsheet formula, not a value. The owner decides (the row is skipped).
+ */
+function formulaFields(cells: string[], mapping: ColumnChoice[]): Set<ImportField> {
+  const out = new Set<ImportField>();
+  mapping.forEach((field, i) => { if (field !== SKIP && (cells[i] ?? "").trim().startsWith("=")) out.add(field); });
+  return out;
+}
+
 type Checked = {
   /** Text values as itemEditSchema takes them, for the mapped fields only. */
   input: Record<string, string | boolean>;
@@ -152,7 +162,7 @@ type Checked = {
 };
 
 /** The safe cleaning rules, field by field. Adds a plain problem for each cell that cannot be used. */
-function checkCells(v: Partial<Record<ImportField, string>>, opts: ImportOptions, now: Date, problem: (m: string) => void): Checked {
+function checkCells(v: Partial<Record<ImportField, string>>, opts: ImportOptions, now: Date, problem: (m: string) => void, formulas: ReadonlySet<ImportField> = new Set()): Checked {
   const input: Record<string, string | boolean> = {};
   let id: number | null = null;
   let kind: Item["kind"] | null = null;
@@ -207,6 +217,10 @@ function checkCells(v: Partial<Record<ImportField, string>>, opts: ImportOptions
         : field === "productType" ? [matchProduct(s), PRODUCT_LABELS] : [matchSeal(s), SEAL_LABELS];
       if (match) input[field] = match;
       else problem(`${name} must be one of: ${listOf(labels)}.`);
+    } else if (formulas.has(field)) {
+      problem(`${name} looks like a spreadsheet formula (${s.slice(0, 40)}). Type the value itself, or leave the row out.`);
+      // Kept for the other checks, so the row gets this one problem, not a second "fill in a player".
+      input[field] = s;
     } else {
       input[field] = s;
     }
@@ -321,7 +335,7 @@ function plan(tx: Db, rows: string[][], mapping: ColumnChoice[], opts: ImportOpt
     counts.rows += 1;
     const mine: string[] = [];
     const problem = (m: string) => mine.push(m);
-    const c = checkCells(values, opts, now, problem);
+    const c = checkCells(values, opts, now, problem, formulaFields(cells, mapping));
     const finish = (o: Outcome) => {
       if (mine.length > 0) {
         counts.problems += 1;

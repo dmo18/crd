@@ -77,6 +77,15 @@ describe("row problems", () => {
     expect(all().map((i) => i.player)).toEqual(["Ken Griffey Jr."]);
   });
 
+  it("a cell that looks like a spreadsheet formula is a row problem, skipped by default; the export's guarded cell is not (review fix 13)", () => {
+    const text = "Player,Year,Brand\n=1+1,1989,Upper Deck\n'=Plus One,1990,Topps\nKen Griffey Jr.,1989,Upper Deck\n";
+    const p = ok(check(text));
+    expect(p.problems.map((x) => x.message)).toEqual(["Row 2: Player looks like a spreadsheet formula (=1+1). Type the value itself, or leave the row out."]);
+    expect(run(text)).toHaveProperty("error");
+    ok(run(text, OPTS, true));
+    expect(all().map((i) => i.player).sort()).toEqual(["=Plus One", "Ken Griffey Jr."]);
+  });
+
   it("refuses a year after next year", () => {
     const p = ok(check(`Player,Year\nA,${NOW.getUTCFullYear() + 2}\nB,${NOW.getUTCFullYear() + 1}\nC,1993-94`));
     expect(p.counts).toMatchObject({ added: 2, problems: 1 });
