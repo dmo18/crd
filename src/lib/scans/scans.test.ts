@@ -77,7 +77,7 @@ describe("processScan", () => {
     expect(db.select().from(valuations).get()).toMatchObject({ itemId: item.id, valueCents: 6000 });
   });
 
-  it("keeps what the scanner first read and marks its fields as reading", async () => {
+  it("keeps what the reader first read and marks its fields as reading", async () => {
     const { scanId } = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
     const at = new Date("2026-11-16T12:00:00Z");
     await processScan(scanId, { db, recognizer: fake([{ ...griffey, confidence: 0.5, team: null }]), now: () => at });

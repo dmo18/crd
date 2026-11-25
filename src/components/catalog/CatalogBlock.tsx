@@ -17,7 +17,7 @@ const FIRST_LABELS = [
   ["player", "Player"], ["team", "Team"], ["variation", "Variation"],
 ] as const;
 
-/** The "Catalog card" block of an item page, and "What the scanner first read" under it. */
+/** The "Catalog card" block of an item page, and "What the reader first read" under it. */
 export function CatalogBlock({ item }: { item: Item }) {
   const db = getDb();
   const card = item.catalogCardId == null ? null : db.select().from(catalogCards).where(eq(catalogCards.id, item.catalogCardId)).get() ?? null;
@@ -70,7 +70,7 @@ export function CatalogBlock({ item }: { item: Item }) {
                 <p className="text-sm font-semibold">Some details differ from the catalog:</p>
                 <ul className="flex flex-col gap-1 text-sm">
                   {differences.map((d) => (
-                    <li key={d.field} className="break-words">Scanner read {FIELD_WORDS[d.field]}: {d.itemValue == null ? "" : String(d.itemValue)}. Catalog says: {d.catalogValue == null ? "" : String(d.catalogValue)}</li>
+                    <li key={d.field} className="break-words">The reader read {FIELD_WORDS[d.field]}: {d.itemValue == null ? "" : String(d.itemValue)}. Catalog says: {d.catalogValue == null ? "" : String(d.catalogValue)}</li>
                   ))}
                 </ul>
                 <form action={catalogValuesOnItemAction}>
@@ -104,7 +104,7 @@ export function CatalogBlock({ item }: { item: Item }) {
       </Card>
       {first ? (
         <details className="rounded-2xl border border-border bg-surface px-4">
-          <summary className="min-h-11 cursor-pointer py-3 text-base font-semibold">What the scanner first read</summary>
+          <summary className="min-h-11 cursor-pointer py-3 text-base font-semibold">What the reader first read</summary>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-1 pb-3 text-sm">
             {FIRST_LABELS.map(([k, label]) => {
               const v = first.fields[k];

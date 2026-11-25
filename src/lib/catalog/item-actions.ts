@@ -27,7 +27,7 @@ export async function unlinkCatalogAction(formData: FormData): Promise<void> {
   redirect(`/items/${id.data}`);
 }
 
-/** "Use the catalog's values" on the item page: replaces what the scanner read differently. Owner fields stay. */
+/** "Use the catalog's values" on the item page: replaces what the reader read differently. Owner fields stay. */
 export async function catalogValuesOnItemAction(formData: FormData): Promise<void> {
   await requireOwner();
   const id = idSchema.safeParse(formData.get("id"));

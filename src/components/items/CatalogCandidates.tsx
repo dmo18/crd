@@ -74,14 +74,14 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
               <p className="text-sm font-semibold">Some details differ from the catalog:</p>
               <ul className="flex flex-col gap-1 text-sm">
                 {view.linked.differences.map((d) => (
-                  <li key={d.label} className="break-words">Scanner read {d.label}: {d.read}. Catalog says: {d.catalog}</li>
+                  <li key={d.label} className="break-words">The reader read {d.label}: {d.read}. Catalog says: {d.catalog}</li>
                 ))}
               </ul>
               <form action={catalogValuesAction}>
                 <input type="hidden" name="id" value={id} />
                 <Button type="submit" className="w-full" aria-label={`Use the catalog's values for ${title}`}>Use the catalog&apos;s values</Button>
               </form>
-              <p className="text-xs text-muted">Or tap Confirm to keep what the scanner read. Details you typed yourself are never changed.</p>
+              <p className="text-xs text-muted">Or tap Confirm to keep what the reader read. Details you typed yourself are never changed.</p>
             </div>
           ) : null}
         </div>
@@ -102,7 +102,7 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
               </ul>
             </details>
           ) : null}
-          <p className="text-xs text-muted">Picking one fills in only empty details. What the scanner read stays until you choose.</p>
+          <p className="text-xs text-muted">Picking one fills in only empty details. What the reader read stays until you choose.</p>
           <div className="flex gap-2">
             <form action={dismissCandidatesAction} className="flex-1">
               <input type="hidden" name="id" value={id} />
@@ -122,7 +122,7 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
 
       {view.status === "not_checked" ? (
         <>
-          <p className="text-sm"><span className="font-semibold">Catalog not checked.</span> {notCheckedLine} The scanner&apos;s reading is kept.</p>
+          <p className="text-sm"><span className="font-semibold">Catalog not checked.</span> {notCheckedLine} The readerThe scanner&apos;s reading is keptapos;s reading is kept.</p>
           {lookUpButton ? <div className="flex">{lookUpButton}</div> : null}
         </>
       ) : null}

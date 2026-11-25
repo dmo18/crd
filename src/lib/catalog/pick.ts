@@ -49,7 +49,7 @@ export function applyScanCard(tx: Db, item: Item, card: CatalogCard, confidence:
   const row = tx.select().from(catalogCards).where(eq(catalogCards.id, saved.catalogCardId)).get();
   if (!row) return false;
   const { patch, differences } = applyCatalogCard(item, row);
-  // Confirmed only when the catalog agrees with every field the scanner read;
+  // Confirmed only when the catalog agrees with every field the reader read;
   // otherwise it waits in Review with the differences and "Use the catalog's values".
   const confirmed = differences.length === 0 && confidence >= REVIEW_THRESHOLD;
   tx.update(items).set({
@@ -67,7 +67,7 @@ export type PickResult =
  * server stored on the item (never fields sent by the browser). Links the
  * card by the filling rule and clears the list. With no differences the item
  * is confirmed and leaves Review; with differences it stays so the owner can
- * choose "Use the catalog's values" or keep the scanner's.
+ * choose "Use the catalog's values" or keep the reader's.
  */
 export function pickCandidate(itemId: number, position: number, sourceId: string, db: Db = getDb(), now: Date = new Date()): PickResult {
   return db.transaction((tx): PickResult => pickCandidateIn(tx as unknown as Db, itemId, position, sourceId, now), { behavior: "immediate" });
@@ -108,7 +108,7 @@ export function pickCandidateIn(
       if (name && have && ` ${have} `.includes(` ${normalizeText(name)} `)) {
         version = { versionState: "confirmed", versionSource: "catalog", versionOptions: null };
       } else if (name && sourceOf(item, "variation") !== "owner") {
-        // Empty or only read by the scanner: the owner's tap writes the version name, as chooseVersion does.
+        // Empty or only read by the reader: the owner's tap writes the version name, as chooseVersion does.
         const marks = parseFieldSources(after.fieldSources) ?? {};
         // A link the app made by itself names the version from the catalog, not from the owner.
         marks.variation = auto === false ? "owner" : "catalog";
@@ -228,7 +228,7 @@ export function undoLink(itemId: number, db: Db = getDb(), now: Date = new Date(
 
 /**
  * "Use the catalog's values": the item's own linked card replaces the fields
- * the scanner read differently. `owner` fields stay. With `confirm` (Review)
+ * the reader read differently. `owner` fields stay. With `confirm` (Review)
  * the item is confirmed too.
  */
 export function takeCatalogValues(itemId: number, opts: { confirm?: boolean; now?: Date } = {}, db: Db = getDb()): { ok: true; replaced: CatalogField[] } | { ok: false; error: string } {
@@ -346,7 +346,7 @@ export function lookUpAgainLine(r: LookupAgainResult): string {
 
 /** What Review shows for one item: the catalog's part, in plain data for the screen. */
 export type ReviewCatalogView = {
-  /** Linked card line and the fields the scanner read differently. */
+  /** Linked card line and the fields the reader read differently. */
   linked: { line: string; url: string | null; differences: { label: string; read: string; catalog: string }[] } | null;
   status: "candidates" | "none" | "not_checked" | null;
   reason: NotCheckedReason | null;

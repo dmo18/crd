@@ -59,7 +59,7 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
       {total === 0 ? (
         <EmptyState
           title="All caught up"
-          body="Scans the AI is unsure about will wait here for you."
+          body="Scans the reader is unsure about will wait here for you."
           action={<LinkButton href="/scan">Scan a card</LinkButton>}
         />
       ) : (

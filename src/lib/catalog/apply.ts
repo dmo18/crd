@@ -7,16 +7,16 @@ import { isFilled, parseFieldSources, sourceOf, type FieldSources } from "./sour
 
 /** The part of a catalog card the filling rule needs. */
 export type CatalogValues = Pick<CatalogCardRow, "id" | CatalogField>;
-/** A field the scanner read differently from the catalog. Shown under the pick. */
+/** A field the reader read differently from the catalog. Shown under the pick. */
 export type CatalogDifference = { field: CatalogField; itemValue: string | number; catalogValue: string | number };
 export type ApplyResult = {
   /** Columns to write on the item. Never `firstSuggestion`, never a value column. */
   patch: Partial<Item>;
   /** Fields that were empty and are now filled from the catalog. */
   filled: CatalogField[];
-  /** Fields the scanner read that were replaced by the catalog's value (only with `useCatalogValues`). */
+  /** Fields the reader read that were replaced by the catalog's value (only with `useCatalogValues`). */
   replaced: CatalogField[];
-  /** Fields the scanner read that still differ from the catalog. */
+  /** Fields the reader read that still differ from the catalog. */
   differences: CatalogDifference[];
 };
 

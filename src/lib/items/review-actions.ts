@@ -108,7 +108,7 @@ export async function pickCandidateAction(_prev: CatalogActionState, formData: F
   return { message: r.confirmed ? null : "Linked. Some details differ, see below." };
 }
 
-/** "Use the catalog's values" in Review: replaces what the scanner read differently, then confirms. */
+/** "Use the catalog's values" in Review: replaces what the reader read differently, then confirms. */
 export async function catalogValuesAction(formData: FormData): Promise<void> {
   await requireOwner();
   const id = idSchema.safeParse(formData.get("id"));

@@ -141,7 +141,7 @@ export function readTexts(item: VersionItem): string[] {
 
 function readEvidence(name: string): Evidence {
   const words = name.toUpperCase();
-  return { from: "reading", text: `The scanner read the ${name.trim().includes(" ") ? "words" : "word"} ${words} on the card`, url: null };
+  return { from: "reading", text: `The reader read the ${name.trim().includes(" ") ? "words" : "word"} ${words} on the card`, url: null };
 }
 
 function addEvidence(o: VersionOption, e: Evidence): void {

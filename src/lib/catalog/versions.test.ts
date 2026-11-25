@@ -97,7 +97,7 @@ describe("buildVersionOptions on the recordings", () => {
     const read = { ...jones, firstSuggestion: buildFirstSuggestion({ variation: "TIFFANY" }, { confidence: 0.5, reader: "free", at: T0 }) };
     const o = buildVersionOptions(read, SEARCHES["1991 topps 333 jones"]);
     expect(names(o)).toEqual([BASE_NAME, "Tiffany", "Desert Shield", "O-Pee-Chee", ANOTHER_NAME, NOT_SURE_NAME]);
-    expect(o[1].evidence[0]).toEqual({ from: "reading", text: "The scanner read the word TIFFANY on the card", url: null });
+    expect(o[1].evidence[0]).toEqual({ from: "reading", text: "The reader read the word TIFFANY on the card", url: null });
     // A read variation field of the item counts too; an owner's one does not.
     const field = { ...jones, variation: "Topps Desert Shield", fieldSources: JSON.stringify({ variation: "reading" }) };
     expect(names(buildVersionOptions(field, SEARCHES["1991 topps 333 jones"])).slice(0, 2)).toEqual([BASE_NAME, "Desert Shield"]);

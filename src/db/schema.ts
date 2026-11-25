@@ -194,7 +194,7 @@ export const items = sqliteTable("items", {
   // Catalog (all null on items from before the catalog)
   /** The confirmed catalog card this item is, when linked. */
   catalogCardId: integer("catalog_card_id").references((): AnySQLiteColumn => catalogCards.id, { onDelete: "set null" }),
-  /** JSON, written once when a scan makes the item and never changed: what the scanner first read. See src/lib/catalog/sources.ts. */
+  /** JSON, written once when a scan makes the item and never changed: what the reader first read. See src/lib/catalog/sources.ts. */
   firstSuggestion: text("first_suggestion"),
   /** JSON: for each filled catalog field where its value came from. Null or a missing field means the owner. */
   fieldSources: text("field_sources"),
@@ -212,7 +212,7 @@ export const items = sqliteTable("items", {
   serialCopy: text("serial_copy"),
   /** Serial print run, digits only, no leading zeros ("100"). `serialNumber` is rebuilt from the two parts. */
   serialEdition: text("serial_edition"),
-  /** JSON: what the scanner read as a serial number (copy, edition, the line, weak). Cleared when the owner answers. */
+  /** JSON: what the reader read as a serial number (copy, edition, the line, weak). Cleared when the owner answers. */
   serialSuggested: text("serial_suggested"),
   /** Rookie mark. `isRookie` is true exactly when this is `yes`; write both with withRookie() (src/lib/items/rookie.ts). Null means not recorded. */
   rookieState: text("rookie_state", { enum: ROOKIE_STATES }),

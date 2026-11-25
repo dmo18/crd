@@ -9,7 +9,7 @@ const NONE: AskState = { message: null };
 export type SerialAskView = { copy: string | null; edition: string; line: string; weak: boolean; why: string[] };
 
 /**
- * "Is this the serial number?" The scanner only read it; nothing is saved
+ * "Is this the serial number?" The reader only read it; nothing is saved
  * until a tap. A weak read has no Yes button, only Fix it and No.
  */
 export function SerialAsk({ itemId, title, view }: { itemId: number; title: string; view: SerialAskView }) {
@@ -20,7 +20,7 @@ export function SerialAsk({ itemId, title, view }: { itemId: number; title: stri
   return (
     <form action={action} className="flex flex-col gap-2 rounded-xl border border-border bg-surface-2 p-3" aria-labelledby={`${hid}-q`}>
       <input type="hidden" name="id" value={itemId} />
-      <p id={`${hid}-q`} className="text-base font-semibold break-words">The scanner read {read}. Is this the serial number?</p>
+      <p id={`${hid}-q`} className="text-base font-semibold break-words">The reader read {read}. Is this the serial number?</p>
       {view.weak ? (
         <>
           <p className="text-sm break-words">It came from this line of text: &quot;{view.line}&quot;</p>

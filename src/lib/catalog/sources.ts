@@ -66,7 +66,7 @@ export function markOwnerChanges(existing: Pick<Item, CatalogField | "fieldSourc
   return changed ? JSON.stringify(marks) : undefined;
 }
 
-/** What the scanner first read, kept as it was for good (`items.firstSuggestion`). */
+/** What the reader first read, kept as it was for good (`items.firstSuggestion`). */
 export const firstSuggestionSchema = z.object({
   v: z.literal(1),
   fields: z.object({
@@ -79,7 +79,7 @@ export const firstSuggestionSchema = z.object({
     team: z.string().max(200).optional(),
     variation: z.string().max(200).optional(),
   }),
-  /** 0 to 1, the scanner's own figure. */
+  /** 0 to 1, the reader's own figure. */
   confidence: z.number().min(0).max(1).nullable(),
   /** Which reader made it, e.g. "free". */
   reader: z.string().max(40).nullable(),

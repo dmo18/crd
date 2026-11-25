@@ -97,7 +97,7 @@ export function serialColumns(parts: SerialParts | null): { serialCopy: string |
 }
 
 // ---------------------------------------------------------------------------
-// What the scanner read: only ever a suggestion (`items.serialSuggested`)
+// What the reader read: only ever a suggestion (`items.serialSuggested`)
 
 /** What `items.serialSuggested` holds: the read, the line it stood in, and whether it is weak. */
 export type SerialSuggestion = { copy: string | null; edition: string; line: string; weak: boolean; why: string[] };
