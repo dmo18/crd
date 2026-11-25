@@ -1,9 +1,11 @@
+import { PHOTO_EDGE } from "@/lib/images/edges";
+
 /**
  * Shrinks a photo in the browser before upload: long edge at most maxEdge,
  * JPEG, orientation applied. Falls back to the original file on any problem.
  * Browser only.
  */
-export async function shrinkPhoto(file: File, maxEdge = 2000, quality = 0.85): Promise<File> {
+export async function shrinkPhoto(file: File, maxEdge = PHOTO_EDGE, quality = 0.85): Promise<File> {
   try {
     const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
     try {

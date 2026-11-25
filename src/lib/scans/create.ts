@@ -64,7 +64,7 @@ export async function createScan(
   const stored: { role: ScanPhotoRole; image: StoredImage }[] = [];
   try {
     for (const photo of input.photos) {
-      stored.push({ role: photo.role, image: await saveUpload(photo.data) });
+      stored.push({ role: photo.role, image: await saveUpload(photo.data, { manyCards: input.mode === "multi" }) });
     }
     return db.transaction((tx) => {
       const scan = tx.insert(scans).values({ mode: input.mode, hint, locationId, clientKey }).returning({ id: scans.id }).get();

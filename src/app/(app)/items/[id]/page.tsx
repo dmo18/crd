@@ -33,7 +33,8 @@ import { parseSuggestion } from "@/lib/items/serial";
 
 export const metadata = { title: "Item" };
 
-const ROLE_NAMES = { front: "Front", back: "Back", crop: "Close-up", source: "Original photo" } as const;
+// A many-cards scan's cut-out of a card (role crop) is that card's front.
+const ROLE_NAMES = { front: "Front", back: "Back", crop: "Front", source: "Original photo" } as const;
 const ROLE_ORDER = { crop: 0, front: 1, back: 2, source: 3 } as const;
 
 /** The two questions a scan leaves: serial number and rookie card. They show only when there is something to answer. */

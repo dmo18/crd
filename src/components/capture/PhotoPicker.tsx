@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui";
+import { PHOTO_EDGE } from "@/lib/images/edges";
 import { canDecode, shrinkPhoto } from "./shrink";
 
 type Props = {
@@ -11,12 +12,14 @@ type Props = {
   onChange: (files: File[]) => void;
   disabled?: boolean;
   captureFirst?: boolean;
+  /** Longest side a photo is shrunk to before sending (default PHOTO_EDGE). */
+  maxEdge?: number;
 };
 
 const BUTTON_STYLE =
   "inline-flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-xl border px-4 text-base font-semibold focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent";
 
-export function PhotoPicker({ label, max = 1, value, onChange, disabled = false, captureFirst = false }: Props) {
+export function PhotoPicker({ label, max = 1, value, onChange, disabled = false, captureFirst = false, maxEdge = PHOTO_EDGE }: Props) {
   const id = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +46,7 @@ export function PhotoPicker({ label, max = 1, value, onChange, disabled = false,
       let unreadable = false;
       for (const file of picked) {
         if (valueRef.current.length + added.length >= max) break;
-        const shrunk = await shrinkPhoto(file);
+        const shrunk = await shrinkPhoto(file, maxEdge);
         if (shrunk === file && !(await canDecode(file))) {
           unreadable = true;
           continue;

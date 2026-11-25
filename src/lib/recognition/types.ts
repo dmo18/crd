@@ -196,6 +196,11 @@ export type CardCutRecord = { box: Box; outline: [number, number][]; tilt: numbe
 
 export type RecognizedItem = z.infer<typeof recognizedItemSchema> & {
   catalog?: RecognizedCatalog; evidence?: ReadEvidence; backPhoto?: BackPhoto; fixes?: PhotoFix[]; cuts?: CardCuts;
+  /**
+   * Many cards: the side the item's own cut-out shows. Left out: its front.
+   * "back" for a card read from its back alone. Like `cuts`, never part of the zod schema.
+   */
+  cropSide?: "front" | "back";
 };
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;
 

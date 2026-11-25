@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { PhotoPicker } from "@/components/capture/PhotoPicker";
 import { shrinkPhoto } from "@/components/capture/shrink";
+import { MANY_CARDS_EDGE, PHOTO_EDGE } from "@/lib/images/edges";
 import { Badge, Button, Card, INPUT_CLASS, LinkButton, Notice } from "@/components/ui";
 import type { ScanMode } from "@/db/schema";
 import {
@@ -168,6 +169,7 @@ export function ScanFlow({ rules, locations = [] }: { rules: Rules; locations?: 
             key={mode}
             label={mode === "multi" ? "Photos of your cards" : mode === "sealed" ? "Photos of the sealed product" : "Photos of the lot"}
             max={rules[mode].max}
+            maxEdge={mode === "multi" ? MANY_CARDS_EDGE : PHOTO_EDGE}
             value={source}
             onChange={setSource}
             captureFirst

@@ -64,6 +64,13 @@ describe("saveUpload", () => {
     expect([out.width, out.height]).toEqual([2000, 1000]);
   });
 
+  it("keeps a photo of several cards up to 4000 px, so each card's small print stays readable", async () => {
+    const out = await saveUpload(await solid(5000, 2500).jpeg().toBuffer(), { manyCards: true });
+    expect([out.width, out.height]).toEqual([4000, 2000]);
+    const small = await saveUpload(await solid(3000, 1500).jpeg().toBuffer(), { manyCards: true });
+    expect([small.width, small.height]).toEqual([3000, 1500]);
+  });
+
   it("applies EXIF rotation and strips metadata", async () => {
     const input = await solid(400, 200).jpeg().withExif({ IFD0: { Copyright: "secret" } }).withMetadata({ orientation: 6 }).toBuffer();
     expect((await sharp(input).metadata()).orientation).toBe(6);

@@ -144,6 +144,9 @@ describe("the owner's many-cards try, recorded", () => {
     expect(millsBack.sport).not.toBe("baseball");
     expect(millsBack.notes).toContain(ONE_SIDE_NOTE);
     expect(millsBack.confidence).toBeLessThan(REVIEW_THRESHOLD);
+    // Its own cut-out shows the back; a front's cut-out is its front.
+    expect(millsBack.cropSide).toBe("back");
+    expect(hardaway.cropSide).toBeUndefined();
   });
 
   it("a front only scan reads each front as before: no pairing, no one side note", async () => {

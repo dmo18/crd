@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import sharp from "sharp";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, items, locations, scans, valuations } from "@/db/schema";
@@ -41,6 +41,16 @@ describe("createScan", () => {
     expect(scan.status).toBe("queued");
     expect(scan.hint).toBe("1989");
     expect(db.select().from(images).all().map((i) => i.role)).toEqual(["front", "back"]);
+  });
+
+  it("keeps a many-cards photo larger than a one card photo (each card's small print is read from it)", async () => {
+    const big = await sharp({ create: { width: 3000, height: 4000, channels: 3, background: "#336699" } }).jpeg().toBuffer();
+    await createScan({ mode: "multi", photos: [{ role: "source", data: big }] }, db);
+    await createScan({ mode: "single", photos: [{ role: "front", data: big }] }, db);
+    expect(db.select({ w: images.width, h: images.height, role: images.role }).from(images).all()).toEqual([
+      { w: 3000, h: 4000, role: "source" },
+      { w: 1500, h: 2000, role: "front" },
+    ]);
   });
 
   it("rejects wrong photo sets and bad files", async () => {
@@ -118,6 +128,20 @@ describe("processScan", () => {
     expect(db.select().from(images).where(eq(images.role, "source")).get()!.itemId).toBeNull();
   });
 
+  it("a card read from its back alone keeps its cut-out as its back photo, not as a front", async () => {
+    const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }] }, db);
+    const backOnly: Recognizer = {
+      name: "fake-model",
+      async recognize() {
+        const read = recognizedItemSchema.parse({ ...griffey, sourceIndex: 0, box: { x: 0.05, y: 0.05, w: 0.4, h: 0.4 } });
+        return [{ ...read, cropSide: "back" as const }];
+      },
+    };
+    await processScan(scanId, { db, recognizer: backOnly });
+    const [card] = db.select().from(items).all();
+    expect(db.select().from(images).where(eq(images.itemId, card.id)).all().map((i) => i.role)).toEqual(["back"]);
+  });
+
   it("keeps a paired back from another photo of a many-card scan as that card's back photo (12R.7)", async () => {
     const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }, { role: "source", data: await photo("#993333") }] }, db);
     const paired: Recognizer = {
@@ -133,7 +157,7 @@ describe("processScan", () => {
     const roles = (id: number) => db.select().from(images).where(eq(images.itemId, id)).all().map((i) => i.role).sort();
     expect(roles(first.id)).toEqual(["back", "crop"]);
     expect(roles(second.id)).toEqual(["crop"]);
-    const back = db.select().from(images).where(eq(images.role, "back")).get()!;
+    const back = db.select().from(images).where(and(eq(images.role, "back"), eq(images.itemId, first.id))).get()!;
     expect((await readPhoto(back.file)).data.length).toBeGreaterThan(0);
     // Both original photos stay with the scan.
     expect(db.select().from(images).where(eq(images.role, "source")).all().every((i) => i.itemId === null)).toBe(true);

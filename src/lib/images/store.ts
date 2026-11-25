@@ -6,14 +6,16 @@ import { env } from "@/lib/env";
 import type { Box, CardCutRecord } from "@/lib/recognition/types";
 import { cutOutCard } from "@/lib/free/cut-out";
 import { applyEdit, type PhotoEdit } from "./edit";
+import { MANY_CARDS_EDGE, PHOTO_EDGE } from "./edges";
 
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 export const MAX_PHOTOS_PER_SCAN = 12;
 
 /**
  * Two forms of every photo:
- * - a working copy: JPEG up to 2000 px, kept only while card reading may
- *   still need it, in DATA_DIR/uploads/work;
+ * - a working copy: JPEG up to 2000 px (4000 px for a photo of several
+ *   cards, so each card's small print is read from the photo as taken),
+ *   kept only while card reading may still need it, in DATA_DIR/uploads/work;
  * - the archive: AVIF, long edge 1200 px for a card (1600 px for a scan's
  *   whole photo of several items), plus a 320 px AVIF small picture, in
  *   DATA_DIR/uploads.
@@ -21,7 +23,7 @@ export const MAX_PHOTOS_PER_SCAN = 12;
  * colour, small print and card edges stay clean at about a tenth of the
  * old JPEG size.
  */
-const WORK_EDGE = 2000;
+const WORK_EDGE = PHOTO_EDGE;
 export const ARCHIVE_EDGE = 1200;
 export const SOURCE_ARCHIVE_EDGE = 1600;
 const THUMB_EDGE = 320;
@@ -129,13 +131,13 @@ async function writeAtomic(full: string, data: Buffer): Promise<void> {
  * Saves a working copy (JPEG) and the small picture (AVIF). The archive copy
  * is made later by archivePhoto, once card reading is finished.
  */
-async function writeWorking(pipeline: () => Sharp): Promise<StoredImage> {
+async function writeWorking(pipeline: () => Sharp, edge: number = WORK_EDGE): Promise<StoredImage> {
   const dir = uploadsDir();
   const work = workDir();
   await fs.mkdir(work, { recursive: true });
   const id = crypto.randomUUID();
   const main = await pipeline()
-    .resize(WORK_EDGE, WORK_EDGE, { fit: "inside", withoutEnlargement: true })
+    .resize(edge, edge, { fit: "inside", withoutEnlargement: true })
     .jpeg({ quality: 85, mozjpeg: true })
     .toBuffer({ resolveWithObject: true });
   const thumb = await avif(sharp(main.data, DECODE_OPTIONS), THUMB_EDGE).toBuffer();
@@ -153,7 +155,8 @@ async function writeWorking(pipeline: () => Sharp): Promise<StoredImage> {
   return out;
 }
 
-export async function saveUpload(input: Buffer): Promise<StoredImage> {
+/** `manyCards`: a photo of several cards, kept larger (MANY_CARDS_EDGE). */
+export async function saveUpload(input: Buffer, opts: { manyCards?: boolean } = {}): Promise<StoredImage> {
   if (!input || input.length === 0) throw new ImageError("That file is empty.");
   if (input.length > MAX_UPLOAD_BYTES) throw new ImageError("That photo is too large. The limit is 15 MB.");
   try {
@@ -164,7 +167,7 @@ export async function saveUpload(input: Buffer): Promise<StoredImage> {
     const w = (swapped ? meta.height : meta.width) ?? 0;
     const h = (swapped ? meta.width : meta.height) ?? 0;
     if (Math.min(w, h) < MIN_SIDE) throw new ImageError("That photo is too small.");
-    return await writeWorking(() => sharp(input, DECODE_OPTIONS).rotate());
+    return await writeWorking(() => sharp(input, DECODE_OPTIONS).rotate(), opts.manyCards ? MANY_CARDS_EDGE : WORK_EDGE);
   } catch (e) {
     if (e instanceof ImageError) throw e;
     throw new ImageError(NOT_A_PHOTO);

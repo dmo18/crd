@@ -428,6 +428,7 @@ export class FreeRecognizer implements Recognizer {
         // Backs only: each back is a card, read as a back.
         const card = await this.cardFromText(null, side.text, where);
         withCropTurns(card, side);
+        card.item.cropSide = "back";
         out.push(card);
         continue;
       }
@@ -435,6 +436,7 @@ export class FreeRecognizer implements Recognizer {
       if (parseCardText(null, side.text).player) {
         const card = await this.cardFromText(null, side.text, where, { lone: true });
         withCropTurns(card, side);
+        card.item.cropSide = "back";
         out.push(card);
       }
     }

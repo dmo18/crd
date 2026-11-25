@@ -181,7 +181,8 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
           }).run();
         }
         const crop = crops.get(i);
-        if (crop) tx.insert(images).values({ itemId: item.id, scanId, role: "crop", ...crop }).run();
+        // The cut-out is the card's front (role crop, shown as Front), or its back when only the back was found.
+        if (crop) tx.insert(images).values({ itemId: item.id, scanId, role: r.cropSide === "back" ? "back" : "crop", ...crop }).run();
         const back = backs.get(i);
         if (back) tx.insert(images).values({ itemId: item.id, scanId, role: "back", ...back }).run();
       });
