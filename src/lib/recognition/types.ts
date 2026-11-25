@@ -186,7 +186,17 @@ export type ReadFix = {
  */
 export type PhotoFix = ReadFix & { sourceIndex: number; role: "front" | "back" };
 
-export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence; backPhoto?: BackPhoto; fixes?: PhotoFix[] };
+/**
+ * Many cards: how each side's cut-out was made from its photo (its outline
+ * and tilt; see src/lib/free/cut-out.ts), so the stored picture is the very
+ * picture that was read. Like `fixes`, never part of the zod schema.
+ */
+export type CardCuts = { front?: CardCutRecord; back?: CardCutRecord };
+export type CardCutRecord = { box: Box; outline: [number, number][]; tilt: number };
+
+export type RecognizedItem = z.infer<typeof recognizedItemSchema> & {
+  catalog?: RecognizedCatalog; evidence?: ReadEvidence; backPhoto?: BackPhoto; fixes?: PhotoFix[]; cuts?: CardCuts;
+};
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;
 
 export const recognitionResultSchema = z.object({

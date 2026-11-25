@@ -242,3 +242,47 @@ describe("many cards: the stored crop is upright", () => {
     }
   });
 });
+
+describe("many cards: each cut-out as a one card photo (review fix 3)", () => {
+  it("cuts along the card's own outline (no neighbour shows) and stands a card lying on its side up", async () => {
+    // A card lying sideways (top to the left), and a blue card right beside it.
+    const c = { x: 250, y: 250, w: 700, h: 500 };
+    const base = await tablePhoto({ ...SIDEWAYS, red: "left" });
+    const source = await sharp(base).composite([{ input: { create: { width: 1200, height: 60, channels: 3, background: "#0000ff" } }, top: 190, left: 0 }]).jpeg({ quality: 92 }).toBuffer();
+    const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: source }] }, db);
+    // A tilted outline inside the box: the corners of the box are painted plain.
+    const outline: [number, number][] = [[(c.x + 30) / 1200, c.y / 900], [(c.x + c.w) / 1200, (c.y + 20) / 900], [(c.x + c.w - 30) / 1200, (c.y + c.h) / 900], [c.x / 1200, (c.y + c.h - 20) / 900]];
+    const recognizer: Recognizer = {
+      name: "fake-model",
+      async recognize() {
+        return [{
+          ...recognizedItemSchema.parse({ kind: "card", confidence: 0.9, player: "Test Player", box: sidewaysBox }),
+          // The text leans to a quarter turn without settling it.
+          fixes: [{ sourceIndex: 0, role: "front", ...fix({ turn: 90, turnTrusted: false }) }],
+          cuts: { front: { box: sidewaysBox, outline, tilt: 0 } },
+        }];
+      },
+    };
+    await processScan(scanId, { db, recognizer });
+    const crop = db.select().from(images).where(eq(images.scanId, scanId)).all().find((i) => i.role === "crop")!;
+    expect(crop.height).toBeGreaterThan(crop.width);
+    // Exactly the card's box, no margin of the table and the card beside it.
+    expect(crop.width).toBeLessThanOrEqual(500);
+    const { data: px, info } = await sharp((await readPhoto(crop.file)).data).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    let blue = 0;
+    for (let i = 0; i < px.length; i += 3) if (px[i + 2]! > 180 && px[i]! < 80 && px[i + 1]! < 80) blue++;
+    expect(blue).toBe(0);
+    expect(info.height).toBeGreaterThan(info.width);
+    const red = await redHalves((await readPhoto(crop.file)).data);
+    expect(red.top).toBeGreaterThan(0);
+    expect(red.bottom).toBe(0);
+  });
+
+  it("planFix: a quarter turn the text leans to is made when the card lies on its side", () => {
+    const lying = { x: 0.1, y: 0.2, w: 0.8, h: 0.6 };
+    expect(planFix(fix({ turn: 270, turnTrusted: false, card: lying, cardTrusted: true }), 1000, 900)?.turn).toBe(270);
+    // Standing card, or a box not trusted: no turn.
+    expect(planFix(fix({ turn: 270, turnTrusted: false, card: { x: 0.2, y: 0.1, w: 0.5, h: 0.8 }, cardTrusted: true }), 1000, 900)?.turn ?? 0).toBe(0);
+    expect(planFix(fix({ turn: 270, turnTrusted: false, card: lying, cardTrusted: false }), 1000, 900)).toBeNull();
+  });
+});

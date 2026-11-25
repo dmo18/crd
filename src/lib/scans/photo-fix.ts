@@ -16,14 +16,22 @@ export type FixPlan = { turn: 0 | 90 | 180 | 270; box: Box | null };
 
 /**
  * What to do to a stored photo after reading (S1b). Turn only when the
- * direction is trusted. Cut only when the card box is trusted, covers 20 to
+ * direction is trusted, or when a quarter turn the text leans to agrees with
+ * a card lying on its side. Cut only when the card box is trusted, covers 20 to
  * 95 percent of the photo, has the shape of a card and holds every text line
  * the reader used; the cut has a 3 percent margin. Null when nothing is to be done.
  */
 export function planFix(fix: ReadFix, width: number, height: number): FixPlan | null {
-  const turn = fix.turnTrusted ? fix.turn : 0;
-  let box: Box | null = null;
   const c = fix.card;
+  // A quarter turn the text leans to but does not settle is made when the card
+  // itself lies on its side: a trusted card box shaped like a card turned a
+  // quarter (wider than tall). Text and shape then agree.
+  const lying = Boolean(c && fix.cardTrusted && width > 0 && height > 0 && (() => {
+    const ratio = (c.w * width) / (c.h * height);
+    return 1 / ratio >= SHAPE_LOW && 1 / ratio <= SHAPE_HIGH;
+  })());
+  const turn = fix.turnTrusted || ((fix.turn === 90 || fix.turn === 270) && lying) ? fix.turn : 0;
+  let box: Box | null = null;
   if (c && fix.cardTrusted && width > 0 && height > 0) {
     const share = c.w * c.h;
     const ratio = (c.w * width) / (c.h * height);

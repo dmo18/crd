@@ -28,6 +28,22 @@ import { getTextReader, ReaderDownError, type OcrResult, type ReadOptions, type 
 import { parseCardText, parseProductText, teamFromList, type ParsedCard } from "./parse";
 import { lookupPlayer, type PlayerFacts } from "./wikidata";
 import { looksLikeBack, ONE_SIDE_NOTE, pairSides, type SideRead } from "./multi";
+import { CUT_BLANK, cutOutCard, maskCard, untilt, type CardCut } from "./cut-out";
+
+/** The details a back's read gives on its own. */
+const BACK_FIELDS = ["year", "brand", "setName", "cardNumber", "player", "team", "sport"] as const;
+
+/** A second read of a back is better: every detail the first gave, the same, and at least one more. */
+function betterRead(first: OcrResult | null, again: OcrResult): boolean {
+  const a = parseCardText(null, first);
+  const b = parseCardText(null, again);
+  let more = 0;
+  for (const f of BACK_FIELDS) {
+    if (a[f] != null && a[f] !== "" && b[f] !== a[f]) return false;
+    if ((a[f] == null || a[f] === "") && b[f] != null && b[f] !== "") more++;
+  }
+  return more > 0;
+}
 
 /**
  * Free card reading with no keys and no paid services:
@@ -59,22 +75,44 @@ export type FreeDeps = {
   clock?: () => number;
 };
 
-type CropSide = { photo: number; box: Box | null; text: OcrResult | null };
+type CropSide = { photo: number; box: Box | null; text: OcrResult | null; cut?: CardCut };
 
 /**
- * Many cards: the turn that makes each stored crop upright (S1b). Only the
- * turn is reported; the card is already cut out. The item's own crop is its
- * front side, or its lone side; a back paired with a front is stored as the
- * card's back (item.backPhoto) and gets its own entry.
+ * Many cards: how each stored cut-out is shown (S1b), with the same rules as
+ * a one card photo: the turn, and the card box within the cut-out for the
+ * tight cut. `cuts` says how the cut-out itself was made (its outline and
+ * tilt), so the stored picture is the very picture that was read. The item's
+ * own crop is its front side, or its lone side; a back paired with a front is
+ * stored as the card's back (item.backPhoto) and gets its own entry.
  */
 function withCropTurns(card: ReadCard, own: CropSide, pairedBack?: CropSide): void {
   const fixes: PhotoFix[] = [];
+  const cuts: NonNullable<RecognizedItem["cuts"]> = {};
   const add = (side: CropSide, role: "front" | "back") => {
-    if (side.box && side.text?.fix) fixes.push({ ...side.text.fix, card: null, cardTrusted: false, sourceIndex: side.photo, role });
+    if (side.box && side.text?.fix) {
+      // Without the cut-out's own record the card box would not fit the stored crop: only the turn then.
+      fixes.push({ ...side.text.fix, ...(side.cut ? {} : { card: null, cardTrusted: false }), sourceIndex: side.photo, role });
+    }
+    if (side.box && side.cut) cuts[role] = side.cut;
   };
   add(own, "front");
   if (pairedBack) add(pairedBack, "back");
   if (fixes.length) card.item.fixes = fixes;
+  if (cuts.front || cuts.back) card.item.cuts = cuts;
+}
+
+/** A cut-out shorter than this on its long side is enlarged before reading, as a one card photo would be read. */
+const CUT_READ_EDGE = 1600;
+/** At most this many times. */
+const CUT_MAX_UP = 3;
+
+/** The cut-out as JPEG for the reader, enlarged when it is small (a card in a photo of several is small). */
+async function forReading(png: Buffer): Promise<Buffer> {
+  const meta = await sharp(png).metadata();
+  const long = Math.max(meta.width ?? 1, meta.height ?? 1);
+  const f = Math.min(CUT_MAX_UP, CUT_READ_EDGE / long);
+  const pipe = f > 1.05 ? sharp(png).resize(Math.round((meta.width ?? 1) * f), Math.round((meta.height ?? 1) * f), { fit: "fill", kernel: "lanczos3" }) : sharp(png);
+  return pipe.jpeg({ quality: 90 }).toBuffer();
 }
 
 /** A card as read, with the name spellings the catalog look up may try. */
@@ -166,49 +204,8 @@ export function applyFills(item: RecognizedItem, result: Pick<FindResult, "fills
   if (result.notes.length > 0) item.notes = [item.notes, ...result.notes].filter(Boolean).join(" ").slice(0, 600);
 }
 
-function clamp01(n: number) {
-  return Math.min(1, Math.max(0, n));
-}
-
-async function cropPhoto(photo: RecognitionPhoto, box: Box): Promise<Buffer> {
-  const left = Math.floor(clamp01(box.x) * photo.width);
-  const top = Math.floor(clamp01(box.y) * photo.height);
-  const width = Math.max(16, Math.min(photo.width - left, Math.round(box.w * photo.width)));
-  const height = Math.max(16, Math.min(photo.height - top, Math.round(box.h * photo.height)));
-  return sharp(photo.data).extract({ left, top, width, height }).jpeg({ quality: 90 }).toBuffer();
-}
-
 function cornersOf(b: Box): [number, number][] {
   return [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]];
-}
-
-/** Colour put where the photo is not this card: plain, like a dark table, with no text in it. */
-const BLANK = "#383838";
-const OUTLINE_GROW = 1.03;
-
-/**
- * One card cut out of a many-card photo: its upright box, with everything
- * outside the card's own outline (a turned card does not fill its box)
- * painted plain, so a corner of the card next to it is never read with it.
- */
-async function isolate(photo: RecognitionPhoto, shape: CardShape): Promise<Buffer> {
-  const crop = await cropPhoto(photo, shape.box);
-  const box = cornersOf(shape.box);
-  const inBox = shape.outline.every(([x, y], k) => Math.abs(x - box[k][0]) < 1e-6 && Math.abs(y - box[k][1]) < 1e-6);
-  if (inBox) return crop;
-  const meta = await sharp(crop).metadata();
-  const w = meta.width ?? 1;
-  const h = meta.height ?? 1;
-  // A little more than the found outline, so the card's own edge is never cut.
-  const cx = shape.outline.reduce((t, p) => t + p[0], 0) / shape.outline.length;
-  const cy = shape.outline.reduce((t, p) => t + p[1], 0) / shape.outline.length;
-  const points = shape.outline
-    .map(([x, y]): [number, number] => [cx + (x - cx) * OUTLINE_GROW, cy + (y - cy) * OUTLINE_GROW])
-    .map(([x, y]) => `${(((x - shape.box.x) / shape.box.w) * w).toFixed(1)},${(((y - shape.box.y) / shape.box.h) * h).toFixed(1)}`)
-    .join(" ");
-  const keep = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><polygon points="${points}" fill="#fff"/></svg>`);
-  const cut = await sharp(crop).ensureAlpha().composite([{ input: keep, blend: "dest-in" }]).png().toBuffer();
-  return sharp(cut).flatten({ background: BLANK }).jpeg({ quality: 90 }).toBuffer();
 }
 
 function formatKeyCard(k: KeyCard): string {
@@ -354,7 +351,7 @@ export class FreeRecognizer implements Recognizer {
    * the owner with a note; a back alone counts only with a name on it.
    */
   private async multi(photos: RecognitionPhoto[]): Promise<ReadCard[]> {
-    const sides: (SideRead & { box: Box | null })[] = [];
+    const sides: (SideRead & { box: Box | null; cut?: CardCut; asBack?: boolean })[] = [];
     for (const [index, photo] of photos.entries()) {
       let shapes: CardShape[] = [];
       try {
@@ -370,14 +367,16 @@ export class FreeRecognizer implements Recognizer {
       for (const shape of shapes) {
         let text: OcrResult | null = null;
         let back = false;
+        let cut: CardCut | undefined;
         try {
-          const crop = await this.straighten(await isolate(photo, shape));
-          text = await this.read(crop, { backIf: (first) => (back = looksLikeBack(first)) });
+          const made = await this.cutOut(photo, shape);
+          cut = made.cut;
+          text = await this.read(await sharp(made.png).jpeg({ quality: 90 }).toBuffer(), { backIf: (first) => (back = looksLikeBack(first)) });
         } catch (err) {
           if (err instanceof RecognitionError) throw err;
           text = null;
         }
-        sides.push({ photo: index, box: shape.box, text, back: back || looksLikeBack(text) });
+        sides.push({ photo: index, box: shape.box, text, back: back || looksLikeBack(text), cut, asBack: back });
       }
     }
 
@@ -389,6 +388,22 @@ export class FreeRecognizer implements Recognizer {
     // "Lone" makes sense only when a partner could have been in the scan:
     // fronts and backs found in different photos. A scan of fronts only reads as before.
     const canPair = apart.some((f) => !f.s.back && apart.some((b) => b.s.back && b.s.photo !== f.s.photo));
+
+    // A paired back is read again as a back, enlarged to the size a one card
+    // photo is read at (the copyright line and the corners are small in a
+    // photo of several cards). The new read is kept only when it gives every
+    // detail the first one gave, the same, and more.
+    for (const [, b] of pairs) {
+      const back = sides[b];
+      if (!back.cut) continue;
+      try {
+        const png = await cutOutCard(photos[back.photo].data, back.cut);
+        const again = await this.read(await forReading(png), { back: true });
+        if (again && betterRead(back.text, again)) back.text = again;
+      } catch (err) {
+        if (err instanceof RecognitionError) throw err;
+      }
+    }
 
     const out: ReadCard[] = [];
     for (const [i, side] of sides.entries()) {
@@ -426,15 +441,21 @@ export class FreeRecognizer implements Recognizer {
     return out;
   }
 
-  /** Turns a tilted card crop upright so the text runs straight. */
-  private async straighten(crop: Buffer): Promise<Buffer> {
+  /**
+   * One card cut out of a photo along its own outline and turned straight
+   * (cut-out.ts), with the record of how, so the stored picture is the same.
+   */
+  private async cutOut(photo: RecognitionPhoto, shape: CardShape): Promise<{ png: Buffer; cut: CardCut }> {
+    const masked = await maskCard(photo.data, shape.box, shape.outline);
+    let tilt = 0;
     try {
-      const tilt = await this.tilt(crop);
-      if (!Number.isFinite(tilt) || Math.abs(tilt) < MIN_STRAIGHTEN_DEG) return crop;
-      return await sharp(crop).rotate(-tilt, { background: "#ffffff" }).jpeg({ quality: 90 }).toBuffer();
+      const t = await this.tilt(masked);
+      if (Number.isFinite(t) && Math.abs(t) >= MIN_STRAIGHTEN_DEG) tilt = t;
     } catch {
-      return crop;
+      tilt = 0;
     }
+    const cut: CardCut = { box: shape.box, outline: shape.outline, tilt };
+    return { png: await untilt(masked, tilt, CUT_BLANK), cut };
   }
 
   private async findPlayer(parsed: ParsedCard): Promise<{ facts: PlayerFacts; read: string } | null> {

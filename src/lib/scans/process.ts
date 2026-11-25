@@ -5,7 +5,7 @@ import { images, items, scans, valuations, type ImageRow, type ValueSource } fro
 import { startPhotoArchiver } from "@/lib/images/archive";
 import { fixPhoto } from "@/lib/items/photos";
 import { planFix } from "./photo-fix";
-import { cropStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
+import { cropStored, cutStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
 import { autoLinkIn } from "@/lib/catalog/pick";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
@@ -48,6 +48,17 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
 function turnOf(r: RecognizedItem, role: "front" | "back"): 0 | 90 | 180 | 270 {
   const fix = r.fixes?.find((f) => f.role === role);
   return fix && fix.turnTrusted ? fix.turn : 0;
+}
+
+/**
+ * Many cards: the one card rules (planFix) for a cut-out of `width` by
+ * `height`. The cut-out is already the card along its own outline, so that
+ * is its card box: nothing more is cut off (the finder inside a cut-out can
+ * miss a dark card edge), and its shape counts for the turn.
+ */
+function planOf(r: RecognizedItem, role: "front" | "back") {
+  const fix = r.fixes?.find((f) => f.role === role);
+  return (width: number, height: number) => (fix ? planFix({ ...fix, card: { x: 0, y: 0, w: 1, h: 1 }, cardTrusted: true }, width, height) : null);
 }
 
 /**
@@ -129,7 +140,9 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
         const source: ImageRow | undefined = photoRows[r.sourceIndex];
         if (r.box && source) {
           try {
-            crops.set(i, await cropStored(source, r.box, undefined, turnOf(r, "front")));
+            // Cut along the card's own outline as it was read, then the one card rules (planFix): no neighbour shows.
+            const cut = r.cuts?.front;
+            crops.set(i, cut ? await cutStored(source, cut, planOf(r, "front")) : await cropStored(source, r.box, undefined, turnOf(r, "front")));
           } catch {
             // A bad box only costs this item its own picture.
           }
@@ -138,7 +151,8 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
         const backSource: ImageRow | undefined = back ? photoRows[back.sourceIndex] : undefined;
         if (back && backSource) {
           try {
-            backs.set(i, await cropStored(backSource, back.box, undefined, turnOf(r, "back")));
+            const cut = r.cuts?.back;
+            backs.set(i, cut ? await cutStored(backSource, cut, planOf(r, "back")) : await cropStored(backSource, back.box, undefined, turnOf(r, "back")));
           } catch {
             // The card keeps its front; the back can be added later.
           }

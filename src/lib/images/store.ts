@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp, { type Sharp } from "sharp";
 import { env } from "@/lib/env";
-import type { Box } from "@/lib/recognition/types";
+import type { Box, CardCutRecord } from "@/lib/recognition/types";
+import { cutOutCard } from "@/lib/free/cut-out";
 import { applyEdit, type PhotoEdit } from "./edit";
 
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
@@ -261,6 +262,38 @@ export async function cropStored(photo: PhotoRef, box: Box, padding = 0.04, turn
     // Cut first, then turn (a turn of 0 leaves the pixels as they are).
     const cut = await sharp(input, DECODE_OPTIONS).extract({ left, top, width, height }).png({ compressionLevel: 0 }).toBuffer();
     return await writeWorking(() => (turn ? sharp(cut).rotate(turn) : sharp(cut)));
+  } catch (e) {
+    if (e instanceof ImageError) throw e;
+    throw new ImageError("That photo could not be cropped.");
+  }
+}
+
+/**
+ * Many cards: one card cut out of a photo exactly as it was read (its own
+ * outline, the rest painted plain, turned straight), then shown by `plan`
+ * as a one card photo would be: the tight cut to the card and the turn.
+ * The crop starts as a working copy.
+ */
+export async function cutStored(
+  photo: PhotoRef, cut: CardCutRecord, plan: (width: number, height: number) => { turn: Turn; box: Box | null } | null,
+): Promise<StoredImage> {
+  const input = await readSource(photo);
+  try {
+    const png = await cutOutCard(input, cut);
+    const meta = await sharp(png, DECODE_OPTIONS).metadata();
+    const W = meta.width ?? 0;
+    const H = meta.height ?? 0;
+    if (!W || !H) throw new ImageError("That photo could not be cropped.");
+    const p = plan(W, H);
+    let pixels = png;
+    if (p?.box) {
+      const left = Math.max(0, Math.min(W - 1, Math.floor(p.box.x * W)));
+      const top = Math.max(0, Math.min(H - 1, Math.floor(p.box.y * H)));
+      const width = Math.max(MIN_CROP_PX, Math.min(W - left, Math.round(p.box.w * W)));
+      const height = Math.max(MIN_CROP_PX, Math.min(H - top, Math.round(p.box.h * H)));
+      pixels = await sharp(png, DECODE_OPTIONS).extract({ left, top, width, height }).png({ compressionLevel: 0 }).toBuffer();
+    }
+    return await writeWorking(() => (p?.turn ? sharp(pixels, DECODE_OPTIONS).rotate(p.turn) : sharp(pixels, DECODE_OPTIONS)));
   } catch (e) {
     if (e instanceof ImageError) throw e;
     throw new ImageError("That photo could not be cropped.");

@@ -76,6 +76,46 @@ describe("the owner's many-cards try, recorded", () => {
     }
   });
 
+  it("each side records its cut-out, and a paired back is read again as a back, enlarged, kept only when better (review fixes 3 and 4)", async () => {
+    const photos = await multiPhotos();
+    const shapes = recording.shapes;
+    const sizes: number[] = [];
+    const seen: (ReadOptions | undefined)[] = [];
+    const reads = [...recording.reads];
+    const millsAgain: OcrResult = {
+      ...recording.reads[2], lines: [...recording.reads[2].lines, { text: "\u00a91991 IMPEL MARKETING, INC.", confidence: 0.95, box: { x: 0.05, y: 0.93, w: 0.4, h: 0.02 } }],
+    };
+    millsAgain.text = millsAgain.lines.map((l) => l.text).join("\n");
+    let n = 0;
+    const r = new FreeRecognizer({
+      reader: {
+        async read(image, options) {
+          sizes.push(Math.max((await sharp(image).metadata()).width ?? 0, (await sharp(image).metadata()).height ?? 0));
+          seen.push(options);
+          // 4 first reads, then the Mills back again (with its copyright line), then the Hardaway back again (nothing).
+          const out = n < 4 ? reads[n] : n === 4 ? millsAgain : { text: "", lines: [], confidence: 0 };
+          n++;
+          options?.backIf?.(out);
+          return out;
+        },
+      },
+      findShapes: async (image) => shapes[photos.findIndex((p) => p.data === image)] ?? [],
+      lookup: async () => null,
+    });
+    const [mills, hardaway] = await r.recognize({ mode: "multi", photos });
+    expect(n).toBe(6);
+    expect(seen.slice(4).every((o) => o?.back === true)).toBe(true);
+    // Enlarged to the size a one card photo is read at.
+    expect(Math.min(...sizes.slice(4))).toBeGreaterThanOrEqual(1500);
+    expect(Math.max(...sizes.slice(0, 4))).toBeLessThan(1000);
+    expect(mills).toMatchObject({ player: "Billy Mills", year: 1991, brand: "Impel", cardNumber: "24" });
+    expect(hardaway).toMatchObject({ player: "Tim Hardaway", year: 1993, brand: "Fleer", cardNumber: "65" });
+    for (const card of [mills, hardaway]) {
+      expect(card.cuts?.front?.box).toEqual(card.box);
+      expect(card.cuts?.back?.box).toEqual(card.backPhoto?.box);
+    }
+  });
+
   it("a front whose back was not found waits for the owner with a note", async () => {
     // The backs photo without the Hardaway back.
     const items = await owner([[0, 1], [0]]);
