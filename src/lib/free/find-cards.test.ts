@@ -1,6 +1,8 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import type { Box } from "@/lib/recognition/types";
+import fs from "node:fs";
+import { LIVE_MANY_PHOTOS } from "../../../tests/helpers/ocr-fixture";
 import { cardTilt, findCardBoxes } from "./find-cards";
 
 const COLORS = ["#c0392b", "#2471a3", "#d4ac0d", "#7d3c98", "#1e8449", "#ca6f1e", "#566573", "#a93226", "#17a589"];
@@ -201,5 +203,53 @@ describe("findCardBoxes", () => {
     const boxes = await findCardBoxes(img);
     expect(boxes).toHaveLength(2);
     boxes.forEach((b, i) => expectNear(b, drawn[i], W, H));
+  });
+});
+
+describe("cards on a dark desk with glare and clutter (owner scan 8)", () => {
+  it("in the owner's three photos: three cards each, not the glare, the notebook or the keyboard", async () => {
+    for (const file of LIVE_MANY_PHOTOS) {
+      const boxes = await findCardBoxes(fs.readFileSync(file));
+      expectValid(boxes);
+      expect(boxes, file).toHaveLength(3);
+      for (const b of boxes) {
+        // Each about one card's size, and none down where the notebook and keyboard lie.
+        expect(b.w * b.h, file).toBeGreaterThan(0.06);
+        expect(b.w * b.h, file).toBeLessThan(0.2);
+        expect(b.y + b.h, file).toBeLessThan(0.85);
+      }
+      for (const [i, a] of boxes.entries()) {
+        for (const b of boxes.slice(i + 1)) {
+          const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+          const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+          expect(w > 0 && h > 0 ? (w * h) / Math.min(a.w * a.h, b.w * b.h) : 0, file).toBeLessThan(0.2);
+        }
+      }
+    }
+  });
+
+  it("a made-up desk with glare and a notebook at the edge: each card, nothing else", async () => {
+    const W = 924;
+    const H = 2000;
+    const drawn: Drawn[] = [
+      { x: 200, y: 560, w: 520, h: 380 },
+      { x: 40, y: 980, w: 380, h: 520 },
+      { x: 500, y: 1000, w: 380, h: 520 },
+    ];
+    const body = `
+      <defs><radialGradient id="g"><stop offset="0" stop-color="#8e8e8e"/><stop offset="0.7" stop-color="#787878"/><stop offset="1" stop-color="#262626"/></radialGradient></defs>
+      <ellipse cx="120" cy="420" rx="330" ry="460" fill="url(#g)"/>
+      ${card(drawn[0], COLORS[0], "#f2f2f2")}
+      ${card(drawn[1], COLORS[1], "#f0e8e0")}
+      ${card(drawn[2], COLORS[2], "#f2f2f2")}
+      <g transform="rotate(-12 600 1950)"><rect x="300" y="1880" width="900" height="200" fill="#e8e8e8"/>
+      ${Array.from({ length: 14 }, (_, i) => `<rect x="${330 + i * 60}" y="1890" width="22" height="60" fill="#303030"/>`).join("")}</g>`;
+    const boxes = await findCardBoxes(await render(W, H, "#262626", body));
+    expectValid(boxes);
+    expect(boxes).toHaveLength(3);
+    for (const d of drawn) {
+      const hit = boxes.find((b) => Math.abs(b.x - d.x / W) < 0.05 && Math.abs(b.y - d.y / H) < 0.05);
+      expect(hit, `card at ${d.x},${d.y}`).toBeDefined();
+    }
   });
 });

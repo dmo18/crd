@@ -616,12 +616,100 @@ async function shadedMask(px: Buffer, width: number, height: number): Promise<Ui
   return clean(fillHoles(clean(mask, width, height), width, height), width, height);
 }
 
+/**
+ * Light cards on a dark desk with a patch of glare (owner scan 8): the glare
+ * joins the cards in every colour mask. Brightness is split into three
+ * groups (desk, glare or shade, card) by the split that best separates them
+ * (Otsu's rule for three groups), and only the brightest group is card. The
+ * dark photo inside a card is filled from its light border.
+ */
+async function brightMask(px: Buffer, width: number, height: number): Promise<Uint8Array> {
+  const n = width * height;
+  // Softened a little, so print on the white border does not break it.
+  const soft = await sharp(px, { raw: { width, height, channels: 3 } }).blur(1).raw().toBuffer();
+  const lum = new Uint8Array(n);
+  const hist = new Float64Array(256);
+  for (let p = 0, i = 0; p < n; p++, i += 3) {
+    lum[p] = Math.round(soft[i] * 0.299 + soft[i + 1] * 0.587 + soft[i + 2] * 0.114);
+    hist[lum[p]]++;
+  }
+  // Running sums give each group's share and mean in constant time.
+  const share = new Float64Array(257);
+  const mass = new Float64Array(257);
+  for (let v = 0; v < 256; v++) {
+    share[v + 1] = share[v] + hist[v] / n;
+    mass[v + 1] = mass[v] + (v * hist[v]) / n;
+  }
+  const mean = mass[256];
+  const between = (from: number, to: number) => {
+    const w = share[to] - share[from];
+    return w > 0 ? (mass[to] - mass[from] - w * mean) ** 2 / w : 0;
+  };
+  let top = -1;
+  let cut = 255;
+  for (let a = 1; a < 255; a++) {
+    for (let b = a + 1; b < 256; b++) {
+      const v = between(0, a) + between(a, b) + between(b, 256);
+      if (v > top) {
+        top = v;
+        cut = b;
+      }
+    }
+  }
+  const mask = new Uint8Array(n);
+  for (let p = 0; p < n; p++) if (lum[p] >= cut) mask[p] = 1;
+  return clean(fillHoles(clean(mask, width, height), width, height), width, height);
+}
+
+const foundArea = (f: Found) => (f.box.x1 - f.box.x0 + 1) * (f.box.y1 - f.box.y0 + 1);
+
+/** A find at the photo's edge: a card cut by the frame, or something else lying there (a notebook, a keyboard). */
+function atEdge(f: Found, width: number, height: number): boolean {
+  return f.box.x0 <= 1 || f.box.y0 <= 1 || f.box.x1 >= width - 2 || f.box.y1 >= height - 2;
+}
+
+/**
+ * Finds that look like the cards of this photo: about the size of the
+ * others (cards of one scan are of one size), and a find at the edge of the
+ * photo clearly smaller than the others is not one (a piece of a notebook,
+ * a keyboard, a card cut by the frame).
+ */
+function plausible(found: Found[], width: number, height: number): Found[] {
+  if (found.length < 2) return found;
+  const typical = median(found.map(foundArea));
+  return found.filter((f) => {
+    const r = foundArea(f) / typical;
+    if (r > PLAUSIBLE_MAX) return false;
+    return r >= (atEdge(f, width, height) ? EDGE_MIN : PLAUSIBLE_MIN);
+  });
+}
+
+/** A find bigger than this many typical cards is not a card; smaller than this share is not one either. */
+const PLAUSIBLE_MAX = 2.6;
+const PLAUSIBLE_MIN = 0.35;
+/** A find at the photo's edge must be at least this share of a typical card. */
+const EDGE_MIN = 0.6;
+
+/**
+ * Each way of telling cards from the desk (colour against the desk's edge,
+ * strong outlines, a fitted unevenly lit desk, brightness) gives a set of
+ * finds. The set with the most plausible cards wins; on a tie the earlier
+ * way, as before. Finds that are not plausible cards are dropped.
+ */
 async function findCards(work: { data: Buffer; width: number; height: number }): Promise<Found[]> {
   const { data, width, height } = work;
-  let found = cardsInMask(clean(foregroundMask(data, width, height), width, height), data, width, height);
-  if (found.length === 0) found = cardsInMask(await edgeMask(data, width, height), data, width, height);
-  if (found.length === 0) found = withDetail(apart(await shadedMask(data, width, height), data, width, height), data, width, height);
-  return found;
+  const ways: (() => Promise<Found[]>)[] = [
+    async () => cardsInMask(clean(foregroundMask(data, width, height), width, height), data, width, height),
+    async () => cardsInMask(await edgeMask(data, width, height), data, width, height),
+    async () => withDetail(apart(await shadedMask(data, width, height), data, width, height), data, width, height),
+    async () => withDetail(apart(await brightMask(data, width, height), data, width, height), data, width, height),
+  ];
+  let best: Found[] = [];
+  for (const way of ways) {
+    const got = plausible(await way(), width, height);
+    if (got.length > best.length) best = got;
+  }
+  return best;
 }
 
 /** Mean brightness change between neighbouring pixels inside a box (print has much, bare table and glare little). */

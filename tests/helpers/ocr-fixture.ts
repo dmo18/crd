@@ -106,3 +106,51 @@ export async function multiPhotos(): Promise<RecognitionPhoto[]> {
 export function recordedMulti(): MultiRecording {
   return JSON.parse(fs.readFileSync(MULTI_RECORDING, "utf8")) as MultiRecording;
 }
+
+/**
+ * The owner's live scans of 2026-11-25 (owner scans 8 to 12), the photos
+ * exactly as the scan queue gave them to the reader. Answers in
+ * tests/fixtures/real-cards/answers.json (ids live8-many, live9-front-twice,
+ * live10-hardaway, live11-milacki, live12-mills). Recorded with UPDATE_OCR=1
+ * by owner-live.integration.test.ts.
+ */
+export const LIVE_SINGLES = ["live9", "live10", "live11", "live12"] as const;
+export type LiveSingle = (typeof LIVE_SINGLES)[number];
+
+export function liveSingleFiles(id: LiveSingle) {
+  return {
+    front: path.join(REAL_DIR, `${id}-front.jpg`),
+    back: path.join(REAL_DIR, `${id}-back.jpg`),
+    recording: path.join(REAL_DIR, `${id}.ocr.json`),
+  };
+}
+
+async function asStored(file: string, role: RecognitionPhoto["role"]): Promise<RecognitionPhoto> {
+  const data = fs.readFileSync(file);
+  const meta = await sharp(data).metadata();
+  return { role, data, width: meta.width ?? 0, height: meta.height ?? 0 };
+}
+
+/** A live one card scan's two photos, front then back, as stored. */
+export async function liveSinglePhotos(id: LiveSingle): Promise<RecognitionPhoto[]> {
+  const files = liveSingleFiles(id);
+  return [await asStored(files.front, "front"), await asStored(files.back, "back")];
+}
+
+export function recordedLiveSingle(id: LiveSingle): RecordedOcr {
+  return JSON.parse(fs.readFileSync(liveSingleFiles(id).recording, "utf8")) as RecordedOcr;
+}
+
+/** Owner scan 8: three photos of three cards, fronts and backs mixed, in the order sent. */
+export const LIVE_MANY_PHOTOS = [0, 1, 2].map((i) => path.join(REAL_DIR, `live8-${i}.jpg`));
+export const LIVE_MANY_RECORDING = path.join(REAL_DIR, "live8.ocr.json");
+
+export async function liveManyPhotos(): Promise<RecognitionPhoto[]> {
+  const out: RecognitionPhoto[] = [];
+  for (const file of LIVE_MANY_PHOTOS) out.push(await asStored(file, "source"));
+  return out;
+}
+
+export function recordedLiveMany(): MultiRecording {
+  return JSON.parse(fs.readFileSync(LIVE_MANY_RECORDING, "utf8")) as MultiRecording;
+}
