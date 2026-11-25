@@ -271,7 +271,11 @@ describe.skipIf(!reader)("real text reader: drawn cards", () => {
       const r = new FreeRecognizer({ reader: reader!, lookup: async () => null });
       const [item] = await r.recognize({ mode: "single", photos: [{ role: "front", data, width: 1000, height: 1400 }] });
       expect(item).toMatchObject({ year: 1989, brand: "Upper Deck", cardNumber: "1", player: "Ken Griffey Jr.", rarityTier: "grail" });
-      expect(item.confidence).toBeGreaterThanOrEqual(REVIEW_THRESHOLD);
+      // Identified through the key card list, yet year, brand and name are each
+      // printed once on this made-up side: not sure, so it waits for the owner
+      // (only player, year and brand all sure may be filed alone, 12R.5 round 2).
+      expect(item.evidence?.certainty).toMatchObject({ year: "unsure", brand: "unsure" });
+      expect(item.confidence).toBeLessThan(REVIEW_THRESHOLD);
     },
     TIMEOUT,
   );
