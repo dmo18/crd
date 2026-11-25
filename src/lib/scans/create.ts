@@ -42,7 +42,7 @@ function checkPhotos(mode: ScanMode, photos: ScanPhotoInput[]) {
  * call enqueueScan with the returned id.
  */
 export async function createScan(
-  input: { mode: ScanMode; hint?: string | null; locationId?: number | null; clientKey?: string | null; photos: ScanPhotoInput[] },
+  input: { mode: ScanMode; hint?: string | null; locationId?: number | null; clientKey?: string | null; batchKey?: string | null; photos: ScanPhotoInput[] },
   db: Db = getDb(),
 ): Promise<{ scanId: number; duplicate: boolean }> {
   checkPhotos(input.mode, input.photos);
@@ -67,7 +67,7 @@ export async function createScan(
       stored.push({ role: photo.role, image: await saveUpload(photo.data, { manyCards: input.mode === "multi" }) });
     }
     return db.transaction((tx) => {
-      const scan = tx.insert(scans).values({ mode: input.mode, hint, locationId, clientKey }).returning({ id: scans.id }).get();
+      const scan = tx.insert(scans).values({ mode: input.mode, hint, locationId, clientKey, batchKey: input.batchKey ?? null }).returning({ id: scans.id }).get();
       for (const s of stored) {
         tx.insert(images).values({ scanId: scan.id, role: s.role, ...s.image }).run();
       }

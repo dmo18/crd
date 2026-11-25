@@ -109,7 +109,7 @@ describe("migration 0009", () => {
     expect(added.items).toEqual(NEW_ITEM_COLUMNS);
     expect(added.images).toEqual(NEW_IMAGE_COLUMNS);
     expect(sql0009()).not.toMatch(/\b(CREATE TABLE|DROP|RENAME|DELETE FROM|UPDATE `|INSERT INTO|PRAGMA|NOT NULL|DEFAULT|__new_)/i);
-    expect(journal().entries.map((e) => e.idx)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(journal().entries.map((e) => e.idx).slice(0, 10)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   it("applies to a 0008 database with rows in it and leaves every old row as it was", () => {
@@ -121,10 +121,15 @@ describe("migration 0009", () => {
     const db = createDb(file);
     const raw = rawOf(db);
     const newCols: Record<string, string[]> = { items: NEW_ITEM_COLUMNS, images: NEW_IMAGE_COLUMNS };
+    // Columns of later migrations (0010 on) are new and empty too.
+    const laterNulls = (t: string, row: object) => {
+      const known = new Set([...Object.keys(before[t][0]), ...(newCols[t] ?? [])]);
+      return Object.fromEntries(Object.keys(row).filter((c) => !known.has(c)).map((c) => [c, null]));
+    };
     for (const t of TABLES_WITH_ROWS) {
-      const after = raw.prepare(`select * from ${t} order by rowid`).all();
+      const after = raw.prepare(`select * from ${t} order by rowid`).all() as object[];
       const nulls = Object.fromEntries((newCols[t] ?? []).map((c) => [c, null]));
-      expect(after, t).toEqual(before[t].map((r) => ({ ...r, ...nulls })));
+      expect(after, t).toEqual(before[t].map((r, i) => ({ ...r, ...nulls, ...laterNulls(t, after[i] ?? {}) })));
     }
     expect(raw.pragma("foreign_key_check")).toEqual([]);
     expect(raw.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
@@ -191,7 +196,7 @@ describe("migration 0009", () => {
     const old = new Database(file);
     old.pragma("foreign_keys = ON");
     migrate(drizzle(old), { migrationsFolder: migrationsUpTo0008() });
-    expect(old.prepare("select count(*) as n from __drizzle_migrations").get()).toEqual({ n: 10 });
+    expect(old.prepare("select count(*) as n from __drizzle_migrations").get()).toEqual({ n: journal().entries.length });
 
     // It names its columns one by one (Drizzle never sends "select *"), so it reads and writes only what it knows.
     const list = (cols: string[]) => cols.map((c) => `"${c}"`).join(", ");
@@ -210,7 +215,7 @@ describe("migration 0009", () => {
 
     // Starting the new build again finds nothing left to apply and changes nothing.
     const again = rawOf(createDb(file));
-    expect(again.prepare("select count(*) as n from __drizzle_migrations").get()).toEqual({ n: 10 });
+    expect(again.prepare("select count(*) as n from __drizzle_migrations").get()).toEqual({ n: journal().entries.length });
     expect(again.prepare("select count(*) as n from items").get()).toEqual({ n: 5 });
     expect(again.prepare("select original_file from images where file = ?").get("c.avif")).toEqual({ original_file: null });
     again.close();

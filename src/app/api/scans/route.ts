@@ -12,6 +12,8 @@ const fieldsSchema = z.object({
   hint: z.string().max(200).optional(),
   locationId: z.coerce.number().int().positive().optional(),
   clientKey: z.string().uuid().optional(),
+  /** Same on every scan of one "Many photos, one card each" upload. */
+  batchKey: z.string().uuid().optional(),
 });
 
 const ROLES: ScanPhotoRole[] = ["front", "back", "source"];
@@ -43,7 +45,7 @@ export async function POST(request: Request) {
     const v = form.get(name);
     return typeof v === "string" && v.trim() !== "" ? v : undefined;
   };
-  const fields = fieldsSchema.safeParse({ mode: text("mode"), hint: text("hint"), locationId: text("locationId"), clientKey: text("clientKey") });
+  const fields = fieldsSchema.safeParse({ mode: text("mode"), hint: text("hint"), locationId: text("locationId"), clientKey: text("clientKey"), batchKey: text("batchKey") });
   if (!fields.success) return bad("That scan request was not understood.");
 
   const photos: ScanPhotoInput[] = [];

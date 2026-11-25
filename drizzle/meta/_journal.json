@@ -71,6 +71,13 @@
       "when": 1794824087556,
       "tag": "0009_futuristic_warstar",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795614088148,
+      "tag": "0010_misty_sunfire",
+      "breakpoints": true
     }
   ]
 }

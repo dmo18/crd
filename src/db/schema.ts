@@ -111,7 +111,15 @@ export const scans = sqliteTable("scans", {
   finishedAt: ts("finished_at"),
   /** Random id the scan screen makes per entry, so a repeated upload never makes a second scan. */
   clientKey: text("client_key"),
-}, (t) => [index("scans_status_idx").on(t.status), uniqueIndex("scans_client_key_uq").on(t.clientKey)]);
+  /**
+   * Random id the scan screen makes per "Many photos, one card each" upload,
+   * the same on every scan of that upload, for its report on Scan activity.
+   * Null for a scan saved on its own (and for scans from before batches).
+   */
+  batchKey: text("batch_key"),
+}, (t) => [
+  index("scans_status_idx").on(t.status), uniqueIndex("scans_client_key_uq").on(t.clientKey), index("scans_batch_key_idx").on(t.batchKey),
+]);
 
 /**
  * Everything in the collection. One table for three kinds:
