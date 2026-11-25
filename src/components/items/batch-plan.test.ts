@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MAX_BATCH_PHOTOS } from "@/lib/scans/batch-limits";
 import { batchProgress, batchRoom, planBatch, progressLine, unsentKeys } from "./batch-plan";
 import { batchCountsLine, retryResultLine } from "./BatchReportCard";
-import { emptyQueue, MAX_QUEUE, queueReducer, type QueueState } from "./scan-queue";
+import { emptyQueue, MAX_QUEUE, nextToSend, queueReducer, type QueueState } from "./scan-queue";
 import { createScanStore, type ScanStoreDeps } from "./scan-store";
 
 describe("planBatch (Many photos, one card each)", () => {
@@ -53,6 +53,16 @@ describe("batch progress", () => {
     expect(unsentKeys(s, "b1")).toEqual([3]);
     expect(unsentKeys(s, "other")).toEqual([]);
     expect(progressLine({ batch: "b1", total: 4, sent: 4, notSent: 0, sending: 0 })).toMatch(/^All 4 sent\./);
+  });
+
+  it("the cards of one upload are sent one after another, in the order picked; a single scan can go alongside", () => {
+    let s = withEntries(3, "b1");
+    s = queueReducer(s, { type: "add", key: 9, clientKey: "k9", name: "own", previewUrl: null, batch: null });
+    expect(nextToSend(s, 2)).toEqual([1, 9]);
+    s = queueReducer(s, { type: "sending", key: 1 });
+    expect(nextToSend(s, 2)).toEqual([9]);
+    s = queueReducer(s, { type: "uploaded", key: 1, scanId: 1, at: 0 });
+    expect(nextToSend(s, 2)).toEqual([2, 9]);
   });
 
   it("a scan saved on its own is no upload", () => {

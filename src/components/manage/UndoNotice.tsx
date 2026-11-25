@@ -14,7 +14,7 @@ export type UndoOffer = { id: number; summary: string; madeAt: number };
  * date, and asks before undoing it. When an older change becomes the latest,
  * it shows up here with its own words and needs its own confirm.
  */
-export function UndoNotice({ offer, message }: { offer: UndoOffer | null; message: string | null }) {
+export function UndoNotice({ offer, message, onUndone }: { offer: UndoOffer | null; message: string | null; onUndone?: () => void }) {
   const router = useRouter();
   const [asking, setAsking] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,7 +25,11 @@ export function UndoNotice({ offer, message }: { offer: UndoOffer | null; messag
     try {
       const r = await undoBulkAction(o.id);
       if ("error" in r) setResult({ text: r.error, bad: true });
-      else setResult({ text: undoLine(r), bad: false });
+      else {
+        setResult({ text: undoLine(r), bad: false });
+        // The words about the change just undone are no longer true.
+        onUndone?.();
+      }
     } catch {
       setResult({ text: "Could not reach the server. Nothing was undone.", bad: true });
     } finally {

@@ -79,7 +79,7 @@ export function ReviewGroups({ groups, details, undo }: { groups: ReviewGroupVie
 
   return (
     <div className="flex flex-col gap-4">
-      <UndoNotice offer={undo} message={message} />
+      <UndoNotice offer={undo} message={message} onUndone={() => setMessage(null)} />
       {error ? <p role="alert" className="rounded-2xl border border-danger p-3 text-sm text-danger">{error}</p> : null}
 
       {groups.map((g) => {

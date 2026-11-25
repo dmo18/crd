@@ -232,11 +232,27 @@ export function retryKind(e: Pick<QueueEntry, "status" | "scanId" | "scan" | "pr
   return e.scan?.status === "failed" ? "server" : null;
 }
 
-/** Keys to start uploading now: oldest waiting first, never more than maxParallel in flight. */
+/**
+ * Keys to start uploading now: oldest waiting first, never more than
+ * maxParallel in flight. The cards of one upload of many photos go one
+ * after another, so the server reads them in the order they were picked.
+ */
 export function nextToSend(state: QueueState, maxParallel: number = MAX_PARALLEL): number[] {
-  const inFlight = state.entries.filter((e) => e.status === "sending").length;
-  const free = Math.max(0, maxParallel - inFlight);
-  return state.entries.filter((e) => e.status === "waiting").slice(0, free).map((e) => e.key);
+  const sending = state.entries.filter((e) => e.status === "sending");
+  let free = Math.max(0, maxParallel - sending.length);
+  const busyBatches = new Set(sending.map((e) => e.batch).filter((b): b is string => b !== null));
+  const out: number[] = [];
+  for (const e of state.entries) {
+    if (free === 0) break;
+    if (e.status !== "waiting") continue;
+    if (e.batch !== null) {
+      if (busyBatches.has(e.batch)) continue;
+      busyBatches.add(e.batch);
+    }
+    out.push(e.key);
+    free -= 1;
+  }
+  return out;
 }
 
 export type QueueSummary = { scanned: number; done: number; needsReview: number; failed: number; unfinished: number };
