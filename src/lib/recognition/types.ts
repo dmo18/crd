@@ -136,10 +136,14 @@ export type ReadEvidence = {
  * - one_side: one side of a card from a many-cards scan, left without its partner;
  * - hard_to_read: the text itself was hard to read;
  * - error_check: the card may be a listed error version, which text cannot tell;
- * - key_list_guess: only a possible key list card, its player or number not read.
+ * - key_list_guess: only a possible key list card, its player or number not read;
+ * - front_twice: a one card scan whose second photo shows the front again.
  */
-export const HOLD_REASONS = ["reprint", "one_side", "hard_to_read", "error_check", "key_list_guess"] as const;
+export const HOLD_REASONS = ["reprint", "one_side", "hard_to_read", "error_check", "key_list_guess", "front_twice"] as const;
 export type HoldReason = (typeof HOLD_REASONS)[number];
+
+/** Shown on the scan result and the item when both photos of a one card scan show the front. */
+export const FRONT_TWICE = "Both photos show the front. Add a photo of the back to get the year and number.";
 
 /** Plain words for each hold reason, shown on the item. */
 export const HOLD_WORDS: Record<HoldReason, string> = {
@@ -148,6 +152,7 @@ export const HOLD_WORDS: Record<HoldReason, string> = {
   hard_to_read: "The text on the card was hard to read. Check it yourself.",
   error_check: "This may be a known error version, which the reader cannot tell. Check it yourself.",
   key_list_guess: "Only a possible key card: the player or number was not read. Check it yourself.",
+  front_twice: FRONT_TWICE,
 };
 
 /** The fields a reader may say it is sure of. */

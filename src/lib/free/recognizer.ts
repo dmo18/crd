@@ -8,6 +8,7 @@ import { endSentence } from "@/lib/title";
 import { checkPhotoCount } from "@/lib/recognition/limits";
 import {
   CERTAIN_FIELDS,
+  FRONT_TWICE,
   RecognitionError,
   recognizedItemSchema,
   type FieldCertainty,
@@ -27,7 +28,7 @@ import { keyCardsFor, matchKeyCard, normalizeBrand, normalizeName, type KeyCard 
 import { getTextReader, ReaderDownError, type OcrResult, type ReadOptions, type TextReader } from "./ocr";
 import { parseCardText, parseProductText, teamFromList, type ParsedCard } from "./parse";
 import { lookupPlayer, type PlayerFacts } from "./wikidata";
-import { looksLikeBack, ONE_SIDE_NOTE, pairSides, type SideRead } from "./multi";
+import { frontTwice, looksLikeBack, ONE_SIDE_NOTE, pairSides, repeatedSides, type SideRead } from "./multi";
 import { CUT_BLANK, cutOutCard, maskCard, untilt, type CardCut } from "./cut-out";
 
 /** The details a back's read gives on its own. */
@@ -99,6 +100,18 @@ function withCropTurns(card: ReadCard, own: CropSide, pairedBack?: CropSide): vo
   if (pairedBack) add(pairedBack, "back");
   if (fixes.length) card.item.fixes = fixes;
   if (cuts.front || cuts.back) card.item.cuts = cuts;
+}
+
+/** A card's short side over its long side lies between these. */
+const CARD_ASPECT = [0.5, 0.9] as const;
+
+/** A find that looks like a card: card proportions in the photo's pixels, clear of the photo's edges. */
+function cardShaped(box: Box, photo: RecognitionPhoto): boolean {
+  const w = box.w * Math.max(1, photo.width);
+  const h = box.h * Math.max(1, photo.height);
+  const aspect = Math.min(w, h) / Math.max(w, h, 1);
+  const edge = box.x <= 0.002 || box.y <= 0.002 || box.x + box.w >= 0.998 || box.y + box.h >= 0.998;
+  return !edge && aspect >= CARD_ASPECT[0] && aspect <= CARD_ASPECT[1];
 }
 
 /** A cut-out shorter than this on its long side is enlarged before reading, as a one card photo would be read. */
@@ -332,7 +345,11 @@ export class FreeRecognizer implements Recognizer {
     const back = photos.find((p) => p.role === "back");
     const frontText = await this.read(front.data);
     const backText = back ? await this.read(back.data, { back: true }) : null;
-    const card = await this.cardFromText(frontText, backText, { sourceIndex: 0, box: null });
+    // The second photo shows the front again: it is no second sign of
+    // anything, so the card is read from the front alone, and the owner is
+    // told to add the back.
+    const twice = frontTwice(frontText, backText);
+    const card = await this.cardFromText(frontText, twice ? null : backText, { sourceIndex: 0, box: null }, { frontTwice: twice });
     const fixes: PhotoFix[] = [];
     if (frontText?.fix) fixes.push({ ...frontText.fix, sourceIndex: photos.indexOf(front), role: "front" });
     if (back && backText?.fix) fixes.push({ ...backText.fix, sourceIndex: photos.indexOf(back), role: "back" });
@@ -380,8 +397,21 @@ export class FreeRecognizer implements Recognizer {
       }
     }
 
+    // Not a card, or a card already seen: a find with no print read on it
+    // at all that is not card shaped or lies at the photo's edge (a piece of
+    // a notebook or keyboard), and a side photographed again in another
+    // photo of the scan (the better photo of it is kept). A find whose read
+    // failed stays, as unread.
+    const skip = new Set<number>();
+    sides.forEach((s, i) => {
+      if (s.box === null || s.text === null || s.text.lines.some((l) => (l.text.match(/[\p{L}\p{N}]/gu) ?? []).length >= 3)) return;
+      if (!cardShaped(s.box, photos[s.photo])) skip.add(i);
+    });
+    const found = sides.map((s, i) => ({ s, i })).filter((x) => x.s.box !== null && !skip.has(x.i));
+    for (const [again] of repeatedSides(found.map((x) => x.s))) skip.add(found[again].i);
+
     // Pairing only among cards found apart; a whole photo read as one card stays alone.
-    const apart = sides.map((s, i) => ({ s, i })).filter((x) => x.s.box !== null);
+    const apart = sides.map((s, i) => ({ s, i })).filter((x) => x.s.box !== null && !skip.has(x.i));
     const pairs = pairSides(apart.map((x) => x.s)).map(([f, b]) => [apart[f].i, apart[b].i] as const);
     const backOf = new Map(pairs.map(([f, b]) => [f, b]));
     const paired = new Set(pairs.map(([, b]) => b));
@@ -407,6 +437,7 @@ export class FreeRecognizer implements Recognizer {
 
     const out: ReadCard[] = [];
     for (const [i, side] of sides.entries()) {
+      if (skip.has(i)) continue;
       const where = { sourceIndex: side.photo, box: side.box };
       if (!side.back) {
         const b = backOf.get(i);
@@ -493,13 +524,15 @@ export class FreeRecognizer implements Recognizer {
     front: OcrResult | null,
     back: OcrResult | null,
     where: { sourceIndex: number; box: Box | null },
-    opts: { lone?: boolean } = {},
+    opts: { lone?: boolean; frontTwice?: boolean } = {},
   ): Promise<ReadCard> {
     const parsed = parseCardText(front, back);
     const readAnything = parsed.year != null || parsed.brand != null || parsed.cardNumber != null || parsed.player != null;
     if (!readAnything) {
-      const notes = opts.lone ? `${ONE_SIDE_NOTE} ${UNREAD_NOTE}` : back ? UNREAD_NOTE : `${UNREAD_NOTE} ${ADD_BACK_NOTE}`;
-      return { item: recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes }), names: [] };
+      const notes = opts.frontTwice ? `${FRONT_TWICE} ${UNREAD_NOTE}` : opts.lone ? `${ONE_SIDE_NOTE} ${UNREAD_NOTE}` : back ? UNREAD_NOTE : `${UNREAD_NOTE} ${ADD_BACK_NOTE}`;
+      const item: RecognizedItem = recognizedItemSchema.parse({ kind: "card", confidence: 0.05, ...where, notes });
+      if (opts.frontTwice) item.evidence = { hold: ["front_twice"] };
+      return { item, names: [] };
     }
 
     // 1. The built-in key card list. A match counts only when what was read agrees with it.
@@ -517,7 +550,7 @@ export class FreeRecognizer implements Recognizer {
     const found = key ? null : await this.findPlayer(parsed);
     const facts = found?.facts ?? null;
 
-    const notes = opts.lone ? [ONE_SIDE_NOTE, ...parsed.evidence] : [...parsed.evidence];
+    const notes = opts.frontTwice ? [FRONT_TWICE, ...parsed.evidence] : opts.lone ? [ONE_SIDE_NOTE, ...parsed.evidence] : [...parsed.evidence];
     // 3. A team hint (not sure from the text alone) is written only when the
     // player's team list on Wikidata has it. A key card skipped step 2, so its
     // player is looked up here, and only when there is a hint to check.
@@ -592,7 +625,7 @@ export class FreeRecognizer implements Recognizer {
 
     const textConfidence = Math.max(front?.confidence ?? 0, back?.confidence ?? 0);
     const weak = textConfidence < 0.5 || item.year == null || item.cardNumber == null;
-    if (!back && weak && !opts.lone) notes.push(ADD_BACK_NOTE);
+    if (!back && weak && !opts.lone && !opts.frontTwice) notes.push(ADD_BACK_NOTE);
     notes.push(FREE_NOTE);
     item.notes = notes.join(" ").slice(0, 600);
 
@@ -638,7 +671,7 @@ export class FreeRecognizer implements Recognizer {
       confidence = Math.min(confidence, CHECK_CONFIDENCE);
     }
     if (textConfidence < 0.5) confidence = Math.min(confidence, 0.6);
-    if (opts.lone) confidence = Math.min(confidence, CHECK_CONFIDENCE);
+    if (opts.lone || opts.frontTwice) confidence = Math.min(confidence, CHECK_CONFIDENCE);
     // A reprint is never the valuable original: always let the owner check it.
     if (parsed.isReprint) {
       confidence = Math.min(confidence, 0.6);
@@ -650,6 +683,7 @@ export class FreeRecognizer implements Recognizer {
     const hold: HoldReason[] = [];
     if (parsed.isReprint) hold.push("reprint");
     if (opts.lone) hold.push("one_side");
+    if (opts.frontTwice) hold.push("front_twice");
     if (textConfidence < 0.5) hold.push("hard_to_read");
     if (errorCheck) hold.push("error_check");
     if (!key && match) hold.push("key_list_guess");

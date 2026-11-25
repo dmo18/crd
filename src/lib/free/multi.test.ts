@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { multiPhotos, recordedMulti } from "../../../tests/helpers/ocr-fixture";
 import { REVIEW_THRESHOLD, type RecognitionPhoto } from "@/lib/recognition/types";
 import type { CardShape } from "./find-cards";
-import { looksLikeBack, ONE_SIDE_NOTE, pairScore, pairSides, type SideRead } from "./multi";
+import { frontTwice, looksLikeBack, ONE_SIDE_NOTE, pairScore, pairSides, repeatedSides, sameSide, type SideRead } from "./multi";
 import type { OcrLine, OcrResult, ReadOptions, TextReader } from "./ocr";
 import { FreeRecognizer } from "./recognizer";
 
@@ -334,5 +334,84 @@ describe("rules met on the owner's try (12R.7)", () => {
     expect(parseCardText(null, back).sport).toBeNull();
     // With its city it is the baseball team.
     expect(parseCardText(ocr([["MARK MCGWIRE", 0.82, 0.06], ["OAKLAND ATHLETICS", 0.9]]), null).sport).toBe("baseball");
+  });
+});
+
+describe("owner scan 8 rules: the same side twice, part of a name, the front twice (made-up cards)", () => {
+  const statBack = (heading: string, rows: string[], maker = "© 1993 FLEER CORP.") => ocr([
+    [heading, 0.05, 0.06],
+    ["HEIGHT: 6'0\" WEIGHT: 175 BORN: 9/1/66", 0.15],
+    ["Year Club G FG% FT% REB AST PTS", 0.6],
+    ...rows.map((r, i): L => [r, 0.64 + 0.04 * i]),
+    [maker, 0.92],
+  ]);
+
+  it("the same front in two photos is one side; the better read is kept", () => {
+    const a = side(0, front("BILLY MILLS", "Athletics"), false);
+    const b = side(1, ocr([["U.S. OLYMPIC CARDS", 0.1], ["HALL OF FAME", 0.15], ["BILLY MILLS", 0.82, 0.06], ["Athletics", 0.9, 0.04]]), false);
+    expect(sameSide(a, b)).toBe(true);
+    // The photo that read more of the card is kept.
+    expect([...repeatedSides([a, b])]).toEqual([[0, 1]]);
+  });
+
+  it("two different fronts of one player are two cards", () => {
+    const ultra = side(0, ocr([["FLEER ULTRA", 0.1], ["TIM HARDAWAY", 0.82, 0.06], ["WARRIORS", 0.9, 0.04]]), false);
+    const hoops = side(1, ocr([["NBA HOOPS", 0.1], ["TIM HARDAWAY", 0.82, 0.06], ["GUARD", 0.9, 0.04]]), false);
+    expect(sameSide(ultra, hoops)).toBe(false);
+    expect(repeatedSides([ultra, hoops]).size).toBe(0);
+  });
+
+  it("the same back twice shares its stat numbers; another season's back does not", () => {
+    const rows = ["92-93 Golden State 66 447 744 263 699 116 1419 21.5", "Pro Totals 308 464 770 1215 2988 659 6355 20.6"];
+    const a = side(0, statBack("TIM HARDAWAY", rows), true);
+    const b = side(2, statBack("TIM HARDAWAY", [rows[0].replace("447", "441"), rows[1]]), true);
+    expect(sameSide(a, b)).toBe(true);
+    const later = side(2, statBack("TIM HARDAWAY", ["93-94 Golden State 0 0 0 0 0 0 0 0", "Pro Totals 390 520 801 1303 3601 731 7901 19.8"], "© 1994 FLEER CORP."), true);
+    expect(sameSide(a, later)).toBe(false);
+    // Never within one photo: two copies side by side are two cards.
+    expect(sameSide(a, side(0, statBack("TIM HARDAWAY", rows), true))).toBe(false);
+  });
+
+  it("two players' backs are never one side, whatever their tables share", () => {
+    const rows = ["1990 Orioles 4.46 27 135.1 143 73 67", "1991 Orioles 4.01 31 184 175 86 82"];
+    expect(sameSide(side(0, statBack("ROBERT MILACKI", rows), true), side(1, statBack("BEN MCDONALD", rows), true))).toBe(false);
+  });
+
+  it("a three card scan with a repeated front and back still pairs one to one", () => {
+    const millsBack = back("WILLIAM MERVIN MILLS", "Mills won the 10,000 meters in Tokyo");
+    const sides = [
+      side(0, front("BILLY MILLS", "Athletics"), false),
+      side(1, front("BILLY MILLS", "Athletics"), false),
+      side(2, millsBack, true),
+    ];
+    // Two equal fronts tie for the one back: nothing is paired until the repeat is set aside.
+    expect(pairSides(sides)).toEqual([]);
+    const again = repeatedSides(sides);
+    const kept = sides.filter((_, i) => !again.has(i));
+    expect(pairSides(kept)).toEqual([[0, 1]]);
+  });
+
+  it("a front whose name lost its start (DAWAY) pairs with the back whose name ends so, and only that one", () => {
+    const daway = side(2, ocr([["WARHOR", 0.5], ["10", 0.55], ["DAWAY", 0.85, 0.05]]), false);
+    const hardaway = side(0, statBack("TIM HARDAWAY", ["92-93 Golden State 66 447 744 263 699 116 1419 21.5"]), true);
+    const mills = side(1, back("WILLIAM MERVIN MILLS", "Mills won the 10,000 meters in Tokyo"), true);
+    expect(pairScore(daway, hardaway)).toBeGreaterThan(0);
+    expect(pairScore(daway, mills)).toBe(0);
+    expect(pairSides([daway, hardaway, mills])).toEqual([[0, 1]]);
+    // Four letters are too few to tell a name by.
+    expect(pairScore(side(2, ocr([["AWAY", 0.85, 0.05]]), false), hardaway)).toBe(0);
+  });
+
+  it("a one card scan whose second photo is the front again", () => {
+    const f = ocr([["FLEER", 0.1], ["TIM HARDAWAY", 0.82, 0.06], ["WARRIORS", 0.9, 0.04]]);
+    // The second photo: the same front, with a bit of another card's story at its edge in small letters.
+    const again = ocr([["also set a world", 0.02], ["FLEER", 0.1], ["TIM HARDAWAY", 0.82, 0.06], ["WARKIORSG", 0.9, 0.04]]);
+    expect(frontTwice(f, again)).toBe(true);
+    // A real back, even read poorly, is not the front again.
+    expect(frontTwice(f, ocr([["TIM HARDAWAY", 0.05], ["WARRIORS", 0.1], ["© 1993 FLEER CORP.", 0.92]]))).toBe(false);
+    expect(frontTwice(f, ocr([["TIM HARDAWAY", 0.05], ["92-93 66 447 744 263", 0.6]]))).toBe(false);
+    expect(frontTwice(f, statBack("TIM HARDAWAY", ["92-93 Golden State 66 447 744 263 699 116 1419 21.5"]))).toBe(false);
+    // Another player's front is not this front again.
+    expect(frontTwice(f, ocr([["FLEER", 0.1], ["CHRIS MULLIN", 0.82, 0.06], ["WARRIORS", 0.9, 0.04]]))).toBe(false);
   });
 });

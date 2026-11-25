@@ -3,6 +3,8 @@ import { getDb, type Db } from "@/db";
 import { images, items, scans, type Item, type Scan } from "@/db/schema";
 import { liveItem } from "@/lib/items/live";
 import { shownValue } from "@/lib/items/value-line";
+import { parseFirstSuggestion } from "@/lib/catalog/sources";
+import { FRONT_TWICE } from "@/lib/recognition/types";
 
 export type ItemSummary = {
   id: number;
@@ -22,6 +24,8 @@ export type ItemSummary = {
   rarityTier: Item["rarityTier"];
   /** File name of a small picture, for /api/images/<name>. Null when there is none. */
   thumb: string | null;
+  /** A plain line the owner should see with the result ("Both photos show the front..."), or null. */
+  notice: string | null;
 };
 
 export type ScanView = {
@@ -95,6 +99,7 @@ export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {
     id: r.id, kind: r.kind, status: r.status, title: r.title, confidence: r.confidence, quantity: r.quantity,
     ...summaryValue(r),
     isRookie: r.isRookie, rarityTier: r.rarityTier, thumb: thumbs.get(r.id) ?? null,
+    notice: parseFirstSuggestion(r.firstSuggestion)?.hold?.includes("front_twice") ? FRONT_TWICE : null,
   }));
 }
 

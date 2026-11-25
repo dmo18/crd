@@ -20,7 +20,8 @@ import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
 import { checkNotice, confidenceLabel, valueSourceLabel } from "@/lib/items/labels";
 import { fieldsToCheck, offerTrim } from "@/lib/catalog/sources";
-import { linkedFacts } from "@/lib/catalog/pick";
+import { holdReasons, linkedFacts } from "@/lib/catalog/pick";
+import { FRONT_TWICE } from "@/lib/recognition/types";
 import { parsePullList } from "@/lib/items/from-recognition";
 import { recognitionMode } from "@/lib/env";
 import { VersionPicker } from "@/components/catalog/VersionPicker";
@@ -161,6 +162,11 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
             </li>
           ))}
         </ul>
+      ) : null}
+      {item.kind === "card" && item.status === "needs_review" && holdReasons(item).includes("front_twice") ? (
+        <Notice tone="warn">
+          {FRONT_TWICE} {hasBack ? "Tap the Back photo above, then Replace this photo." : null}
+        </Notice>
       ) : null}
       {!hasBack || !hasFront ? (
         <div className="flex flex-col gap-2">

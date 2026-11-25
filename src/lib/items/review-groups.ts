@@ -35,6 +35,7 @@ export const HOLD_SHORT: Record<HoldReason, string> = {
   hard_to_read: "The text was hard to read",
   error_check: "May be a known error version",
   key_list_guess: "Only a possible key card",
+  front_twice: "Both photos show the front",
 };
 
 export type ReviewGrouping = {

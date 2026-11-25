@@ -1,3 +1,4 @@
+import { GIVEN_NAMES } from "./given-names";
 import { normalizeBrand } from "./key-cards";
 import type { OcrResult } from "./ocr";
 import { parseCardText, type ParsedCard } from "./parse";
@@ -22,6 +23,9 @@ const STAT_WORDS = new Set([
   "PIM", "GA", "GAA", "SV%", "A", "P", "YEAR", "CLUB", "TEAM",
 ]);
 
+/** A copyright or printing line: a back's. */
+const COPYRIGHT = /©|\(c\)\s*\d{2}|\bCOPYRIGHT\b|\bPRINTED\s+IN\b|\bLICENSED\b|\bALL\s+RIGHTS\b|\b(?:CORP|INC)\b\.?/i;
+
 /**
  * Whether the text read from one card is its back. A back shows several of:
  * a copyright or printing line, running text (a short life story), a stat
@@ -34,7 +38,7 @@ export function looksLikeBack(read: OcrResult | null): boolean {
   if (lines.length >= BACK_LINES) return true;
   let signs = 0;
   const all = lines.join("\n");
-  if (/©|\(c\)\s*\d{2}|\bCOPYRIGHT\b|\bPRINTED\s+IN\b|\bLICENSED\b|\bALL\s+RIGHTS\b|\b(?:CORP|INC)\b\.?/i.test(all)) signs++;
+  if (COPYRIGHT.test(all)) signs++;
   if (lines.some((t) => t.split(/\s+/).filter((w) => /^[a-z]{2,}[,.;]?$/.test(w)).length >= 4)) signs++;
   if (lines.some((t) => t.toUpperCase().split(/\s+/).filter((w) => STAT_WORDS.has(w)).length >= 3)) signs++;
   if (/\b(?:HEIGHT|WEIGHT|BORN|BIRTHPLACE|HOMETOWN|COLLEGE|DRAFTED|ACQ|HT|WT|BATS|THROWS|SHOOTS)\b|\bDATE\s+OF\s+BIRTH\b/i.test(all)) signs++;
@@ -108,7 +112,7 @@ export function pairScore(front: SideRead, back: SideRead, parsed?: Parsed): num
   // No clean name on the front alone ("NMHARDAWAY"): the name both sides agree on, when they do.
   const words = nameWords(f.player ?? (both.playerAgree ? both.player : null));
   const surname = words[words.length - 1];
-  if (!surname || surname.length < 3) return 0;
+  if (!surname || surname.length < 3) return partOfName(front, back, b, f);
   // A back that names its own player with another surname is another card,
   // whatever its story says ("Pasqua and Thomas shared first base").
   const own = nameWords(b.player);
@@ -131,6 +135,46 @@ export function pairScore(front: SideRead, back: SideRead, parsed?: Parsed): num
   }
   if (sport === false) score -= 1;
   return score >= 1 ? score : 0;
+}
+
+/** A front word this long at least may be the end or the start of a surname whose other part was lost. */
+const NAME_PART = 5;
+
+/**
+ * The surnames a back gives its own player: its parsed name, else every line
+ * of two or three capitalized words that starts with a common given name
+ * ("TIM HARDAWAY" over a stat table).
+ */
+function backSurnames(read: OcrResult | null, b: ParsedCard): string[] {
+  const own = nameWords(b.player);
+  if (own.length > 0) return [own[own.length - 1]];
+  const out = new Set<string>();
+  for (const l of read?.lines ?? []) {
+    const ws = l.text.trim().split(/\s+/);
+    if (ws.length < 2 || ws.length > 3 || !ws.every((w) => /^\p{Lu}[\p{L}'.-]*$/u.test(w))) continue;
+    if (!GIVEN_NAMES.has(ws[0].toLowerCase())) continue;
+    out.add(key(ws[ws.length - 1]));
+  }
+  return [...out];
+}
+
+/**
+ * A front whose name was not read whole ("DAWAY" for Tim Hardaway, the rest
+ * lost in glare): it fits a back whose own heading names a player when a
+ * front word of 5 letters or more is the start or the end of that surname,
+ * and the maker and team do not disagree. The weakest kind of fit (1): any
+ * clearer fit wins, and two such fits tie, so nothing is paired then.
+ */
+function partOfName(front: SideRead, back: SideRead, b: ParsedCard, f: ParsedCard): number {
+  const surnames = backSurnames(back.text, b);
+  if (surnames.length !== 1 || surnames[0].length <= NAME_PART) return 0;
+  const surname = surnames[0];
+  const words = (front.text?.lines ?? []).flatMap((l) => l.text.split(/[^\p{L}]+/u)).map(key).filter((w) => w.length >= NAME_PART);
+  if (!words.some((w) => w !== surname && (surname.endsWith(w) || surname.startsWith(w)))) return 0;
+  if (f.brand && b.brand && normalizeBrand(f.brand) !== normalizeBrand(b.brand)) return 0;
+  if (f.sport && b.sport && f.sport !== b.sport) return 0;
+  const team = same(f.team ?? f.teamHint, b.team ?? b.teamHint);
+  return team === false ? 0 : 1;
 }
 
 /**
@@ -188,4 +232,105 @@ export function pairSides(sides: SideRead[]): [number, number][] {
     }
   }
   return pairs.sort((x, y) => x[0] - y[0]);
+}
+
+/** Words that tell one card side from another: words of 4 letters or more, and numbers of 3 digits or more (stat lines). */
+function sideWords(read: OcrResult | null): Set<string> {
+  const out = new Set<string>();
+  for (const l of read?.lines ?? []) {
+    for (const m of l.text.matchAll(/[\p{L}]{4,}|\d[\d.]{2,}/gu)) out.add(/\d/.test(m[0]) ? m[0].replace(/\.$/, "") : key(m[0]));
+  }
+  return out;
+}
+
+/** Share of the smaller side's words that the other side has too: a front at least this much, a back (more words, more misreads) this much. */
+const SAME_FRONT = 0.8;
+const SAME_BACK = 0.5;
+/** And at least this many words in common. */
+const SAME_FRONT_WORDS = 2;
+const SAME_BACK_WORDS = 4;
+
+/**
+ * Whether two sides found in different photos of one scan are the same side
+ * of the same card, photographed twice (owner scan 8: the three fronts in
+ * two photos). Both fronts or both backs; the same player when both name
+ * one (or the one name found in the other side's letters, "BOBMILACKI");
+ * most of the words and stat numbers of the side with fewer in the other;
+ * and no year, maker or card number that differs. Two different cards of
+ * one player differ in their words (another year, set, story or stats).
+ */
+export function sameSide(a: SideRead, b: SideRead, pa?: ParsedCard, pb?: ParsedCard): boolean {
+  if (a.photo === b.photo || a.back !== b.back) return false;
+  const p = pa ?? (a.back ? parseCardText(null, a.text) : parseCardText(a.text, null));
+  const q = pb ?? (b.back ? parseCardText(null, b.text) : parseCardText(b.text, null));
+  const surname = (x: ParsedCard) => nameWords(x.player).at(-1) ?? null;
+  const letters = (r: OcrResult | null) => key((r?.lines ?? []).map((l) => l.text).join(""));
+  const sa = surname(p);
+  const sb = surname(q);
+  if (sa && sb && sa !== sb) return false;
+  if (sa && !sb && !letters(b.text).includes(sa)) return false;
+  if (sb && !sa && !letters(a.text).includes(sb)) return false;
+  for (const f of ["year", "brand", "cardNumber"] as const) {
+    if (p[f] != null && q[f] != null && String(p[f]) !== String(q[f])) return false;
+  }
+  const wa = sideWords(a.text);
+  const wb = sideWords(b.text);
+  const [small, large] = wa.size <= wb.size ? [wa, wb] : [wb, wa];
+  let common = 0;
+  for (const w of small) if (large.has(w)) common++;
+  if (common < (a.back ? SAME_BACK_WORDS : SAME_FRONT_WORDS)) return false;
+  return common / small.size >= (a.back ? SAME_BACK : SAME_FRONT);
+}
+
+/**
+ * Sides photographed twice: for each side that repeats one kept, the index
+ * of the side kept. Of the repeats the side that gives the most details
+ * (year, maker, number, player, team), then the most words, is kept (the
+ * better photo), the first one on a tie.
+ */
+export function repeatedSides(sides: SideRead[]): Map<number, number> {
+  const parsed = sides.map((s) => (s.back ? parseCardText(null, s.text) : parseCardText(s.text, null)));
+  const size = sides.map((s) => sideWords(s.text).size);
+  const fields = parsed.map((p) => (["year", "brand", "cardNumber", "player", "team"] as const).filter((f) => p[f] != null).length);
+  const order = sides.map((_, i) => i).sort((x, y) => fields[y] - fields[x] || size[y] - size[x] || x - y);
+  const kept: number[] = [];
+  const out = new Map<number, number>();
+  for (const i of order) {
+    const k = kept.find((j) => sides[j].photo !== sides[i].photo && sameSide(sides[j], sides[i], parsed[j], parsed[i]) && ![...out].some(([d, to]) => to === j && sides[d].photo === sides[i].photo));
+    if (k === undefined) kept.push(i);
+    else out.set(i, k);
+  }
+  return out;
+}
+
+/** One card scan: the share of the front's words the second photo must show too to be the front again. */
+const FRONT_AGAIN = 0.6;
+
+/**
+ * One card scan where the photo given as the back shows the front again
+ * (owner scan 9): it does not look like a back, it shows most of the
+ * front's words (at least 2), and it names no other player.
+ */
+export function frontTwice(front: OcrResult | null, back: OcrResult | null): boolean {
+  if (!front || !back || looksLikeBack(back)) return false;
+  // Any sign of a back at all (a copyright line, a row of stat numbers) and it is a back, read poorly.
+  const lines = back.lines.map((l) => l.text);
+  if (lines.some((t) => COPYRIGHT.test(t) || (t.match(/\b\d[\d.]*\b/g) ?? []).length >= 3)) return false;
+  const wf = sideWords(front);
+  const wb = sideWords(back);
+  let common = 0;
+  for (const w of wf) if (wb.has(w)) common++;
+  if (common < SAME_FRONT_WORDS || common / Math.max(1, wf.size) < FRONT_AGAIN) return false;
+  // And it shows little the front does not: its words in capitals (a piece of
+  // running text from a card beside it, in small letters, does not count).
+  const caps = new Set(back.lines.filter((l) => {
+    const letters = l.text.replace(/[^\p{L}]/gu, "");
+    return letters.length > 0 && (letters.match(/\p{Lu}/gu) ?? []).length * 2 >= letters.length;
+  }).flatMap((l) => [...l.text.matchAll(/\p{L}{4,}/gu)].map((m) => key(m[0]))));
+  let shown = 0;
+  for (const w of caps) if (wf.has(w)) shown++;
+  if (caps.size === 0 || shown / caps.size < FRONT_AGAIN) return false;
+  const a = nameWords(parseCardText(front, null).player).at(-1);
+  const b = nameWords(parseCardText(back, null).player).at(-1);
+  return !(a && b && a !== b);
 }

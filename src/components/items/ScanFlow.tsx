@@ -23,7 +23,7 @@ const BUTTON_LABEL = "inline-flex min-h-11 w-full cursor-pointer items-center ju
 const MODES: { value: Choice; title: string; text: string }[] = [
   { value: "single", title: "One card", text: "Front photo, and a back photo if you have one. The back makes it more accurate." },
   { value: "batch", title: "Many photos, one card each", text: "Pick up to 60 photos from your gallery at once. Fronts only, or each card's front then its back. Each card is read on its own." },
-  { value: "multi", title: "Many cards in one photo", text: "Lay cards flat, not overlapping. Up to about 9 per photo works best. The first photo shows the fronts. You can add a second photo of their backs, laid out any way." },
+  { value: "multi", title: "Many cards in one photo", text: "Lay cards flat, not overlapping, and fill the photo with them as much as you can. Take as many photos as you like, with fronts and backs in any order and any way round. Up to about 9 cards per photo works best." },
   { value: "sealed", title: "Sealed pack or box", text: "Never open it. Photograph the front, plus the seal or back if you can." },
   { value: "bulk", title: "Bulk lot", text: "Photograph the box or stack and its label. You get a count estimate and a list of cards worth pulling out." },
   { value: "rapid", title: "One card, fronts only, many in a row", text: "Take a photo and it is saved at once. Take the next one right away." },
@@ -320,6 +320,7 @@ function EntryRow({ entry, n, onRetry, onCheck }: { entry: QueueEntry; n: number
                 <Link href={`/items/${item.id}`} className="inline-flex min-h-11 items-center text-accent underline break-words">
                   {kind === "read" ? `Read: ${item.title}` : item.title}
                 </Link>
+                {item.notice ? <p className="text-sm break-words">{item.notice}</p> : null}
               </li>
             ))}
           </ul>
