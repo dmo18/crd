@@ -101,10 +101,13 @@ function section(name: string, results: CardResult[]) {
   }
   lines.push(...table("All filled fields (sure and unsure)", summary));
   lines.push(...table("Sure fields only", sure));
+  // Cards whose player, year, brand and number are all filled and sure.
+  const fullySure = results.filter((r) => (["player", "year", "brand", "cardNumber"] as const).every((f) => r.read[f] != null && r.certainty[f] === "sure")).length;
   lines.push("", `filed automatically: ${filed.filed} of ${filed.cards} cards, ${filed.filedWrong} of them with a wrong field`);
+  lines.push(`player, year, brand and number all sure: ${fullySure} of ${results.length} cards`);
   lines.push(`BAR: ${bar.pass ? "PASS" : "FAIL"}`);
   for (const why of bar.reasons) lines.push(`  ${why}`);
-  return { text: lines.join("\n"), summary, sure, filed, bar };
+  return { text: lines.join("\n"), summary, sure, filed, bar, fullySure };
 }
 
 function showText(side: string, r: OcrResult | null) {
@@ -183,7 +186,7 @@ async function main() {
     const json = {
       networkCalls,
       cards: results.filter((r) => showsCards(r.split)),
-      splits: parts.map((p) => ({ name: p.name, summary: p.summary, sure: p.sure, filed: p.filed, bar: p.bar })),
+      splits: parts.map((p) => ({ name: p.name, summary: p.summary, sure: p.sure, filed: p.filed, bar: p.bar, fullySure: p.fullySure })),
     };
     await writeFile(outPath, JSON.stringify(json, null, 2) + "\n");
   }

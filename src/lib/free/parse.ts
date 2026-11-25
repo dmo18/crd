@@ -122,6 +122,8 @@ function cleanRaw(s: string): string {
     .replace(/@(?=\s*[0-9OoIlSsg|]{4})/g, " \u00a9 ")
     // A bullet between words is a word of its own ("ORIOLES\u2022PITCHER",
     // "Griffey,Jr.\u2022OF"), and so is the word after a comma ("Griffey,Jr.").
+    // Single capitals spaced by dots ("D\u00b7E\u00b7C\u00b7K" in the Upper Deck logo) are one word.
+    .replace(/(?<![\p{L}\u2022\u00b7\u25cf])\p{Lu}(?:[\u2022\u00b7\u25cf]\p{Lu}){2,}(?![\p{L}\u2022\u00b7\u25cf])/gu, (w) => w.replace(/[\u2022\u00b7\u25cf]/g, ""))
     .replace(/\s*[\u2022\u00b7\u25cf]\s*/g, " \u2022 ")
     .replace(/,(?=[A-Za-z])/g, ", ")
     .replace(/\s+/g, " ")
@@ -183,7 +185,27 @@ function toLines(ocr: OcrResult | null | undefined, side: Side): Line[] {
 }
 
 function isCopyrightLine(l: Line): boolean {
-  return /\u00a9|COPYRIGHT|\bINC\b|\bCORP\b|\bLTD\b|\bCOMPANY\b|\bCO\b/.test(l.lz);
+  return /\u00a9|COPYRIGHT|\bINC\b|\bCORP\b|\bLTD\b|\bCOMPANY\b|\bCO\b/.test(l.lz) || misreadMark(l);
+}
+
+/** A year with the copyright mark read as a letter stuck to its front ("D1990"). */
+const MARK_YEAR = /^[CDOQG@]((?:19|20)\d\d)$/;
+
+/** The year of a token like "D1990" (the mark misread), else null. */
+function markYear(t: string): number | null {
+  const m = MARK_YEAR.exec(stripEnds(t));
+  return m ? validYear(Number(m[1])) : null;
+}
+
+/**
+ * "D1990 THETOPPS": a copyright line whose mark the reader took for a
+ * letter stuck to the year. Counts only with a maker's name on the same
+ * short line, so a plain word with a year ("C1990") is never one.
+ */
+function misreadMark(l: Line): boolean {
+  if (l.tokens.length > 8 || !l.tokens.some((t) => markYear(t) != null)) return false;
+  const compact = l.lz.replace(/[^A-Z]/g, "");
+  return GLUED_MAKERS.some((g) => compact.includes(g.word));
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +278,16 @@ function twoYearSeason(first: string): boolean {
 /** A totals row of a stat table: "TOTALS", "11-YEAR TOTALS", "CAREER", "2 NBA TOTALS", "11 NHL SEASONS". */
 function totalsRow(l: Line): boolean {
   return /\bTOTALS?\b|\bCAREER\b|\b(?:NBA|NHL|NFL|MLB|ML|MAJ|MAJOR\s*LEAGUE)\s*(?:TOTALS?|SEASONS?)\b/.test(l.lz.replace(/\d+-YEAR/g, ""));
+}
+
+/**
+ * A totals row whose word the reader got one letter wrong ("PrrTotuls" for
+ * Pro Totals): a short line ending in a word one letter from TOTALS. Used
+ * only for the row right under a lone season row (yearFromTable).
+ */
+function misreadTotals(l: Line): boolean {
+  if (l.tokens.length > 3) return false;
+  return l.up.split(/[^A-Z]+/).some((w) => w.length >= 6 && editDistance(w.slice(-6), "TOTALS") === 1);
 }
 
 /**
@@ -354,7 +386,7 @@ function yearFromTable(lines: Line[]): YearFind | null {
   if (rows.length < 2 || new Set(rows.map((r) => r.season)).size < 2) {
     // One season row with the totals row right under it: a career table of
     // one season so far, or a "best year" table. The row is the last season.
-    const below = lines.some((l) => totalsRow(l) && l.box.y > lastRow.y && l.box.y - lastRow.y < 2.5 * Math.max(lastRow.h, l.box.h));
+    const below = lines.some((l) => (totalsRow(l) || misreadTotals(l)) && l.box.y > lastRow.y && l.box.y - lastRow.y < 2.5 * Math.max(lastRow.h, l.box.h));
     if (rows.length !== 1 || !below) return null;
     return { year: last + 1, how: "stats", score: 2, lastSeason: last, twoYear };
   }
@@ -481,7 +513,7 @@ function twoDigit(n: number): number | null {
 
 /** A line that holds a copyright notice: the mark, the word, or a company word with a maker named. */
 function copyrightNotice(l: Line, branded: boolean): boolean {
-  if (l.raw.includes("\u00a9") || /COPYRIGHT|\bCOPR\b/.test(l.lz)) return true;
+  if (l.raw.includes("\u00a9") || /COPYRIGHT|\bCOPR\b/.test(l.lz) || misreadMark(l)) return true;
   return branded && /\bINC\b|\bCORP\b|\bLTD\b|\bCOMPANY\b|\bCO\b|\bMARKETING\b/.test(l.lz);
 }
 
@@ -568,7 +600,7 @@ function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<
     const maker = brandLines.has(l);
     if (!copyrightNotice(l, maker)) continue;
     for (const t of l.tokens) {
-      const y = fixedYear(t) ?? fixedYear(t.replace(/^(?:COPR|\u00a9)\.?/i, ""));
+      const y = fixedYear(t) ?? fixedYear(t.replace(/^(?:COPR|\u00a9)\.?/i, "")) ?? markYear(t);
       if (y != null) notices.push({ year: y, maker });
     }
   }
@@ -607,13 +639,18 @@ function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<
     return { year: last + 1, how: "copyright", copyright, lastSeason: last, signs: 2 };
   }
   if (copyright != null) {
-    if (last == null) return { year: copyright, how: "copyright", copyright, signs: 1 };
+    // The set's own line on the back ("2021 PANINI - PRIZM BASEBALL",
+    // "2022-23 ARTIFACTS"), apart from the copyright line, is one more
+    // sign when it gives the same year.
+    const setLine = backSetLineYears(back, brandLines);
+    const plus = (year: number) => (setLine.has(year) ? 1 : 0);
+    if (last == null) return { year: copyright, how: "copyright", copyright, signs: 1 + plus(copyright) };
     if (last > copyright) {
       seen.conflict = true;
       return null;
     }
-    if (last === copyright) return { year: copyright + 1, how: "copyright", copyright, lastSeason: last, signs: 2 };
-    return { year: copyright, how: "copyright", copyright, lastSeason: last, signs: last === copyright - 1 ? 2 : 1 };
+    if (last === copyright) return { year: copyright + 1, how: "copyright", copyright, lastSeason: last, signs: Math.min(3, 2 + plus(copyright + 1)) };
+    return { year: copyright, how: "copyright", copyright, lastSeason: last, signs: Math.min(3, (last === copyright - 1 ? 2 : 1) + plus(copyright)) };
   }
   if (stats) return { year: stats.year, how: "stats", lastSeason: last ?? undefined, signs: 1 };
   // A year on a line with the maker's name, anywhere ("1989 UPPER DECK").
@@ -625,6 +662,23 @@ function findCardYear(front: Line[], back: Line[], all: Line[], brandLines: Set<
     }
   }
   return null;
+}
+
+/**
+ * Years on the back's own set lines: a short line with a maker or product
+ * name and a year ("2021 PANINI - PRIZM BASEBALL"), never a copyright line
+ * or running text. A season ("2022-23") gives its first year.
+ */
+function backSetLineYears(back: Line[], brandLines: Set<Line>): Set<number> {
+  const out = new Set<number>();
+  for (const l of back) {
+    if (!brandLines.has(l) || isCopyrightLine(l) || isSentence(l) || l.tokens.length > 6) continue;
+    for (const t of l.tokens) {
+      const y = fixedYear(t) ?? seasonYear(t);
+      if (y != null) out.add(y);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +852,7 @@ function hitNames(def: BrandDef, year: number | null): { brand: string | null; s
 }
 
 /** `logo`: read on a short line of its own, not a copyright line: the maker's logo text. */
-type BrandHit = { def: BrandDef; line: Line; score: number; logo: boolean };
+type BrandHit = { def: BrandDef; line: Line; score: number; logo: boolean; confirmOnly?: boolean };
 
 /**
  * Logo words printed one above the other ("UPPER" over "DECK"), read as two
@@ -865,9 +919,29 @@ function brandHits(lines: Line[]): BrandHit[] {
         if (brand) hits.push({ def: brand, line: l, score: 1, logo: false });
       }
     }
+    // A short maker logo with one letter misread ("tepps" for Topps): never
+    // a brand by itself (plain words sit one letter away from these names),
+    // only a second place that agrees with a brand read elsewhere.
+    if (l.tokens.length <= 2 && !copyright && !isSentence(l) && !hits.some((h) => h.line === l)) {
+      for (const word of l.lz.split(/[^A-Z]+/)) {
+        const def = CONFIRM_LOGOS.find((d) => d.word.length === word.length && editDistance(d.word, word) === 1);
+        const brand = def && BRANDS.find((b) => b.key === def.key);
+        if (brand) hits.push({ def: brand, line: l, score: 0, logo: false, confirmOnly: true });
+      }
+    }
   }
   return hits;
 }
+
+/** The lines that name a maker (a misread logo that only confirms is not one). */
+function makerLines(hits: BrandHit[]): Set<Line> {
+  return new Set(hits.filter((h) => !h.confirmOnly).map((h) => h.line));
+}
+
+/** Short maker logos that, read with one letter wrong, only confirm a brand read elsewhere. */
+const CONFIRM_LOGOS: { word: string; key: string }[] = [
+  { word: "TOPPS", key: "topps" }, { word: "FLEER", key: "fleer" }, { word: "SCORE", key: "score" }, { word: "PANINI", key: "panini" },
+];
 
 /** Maker names as they stand in a copyright line read without spaces. */
 const GLUED_MAKERS: { word: string; key: string }[] = [
@@ -922,7 +996,7 @@ function pickBrand(hits: BrandHit[], year: number | null): BrandPick | null {
   };
   for (const h of hits) {
     const brand = brandOf(h);
-    if (brand) scores.set(brand, (scores.get(brand) ?? 0) + h.score);
+    if (brand && !h.confirmOnly) scores.set(brand, (scores.get(brand) ?? 0) + h.score);
   }
   // A logo name beats the copyright owner ("1991 LEAF, INC" with a DONRUSS
   // logo is Donruss, "PINNACLE BRANDS" with a SCORE logo is Score): when a
@@ -956,7 +1030,7 @@ function pickBrand(hits: BrandHit[], year: number | null): BrandPick | null {
     subSet,
     sport: sportDef?.def.sport ?? null,
     sportWeight: sportDef?.def.sportWeight ?? 0,
-    lines: mine.map((h) => h.line),
+    lines: mine.filter((h) => !h.confirmOnly).map((h) => h.line),
     signs: Math.min(3, kinds.size),
     setLines: subSet ? hits.filter((h) => hitNames(h.def, year).set === subSet).map((h) => h.line) : [],
   };
@@ -1192,7 +1266,20 @@ function findCardNumber(back: Line[], front: Line[]): NumberFind | null {
   }
   const bottomAgree = top.length === 0 && reads.length > 0 && cornerLines.some((x) => !x.c.top && x.c.number === n && !counted.has(x.l));
   const twice = from.some((l) => l.twice);
-  return { number: n, sure: places >= 2 || bottomAgree || twice };
+  const cornerMark = backMarks[0]?.n === n && from.includes(backMarks[0].l) && makerMarkInCorner(backMarks[0].l);
+  return { number: n, sure: places >= 2 || bottomAgree || twice || cornerMark };
+}
+
+/**
+ * The maker's own number mark where makers print it: "No. SG-4" as a short
+ * line of its own in a top corner of the back, read clearly. "No." is how
+ * makers mark the card number ("#" is also used for jerseys), and a top
+ * corner is where they put it: place and form agree, a second sign.
+ */
+function makerMarkInCorner(l: Line): boolean {
+  const b = l.box;
+  const corner = b.y < CORNER_Y && (b.x < CORNER_X || b.x + b.w > 1 - CORNER_X);
+  return corner && l.tokens.length <= 3 && l.conf >= 0.95 && /^(?:N[Oo0]|n[o0])[.:]/.test(l.tokens[0]);
 }
 
 // ---------------------------------------------------------------------------
@@ -2163,6 +2250,10 @@ function nearGivenNames(name: string): string[] {
  * of the near names ("Jose tied a club record"); otherwise the name is
  * unsure and left out (null). Names not near a common one stay as read.
  */
+function knownGiven(word: string): boolean {
+  return GIVEN_NAMES.has(word.toLowerCase().replace(/[^a-z]/g, ""));
+}
+
 function checkFirstName(words: string[], lines: Line[]): string | null {
   if (words.length < 2) return words[0] ?? null;
   const key = words[0].toLowerCase().replace(/[^a-z]/g, "");
@@ -2241,6 +2332,12 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
     if (h) {
       // The front's form of the name; a surname spelled two ways is taken from the clearer read.
       chosen = surnameKey(f) === surnameKey(h) || f.line.conf >= h.line.conf ? f : { ...f, words: [...f.words.slice(0, -1), h.words[h.words.length - 1]] };
+      // "Fose Canseco" on the front, "Jose Canseco" on the back: the back's
+      // first name is a known one and the front's is not, so the back's
+      // reading is taken as read (not corrected by the name list).
+      if (chosen.words.length >= 2 && h.words.length >= 2 && !knownGiven(chosen.words[0]) && knownGiven(h.words[0])) {
+        chosen = { ...chosen, words: [h.words[0], ...chosen.words.slice(1)] };
+      }
       other = h;
       agree = true;
       suffix = f.suffix ?? h.suffix;
@@ -2337,8 +2434,19 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
   // A second sign of the name (12R.5 round 2): the other side names the
   // same player (agree), or the back's other text uses the name's surname or
   // first name ("Jones led the Bolles School", "Jim's most productive game").
-  const echo = agree || nameEcho(chosen, back, nameLines);
+  const echo = agree || nameEcho(chosen, back, nameLines) || gluedEcho(chosen, back);
   return { player, names, agree, keyMatch, hint, header, nameLines, corrected, echo };
+}
+
+/**
+ * The whole name printed on the back with its space lost ("CAMATKINSON"
+ * for a front's CAM ATKINSON): the same letters, first name and surname, in
+ * a second place. At least 8 letters, so a short name never matches a word.
+ */
+function gluedEcho(name: NameRead, back: Line[]): boolean {
+  const want = name.words.join("").toUpperCase().replace(/[^A-Z]/g, "");
+  if (name.words.length < 2 || want.length < 8) return false;
+  return back.some((l) => l !== name.line && l.tokens.length <= 2 && l.up.replace(/[^A-Z]/g, "") === want);
 }
 
 /**
@@ -2445,7 +2553,7 @@ function slabLabelYearBrand(lines: Line[]): { year: number; brand: string; line:
     const rest = makeLine(m[2], l.conf, l.box, l.side, l.source);
     if (year == null || !rest) continue;
     for (const h of brandHits([rest])) {
-      if (h.def.copyrightOnly || h.def.key === "leafinc" || h.def.key === "udc") continue;
+      if (h.def.copyrightOnly || h.confirmOnly || h.def.key === "leafinc" || h.def.key === "udc") continue;
       const brand = hitNames(h.def, year).brand;
       if (brand && rest.lz.search(h.def.re) <= 1) return { year, brand, line: l };
     }
@@ -2584,7 +2692,7 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   // on a bare card the same kind of line only fills a year nothing else gave.
   const slabLabel = slab ? label : null;
   const seen = { conflict: false };
-  let yearFind = findCardYear(front, back, lines, new Set(hits.map((h) => h.line)), seen);
+  let yearFind = findCardYear(front, back, lines, makerLines(hits), seen);
   if (seen.conflict) ev.push("The years printed on the card do not agree, so the year is left for you");
   if (!yearFind && !slab && label && !seen.conflict) yearFind = { year: label.year, how: "brand", signs: 1 };
   // A holder label prints the card's year plainly: it is the best sign. When
@@ -2605,7 +2713,7 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
     // sure from the label only when a line other than the label agrees.
     const notLabel = (ls: Line[]) => ls.filter((l) => l !== slabLabel.line);
     const otherHits = hits.filter((h) => h.line !== slabLabel.line);
-    const otherYear = findCardYear(notLabel(front), notLabel(back), notLabel(lines), new Set(otherHits.map((h) => h.line)));
+    const otherYear = findCardYear(notLabel(front), notLabel(back), notLabel(lines), makerLines(otherHits));
     if (out.year === slabLabel.year) out.yearSigns = Math.min(3, 1 + (otherYear?.year === slabLabel.year ? otherYear.signs : 0));
     const otherPick = pickBrand(otherHits, out.year);
     if (out.brand === slabLabel.brand) out.brandSigns = Math.min(3, 1 + (otherPick?.brand === slabLabel.brand ? otherPick.signs : 0));
@@ -2687,7 +2795,7 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   // name header ("Ken Griffey, Jr. * OF") beats one read elsewhere.
   const before = winner(new Map([...votes].filter(([, w]) => w >= 1)));
   const header = players.header && (!before || !players.header.sport || players.header.sport === before) ? players.header : null;
-  const pos = header ?? findPosition([...front, ...back], before);
+  let pos = header ?? findPosition([...front, ...back], before);
   if (pos) {
     out.position = pos.position;
     vote(votes, pos.sport, 2);
@@ -2703,6 +2811,15 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
   // A nickname alone is not enough: the team's city, or a second sign of its
   // sport (league words, stat headers, a position, the maker) must be read too.
   const supported = (t: TeamFind) => !t.ambiguous && t.sport !== null && (t.city || (votes.get(t.sport) ?? 0) > 0);
+  // A guard also plays on a football line ("GUARD", "starter at right
+  // guard"): with a football team read, the word is no sign of basketball.
+  if (pos?.position === "G" && pos.sport === "basketball" && team?.sport === "football" && !team.ambiguous && [...front, ...back].some((l) => /\bGUARD\b/.test(l.lz))) {
+    const set = kinds.get("basketball");
+    set?.delete("position");
+    if (set && set.size === 0) kinds.delete("basketball");
+    votes.set("basketball", Math.max(0, (votes.get("basketball") ?? 0) - 2));
+    pos = null;
+  }
   if (team && supported(team)) {
     out.team = team.team;
     vote(votes, team.sport, 3);
@@ -2830,7 +2947,7 @@ function parseProductInner(lines: Line[]): ParsedProduct {
   }
   const hits = brandHits(lines);
   if (out.year == null) {
-    const y = findYear(lines, new Set(hits.map((h) => h.line)));
+    const y = findYear(lines, makerLines(hits));
     let year = y && y.how !== "stats" ? y.year : null;
     if (year == null) {
       for (const l of lines) {

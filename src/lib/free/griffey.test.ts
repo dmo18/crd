@@ -90,8 +90,11 @@ describe("1990 Topps Ken Griffey Jr., recorded text, catalog and facts, end to e
     expect(item.catalog?.status).toBe("candidates");
     const first = (item.catalog as { candidates: Candidate[] }).candidates[0];
     expect(first).toMatchObject({ sourceId: "551033", year: 1990, brand: "Topps", cardNumber: "336", player: "Ken Griffey Jr.", variation: null });
-    // Automatic filling is off: the number stays as read (cut off on the photo).
-    expect(item.cardNumber).toBeNull();
+    // The number is cut off on the photo. Since the brand is read (Topps), the
+    // set's list fills it (rule D): kept apart as the list's value, never sure.
+    expect(item.cardNumber).toBe("336");
+    expect(item.evidence?.checklist).toContain("cardNumber");
+    expect(item.evidence?.certainty?.cardNumber).toBe("unsure");
     expect(catalog.calls.length).toBeGreaterThan(0);
   });
   it("never offers the Tiffany card or Ken Griffey Sr. first", () => {
