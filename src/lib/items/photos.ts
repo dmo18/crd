@@ -1,10 +1,11 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, type ImageRow } from "@/db/schema";
+import type { Box } from "@/lib/recognition/types";
 import { EditError, JOB_TIMEOUT_MESSAGE, lockPhoto, runOneAtATime, type PhotoEdit } from "@/lib/images/edit";
 import {
   ARCHIVE_EDGE, deleteStored, ImageError, keepAsOriginal, removeNamed, restoreOriginal, sameFamily, saveUpload,
-  SOURCE_ARCHIVE_EDGE, writeEdited, type StoredImage,
+  SOURCE_ARCHIVE_EDGE, writeEdited, writeFixed, type StoredImage, type Turn,
 } from "@/lib/images/store";
 
 export type PhotoResult = { ok: true; imageId: number } | { ok: false; error: string };
@@ -47,6 +48,20 @@ const fields = (s: StoredImage) => ({ file: s.file, thumbFile: s.thumbFile, work
 export async function editPhoto(input: { itemId: number; imageId: number; edit: PhotoEdit }, db: Db = getDb()): Promise<PhotoResult> {
   const row = ownPhoto(db, input.itemId, input.imageId);
   if (!row) return fail(NOT_FOUND);
+  return changePhoto(row, db, (edge) => writeEdited(row, input.edit, edge));
+}
+
+/**
+ * The automatic fix after a scan: turn and cut a photo in one step, recorded
+ * exactly like a turn and trim made by hand (the first change keeps the
+ * untouched photo as the original). Works on a scan's photo before it
+ * belongs to an item.
+ */
+export async function fixPhoto(row: ImageRow, fix: { turn: Turn; box: Box | null }, db: Db = getDb()): Promise<PhotoResult> {
+  return changePhoto(row, db, (edge) => writeFixed(row, fix, edge));
+}
+
+async function changePhoto(row: ImageRow, db: Db, write: (edge: number) => Promise<StoredImage>): Promise<PhotoResult> {
   const release = lockPhoto(row.id);
   if (!release) return fail(BUSY);
   try {
@@ -55,7 +70,7 @@ export async function editPhoto(input: { itemId: number; imageId: number; edit: 
       let written: StoredImage | null = null;
       let madeCopy: string | null = null;
       try {
-        written = await writeEdited(row, input.edit, edge);
+        written = await write(edge);
         if (ctl.expired()) throw new EditError(JOB_TIMEOUT_MESSAGE);
         const firstEdit = row.originalFile == null;
         const original = firstEdit ? await keepAsOriginal(row) : row.originalFile!;

@@ -234,8 +234,11 @@ export async function readForRecognition(photo: PhotoRef): Promise<{ data: Buffe
   }
 }
 
+/** A turn in degrees clockwise. */
+export type Turn = 0 | 90 | 180 | 270;
+
 /** Cuts a card out of a photo (from its working copy when it has one). The crop starts as a working copy too. */
-export async function cropStored(photo: PhotoRef, box: Box, padding = 0.04): Promise<StoredImage> {
+export async function cropStored(photo: PhotoRef, box: Box, padding = 0.04, turn: Turn = 0): Promise<StoredImage> {
   const input = await readSource(photo);
   try {
     const meta = await sharp(input, DECODE_OPTIONS).metadata();
@@ -255,7 +258,9 @@ export async function cropStored(photo: PhotoRef, box: Box, padding = 0.04): Pro
     height = Math.min(height, H);
     left = Math.max(0, Math.min(left, W - width));
     top = Math.max(0, Math.min(top, H - height));
-    return await writeWorking(() => sharp(input, DECODE_OPTIONS).extract({ left, top, width, height }));
+    // Cut first, then turn (a turn of 0 leaves the pixels as they are).
+    const cut = await sharp(input, DECODE_OPTIONS).extract({ left, top, width, height }).png({ compressionLevel: 0 }).toBuffer();
+    return await writeWorking(() => (turn ? sharp(cut).rotate(turn) : sharp(cut)));
   } catch (e) {
     if (e instanceof ImageError) throw e;
     throw new ImageError("That photo could not be cropped.");
@@ -361,6 +366,49 @@ export async function writeEdited(photo: PhotoRef, edit: PhotoEdit, edge: number
   } catch (e) {
     await deleteStored(out.file).catch(() => {});
     if (e instanceof ImageError || (e instanceof Error && e.name === "EditError")) throw e;
+    throw new ImageError("Could not change the photo. The old photo is unchanged.");
+  }
+}
+
+/**
+ * Turns a photo and then cuts it, in ONE encode of the full picture, like
+ * writeEdited (same new names, same atomic writes, nothing else touched).
+ * `box` is in the photo as it is now (before the turn), as fractions. Used by
+ * the automatic fix after a scan: the caller records it exactly like a turn
+ * and trim made by hand, so "Back to original" brings the photo back.
+ */
+export async function writeFixed(photo: PhotoRef, fix: { turn: Turn; box: Box | null }, edge: number): Promise<StoredImage> {
+  const input = await readSource(photo);
+  const id = crypto.randomUUID();
+  const dir = uploadsDir();
+  const out: StoredImage = { file: archiveName(id), thumbFile: thumbName(id), workFile: null, width: 0, height: 0, bytes: 0, thumbBytes: 0 };
+  try {
+    const meta = await sharp(input, DECODE_OPTIONS).metadata();
+    const W = meta.width ?? 0;
+    const H = meta.height ?? 0;
+    if (!W || !H) throw new ImageError("That photo could not be read.");
+    let pixels: Buffer = input;
+    if (fix.box) {
+      const left = Math.max(0, Math.min(W - 1, Math.floor(fix.box.x * W)));
+      const top = Math.max(0, Math.min(H - 1, Math.floor(fix.box.y * H)));
+      const width = Math.max(MIN_CROP_PX, Math.min(W - left, Math.round(fix.box.w * W)));
+      const height = Math.max(MIN_CROP_PX, Math.min(H - top, Math.round(fix.box.h * H)));
+      pixels = await sharp(input, DECODE_OPTIONS).extract({ left, top, width, height }).png({ compressionLevel: 0 }).toBuffer();
+    }
+    const pipeline = fix.turn ? sharp(pixels, DECODE_OPTIONS).rotate(fix.turn) : sharp(pixels, DECODE_OPTIONS);
+    const main = await avif(pipeline, edge).toBuffer({ resolveWithObject: true });
+    // The small picture is made from the fixed photo, fitting inside its long edge.
+    const thumb = await avif(sharp(main.data, DECODE_OPTIONS), THUMB_EDGE).toBuffer();
+    out.width = main.info.width;
+    out.height = main.info.height;
+    out.bytes = main.data.length;
+    out.thumbBytes = thumb.length;
+    await writeAtomic(path.join(dir, out.file), main.data);
+    await writeAtomic(path.join(dir, out.thumbFile), thumb);
+    return out;
+  } catch (e) {
+    await deleteStored(out.file).catch(() => {});
+    if (e instanceof ImageError) throw e;
     throw new ImageError("Could not change the photo. The old photo is unchanged.");
   }
 }

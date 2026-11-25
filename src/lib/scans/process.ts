@@ -2,6 +2,8 @@ import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, valuations, type ImageRow, type ValueSource } from "@/db/schema";
 import { startPhotoArchiver } from "@/lib/images/archive";
+import { fixPhoto } from "@/lib/items/photos";
+import { planFix } from "./photo-fix";
 import { cropStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
 import { serializeCatalog } from "@/lib/catalog/candidates";
 import { applyScanCard } from "@/lib/catalog/pick";
@@ -38,6 +40,32 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
     return await Promise.race([work, timeout]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** The turn for a stored card crop, only when the reader trusted it. Many cards: nothing else is done. */
+function turnOf(r: RecognizedItem, role: "front" | "back"): 0 | 90 | 180 | 270 {
+  const fix = r.fixes?.find((f) => f.role === role);
+  return fix && fix.turnTrusted ? fix.turn : 0;
+}
+
+/**
+ * Applies what the reader found to each photo of a one card scan. A failure
+ * here never fails the scan: the kind of error is logged and that photo stays
+ * as it was.
+ */
+async function fixScanPhotos(db: Db, rows: ImageRow[], item: RecognizedItem): Promise<void> {
+  for (const fix of item.fixes ?? []) {
+    const row = rows[fix.sourceIndex];
+    if (!row) continue;
+    try {
+      const plan = planFix(fix, row.width, row.height);
+      if (!plan) continue;
+      const result = await fixPhoto(row, plan, db);
+      if (!result.ok) log.warn("photo_fix_skipped", { scanId: row.scanId, imageId: row.id });
+    } catch (err) {
+      log.warn("photo_fix_failed", { scanId: row.scanId, error: errorKind(err) });
+    }
   }
 }
 
@@ -91,7 +119,7 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
         const source: ImageRow | undefined = photoRows[r.sourceIndex];
         if (r.box && source) {
           try {
-            crops.set(i, await cropStored(source, r.box));
+            crops.set(i, await cropStored(source, r.box, undefined, turnOf(r, "front")));
           } catch {
             // A bad box only costs this item its own picture.
           }
@@ -100,12 +128,18 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
         const backSource: ImageRow | undefined = back ? photoRows[back.sourceIndex] : undefined;
         if (back && backSource) {
           try {
-            backs.set(i, await cropStored(backSource, back.box));
+            backs.set(i, await cropStored(backSource, back.box, undefined, turnOf(r, "back")));
           } catch {
             // The card keeps its front; the back can be added later.
           }
         }
       }
+    }
+
+    // One card scans: turn each stored photo upright and cut it to the card
+    // when the reader is sure (S1b). The untouched photo stays as the original.
+    if (scan.mode === "single" && recognized.length === 1) {
+      await fixScanPhotos(db, photoRows, recognized[0]!);
     }
 
     const valueSource: ValueSource = recognizer.name === "sample" ? "sample" : "ai_estimate";
