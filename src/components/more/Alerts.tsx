@@ -22,7 +22,7 @@ export function Alerts({ channels }: { channels: string[] }) {
       <Notice tone={on ? "accent" : "neutral"}>
         {on
           ? `Alerts are on. They go to ${channels.join(" and ")}.`
-          : "Alerts are off. To turn them on, add the Telegram or Discord alert settings in your hosting panel. The file .env.example explains how to get them."}
+          : "Alerts are off. They can go to Telegram or Discord. Ask whoever runs the server to turn them on."}
       </Notice>
       <form action={formAction}>
         <Button type="submit" variant="secondary" disabled={pending} className="w-full">

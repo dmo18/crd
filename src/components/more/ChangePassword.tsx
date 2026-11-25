@@ -15,7 +15,7 @@ export function ChangePassword() {
         </>
       ) : (
         <Notice tone="neutral">
-          Your password is set in the server settings (OWNER_PASSWORD_HASH_B64), so it is changed there, not here.
+          Your password is set in the server settings, so it cannot be changed here. Ask whoever runs the server to change it.
         </Notice>
       )}
     </Card>

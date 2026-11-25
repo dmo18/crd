@@ -71,7 +71,7 @@ export default async function MorePage() {
             ? "Cards are read on this server with free text recognition, and players are checked on Wikidata, a free public database. No keys or accounts needed. Blurry or glossy photos may need a quick fix in Review."
             : mode === "sample"
               ? "Sample mode: scans return made-up example cards."
-              : "Optional paid reading is on."}
+              : "A different reading mode is switched on in the server settings."}
         </Notice>
       </Card>
 
@@ -88,7 +88,7 @@ export default async function MorePage() {
           <dd className="text-right font-semibold">{storage.waiting.toLocaleString("en-US")}</dd>
         </dl>
         <p className="text-sm text-muted">
-          Photos are kept in a small, sharp format (AVIF). New photos are made smaller right after they are read, and
+          Photos are kept in a small, sharp format. New photos are made smaller right after they are read, and
           older photos a few at a time in the background. Photos of a failed scan stay full size for 7 days, so you can try again.
         </p>
       </Card>
@@ -96,9 +96,14 @@ export default async function MorePage() {
       <Card className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">About values</h2>
         <p className="text-sm text-muted">
-          Values come from your own entries, using sold listings. Estimates from the app appear only if the paid reader is turned on.
-          They are a guide, not an appraisal. Check recent sold listings before you sell or insure anything.
+          Every card with a year and a player or card number gets a rough value from the app&apos;s built-in price guide.
+          It looks at the year, the maker, the player and known key cards. It is a rough range, not an appraisal.
+        </p>
+        <p className="text-sm text-muted">
           If you enter your own value for an item, your value always wins.
+        </p>
+        <p className="text-sm text-muted">
+          On each card, the Check real sales buttons open recent sold listings for that card, so you can see what it really sells for before you sell or insure it.
         </p>
       </Card>
 
