@@ -14,6 +14,7 @@ import { serialColumns, splitSerial } from "@/lib/items/serial";
 import { clearVersionOnNewVariation, editableFields, itemEditSchema } from "@/lib/items/update";
 import { formatCents } from "@/lib/money";
 import { buildTitle } from "@/lib/title";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 import {
   cleanCell, cleanMoney, cleanYear, FIRST_YEAR, lastYear, listOf, matchCondition, matchKind, matchProduct, matchRarity,
   matchSeal, matchSport, yesNo,
@@ -462,7 +463,9 @@ export function applyImport(
 ): ImportResult | Fail {
   const file = readFile(text, rawMapping);
   if ("error" in file) return file;
-  return db.transaction((txRaw) => {
+  // Items the import saved: they get a guide price once the save is done (never an owner value, never `updatedAt`).
+  const touched: number[] = [];
+  const result = db.transaction((txRaw) => {
     const tx = txRaw as unknown as Db;
     const p = plan(tx, file.rows, file.mapping, opts, now);
     const c = p.counts;
@@ -490,6 +493,7 @@ export function applyImport(
       hooks.beforeSave?.(step++);
       const id = insertPrepared(tx, { ...o.item, locationId: locId(o.location) }, o.manualValue, now);
       created.push(id);
+      touched.push(id);
       if (addedItems.length < SHOWN_CHANGES) addedItems.push({ id, title: o.item.title });
     }
 
@@ -519,6 +523,7 @@ export function applyImport(
         }).run();
       }
       undoItems.push([id, old]);
+      touched.push(id);
       if (updatedItems.length < SHOWN_CHANGES) updatedItems.push({ id, title: (patch.title as string | undefined) ?? u.existing.title });
     }
     if (created.length === 0 && undoItems.length === 0) throw new Error("import had nothing to save");
@@ -536,4 +541,6 @@ export function applyImport(
       addedItems, updatedItems,
     };
   }, { behavior: "immediate" });
+  if (!("error" in result)) refreshGuideQuietly(touched, db, now);
+  return result;
 }

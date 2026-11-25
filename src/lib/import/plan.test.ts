@@ -209,6 +209,36 @@ describe("all or nothing", () => {
   });
 });
 
+describe("price guide after an import", () => {
+  const CARD = { kind: "card" as const, year: 1989, brand: "Upper Deck", player: "Ken Griffey Jr.", cardNumber: "1" };
+
+  it("new and updated items without an owner value get a guide price; an owner value is never touched", () => {
+    const upd = add({ ...CARD, team: "Mariners" });
+    const own = add({ ...CARD, cardNumber: "2", team: "Mariners", manualValueCents: 777, updatedAt: T0 });
+    const r = ok(run(`ID,Year,Brand,Card number,Player,Team\n,1989,Upper Deck,7,Ken Griffey Jr.,Mariners\n${upd},1989,Upper Deck,1,Ken Griffey Jr.,Rookies\n${own},1989,Upper Deck,2,Ken Griffey Jr.,Rookies\n`));
+    expect(r).toMatchObject({ added: 1, updated: 2 });
+    const made = all().find((i) => i.id !== upd && i.id !== own)!;
+    expect(get(made.id)).toMatchObject({ valueSource: "price_guide", manualValueCents: null });
+    expect(get(made.id).estValueCents).toBeGreaterThan(0);
+    expect(get(upd)).toMatchObject({ valueSource: "price_guide", team: "Rookies" });
+    expect(get(own)).toMatchObject({ manualValueCents: 777, estValueCents: null, valueSource: null, team: "Rookies" });
+  });
+
+  it("a typed value in the file stays the owner's, with no guide price", () => {
+    ok(run("Year,Brand,Card number,Player,Value\n1989,Upper Deck,1,Ken Griffey Jr.,12.50\n"));
+    expect(all()[0]).toMatchObject({ manualValueCents: 1250, estValueCents: null, valueSource: null });
+  });
+
+  it("undo still works after the guide price was added (the guide does not count as an edit)", () => {
+    const upd = add({ ...CARD, team: "Mariners", updatedAt: T0 });
+    const r = ok(run(`ID,Year,Brand,Card number,Player,Team\n,1989,Upper Deck,5,Ken Griffey Jr.,Cubs\n${upd},1989,Upper Deck,1,Ken Griffey Jr.,Rookies\n`));
+    expect(get(upd).valueSource).toBe("price_guide");
+    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 2, skipped: 0 });
+    expect(get(upd)).toMatchObject({ team: "Mariners", updatedAt: T0 });
+    expect(all().filter((i) => i.deletedAt != null)).toHaveLength(1);
+  });
+});
+
 describe("undo", () => {
   it("is one bulk change: added items go to Recently deleted, updated items get their old values back", () => {
     const id = add({ player: "Old", team: "Reds", updatedAt: T0 });
