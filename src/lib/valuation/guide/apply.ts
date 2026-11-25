@@ -1,7 +1,8 @@
 import { and, eq, isNull, or } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { items, valuations, type Item } from "@/db/schema";
-import { storedPlayerFacts } from "@/lib/free/wikidata";
+import { storedPlayerFacts, type PlayerFacts } from "@/lib/free/wikidata";
+import { YEARS_BEFORE } from "./players";
 import { liveItem } from "@/lib/items/live";
 import { errorKind, log } from "@/lib/log";
 import { guidePrice, type GuidePrice } from "./index";
@@ -26,11 +27,26 @@ export const GUIDE_MESSAGES = {
   otherSource: "This item already has an estimate from another source.",
 } as const;
 
-/** The guide price for an item, using the stored Wikidata Hall of Fame fact when there is one. */
+/** A card made before the player was about this old cannot be his. */
+export const MIN_AGE_ON_CARD = 16;
+
+/**
+ * Whether the stored facts can be the card's player by the years: not a card
+ * from before he was about 16, nor from before his first seasons.
+ */
+export function factsFitYear(facts: Pick<PlayerFacts, "birthYear" | "careerStart">, year: number | null): boolean {
+  if (year == null) return true;
+  if (facts.birthYear != null && year < facts.birthYear + MIN_AGE_ON_CARD) return false;
+  if (facts.careerStart != null && year < facts.careerStart - YEARS_BEFORE) return false;
+  return true;
+}
+
+/** The guide price for an item, using the stored Wikidata Hall of Fame fact when there is one that fits the card's year. */
 export function guideFor(item: Item, db: Db, now: Date): GuidePrice {
-  const facts = item.kind === "card" && item.player
+  const found = item.kind === "card" && item.player
     ? storedPlayerFacts(item.player, { sport: item.sport, year: item.year, db, now })
     : null;
+  const facts = found && factsFitYear(found, item.year) ? found : null;
   return guidePrice(item, { hallOfFame: facts ? facts.hallOfFame : null });
 }
 

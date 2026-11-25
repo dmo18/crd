@@ -3,6 +3,7 @@ import { KEY_CARDS } from "@/lib/free/key-cards";
 import { normalizeBrand, normalizeCardNumber } from "@/lib/catalog/normalize";
 import { GUIDE_MISSING, guidePrice, numericGrade, playerTier, printRun, type GuideFields } from "./index";
 import { findPricedCard, PRICED_CARDS } from "./key-prices";
+import { factsFitYear } from "./apply";
 import { listedNames, listedTier } from "./players";
 import {
   AUTOGRAPH_RANGES, ERAS, GRADE_BANDS, MEMORABILIA_RANGES, PLAYER_TIERS, ROOKIE_MULTIPLIER, SEALED_RANGES, SERIAL_TIERS, type Range,
@@ -104,6 +105,68 @@ describe("guide tables", () => {
     expect(listedTier("josé canseco", null)).toBe("star");
     expect(listedTier("Bo Jackson", null)).toBeNull(); // listed in two sports
     expect(listedTier("Wayne Gretzky", "baseball")).toBeNull();
+  });
+});
+
+describe("listed players by their years", () => {
+  it("every listed name has playing years that make sense", () => {
+    for (const n of listedNames()) {
+      expect(n.first, n.name).toBeGreaterThanOrEqual(1890);
+      if (n.last != null) expect(n.last, n.name).toBeGreaterThanOrEqual(n.first);
+    }
+  });
+
+  it("a common card of a same-name player from other years is not the listed player", () => {
+    // Frank Thomas the 1950s outfielder, Randy Johnson the early 1980s infielder.
+    expect(listedTier("Frank Thomas", "baseball", 1955)).toBeNull();
+    expect(listedTier("Frank Thomas", "baseball", 1991)).toBe("hof");
+    expect(listedTier("Randy Johnson", "baseball", 1982)).toBeNull();
+    expect(listedTier("Randy Johnson", "baseball", 1989)).toBe("hof");
+    // Bob Gibson the 1980s Brewers pitcher, after the Hall of Famer's career.
+    expect(listedTier("Bob Gibson", "baseball", 1985)).toBeNull();
+    expect(listedTier("Bob Gibson", "baseball", 1968)).toBe("hof");
+    // Reggie Jackson the basketball player, when the card's sport is not known.
+    expect(listedTier("Reggie Jackson", null, 2015)).toBeNull();
+    expect(listedTier("Reggie Jackson", "baseball", 2015)).toBe("hof");
+    expect(listedTier("Reggie Jackson", null, 1977)).toBe("hof");
+    // Bill Russell the Dodgers shortstop, with no sport read.
+    expect(listedTier("Bill Russell", null, 1978)).toBeNull();
+    expect(listedTier("Bill Russell", "basketball", 1978)).toBe("great");
+  });
+
+  it("father and son, and players who share a surname, are never mixed up", () => {
+    expect(listedTier("Ken Griffey", "baseball", 1976)).toBeNull();
+    expect(listedTier("Ken Griffey Sr.", "baseball", 1990)).toBeNull();
+    expect(listedTier("Ken Griffey Jr.", "baseball", 1980)).toBeNull();
+    expect(listedTier("Ken Griffey Jr.", "baseball", 1989)).toBe("great");
+    expect(listedTier("Cal Ripken Sr.", "baseball", 1988)).toBeNull();
+    expect(listedTier("Cal Ripken Jr.", "baseball", 1975)).toBeNull();
+    expect(listedTier("Cal Ripken Jr.", "baseball", 1982)).toBe("great");
+    expect(listedTier("Bobby Bonds", "baseball", 1975)).toBeNull();
+    expect(listedTier("Barry Bonds", "baseball", 1975)).toBeNull();
+    expect(listedTier("Barry Bonds", "baseball", 1987)).toBe("star");
+    // A card made long after the career still counts (no namesake then).
+    expect(listedTier("Babe Ruth", "baseball", 2020)).toBe("great");
+    expect(listedTier("Vladimir Guerrero", "baseball", 2005)).toBe("hof");
+    expect(listedTier("Vladimir Guerrero", "baseball", 2021)).toBeNull();
+  });
+
+  it("the guide prices a 1955 Frank Thomas as a common card", () => {
+    const old = guidePrice(card({ year: 1955, brand: "Topps", cardNumber: "100", player: "Frank Thomas", sport: "baseball" }));
+    const hurt = guidePrice(card({ year: 1991, brand: "Topps", cardNumber: "999", player: "Frank Thomas", sport: "baseball" }));
+    expect(old.ok && old.tier).toBe("common");
+    expect(hurt.ok && hurt.tier).toBe("hof");
+  });
+
+  it("stored Wikidata facts count only for a card from after the player was about 16 and near his first seasons", () => {
+    const facts = { birthYear: 1968, careerStart: 1990 };
+    expect(factsFitYear(facts, 1955)).toBe(false);
+    expect(factsFitYear(facts, 1983)).toBe(false);
+    expect(factsFitYear(facts, 1986)).toBe(false);
+    expect(factsFitYear(facts, 1988)).toBe(true);
+    expect(factsFitYear({ birthYear: 1968, careerStart: null }, 1983)).toBe(false);
+    expect(factsFitYear({ birthYear: 1968, careerStart: null }, 1984)).toBe(true);
+    expect(factsFitYear({ birthYear: null, careerStart: null }, 1900)).toBe(true);
   });
 });
 

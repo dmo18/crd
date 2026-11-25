@@ -64,9 +64,9 @@ const scale = (r: Range, m: number): Range => [r[0] * m, r[1] * m];
 const atLeast = (r: Range, floor: Range): Range => [Math.max(r[0], floor[0]), Math.max(r[1], floor[1])];
 
 /** The player's tier from the built-in list, the stored Hall of Fame fact and the card's own rarity mark. */
-export function playerTier(item: Pick<GuideFields, "player" | "sport" | "rarityTier">, facts: GuideFacts = {}): PlayerTier {
+export function playerTier(item: Pick<GuideFields, "player" | "sport" | "rarityTier"> & { year?: number | null }, facts: GuideFacts = {}): PlayerTier {
   let tier: PlayerTier = "common";
-  const listed = listedTier(item.player, item.sport);
+  const listed = listedTier(item.player, item.sport, item.year);
   if (listed) tier = higher(tier, listed);
   if (facts.hallOfFame === true) tier = higher(tier, "hof");
   if (item.rarityTier === "minor_star") tier = higher(tier, "minor_star");
