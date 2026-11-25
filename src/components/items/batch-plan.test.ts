@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_BATCH_PHOTOS } from "@/lib/scans/batch-limits";
-import { batchProgress, batchRoom, planBatch, progressLine, unsentKeys } from "./batch-plan";
+import { batchProgress, batchRoom, PAIRING_LINE, planBatch, progressLine, unsentKeys } from "./batch-plan";
 import { batchCountsLine, retryResultLine } from "./BatchReportCard";
 import { emptyQueue, MAX_QUEUE, nextToSend, queueReducer, type QueueState } from "./scan-queue";
 import { createScanStore, type ScanStoreDeps } from "./scan-store";
@@ -140,5 +140,11 @@ describe("scan store with an upload of many photos", () => {
     // Nothing more to send: the cards already saved were never sent again.
     expect(unsentKeys(store.getState(), batchKey)).toEqual([]);
     expect(new Set(bodies.map((b) => b.get("clientKey"))).size).toBe(3);
+  });
+});
+
+describe("pairing line", () => {
+  it("tells the owner how photos are paired and how to fix a mismatch", () => {
+    expect(PAIRING_LINE).toBe("Photos are paired in the order shown here. If a front and back do not match, remove the photos and pick them again in order: front, back, front, back.");
   });
 });

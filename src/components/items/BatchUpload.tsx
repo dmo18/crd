@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { shrinkPhoto } from "@/components/capture/shrink";
 import { Button, LinkButton, Notice } from "@/components/ui";
 import { MAX_BATCH_PHOTOS } from "@/lib/scans/batch-limits";
-import { batchProgress, batchRoom, planBatch, progressLine, unsentKeys, type BatchLayout } from "./batch-plan";
+import { batchProgress, batchRoom, PAIRING_LINE, planBatch, progressLine, unsentKeys, type BatchLayout } from "./batch-plan";
 import { useScanQueue } from "./ScanQueueProvider";
 
 const BUTTON_LABEL = "inline-flex min-h-11 w-full cursor-pointer items-center justify-center rounded-xl px-4 py-3 text-base font-semibold has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent";
@@ -108,7 +108,7 @@ export function BatchUpload({ hint, locationId }: { hint: string; locationId: st
           <h3 id="batch-check" className="font-semibold">
             {files.length} {files.length === 1 ? "photo" : "photos"}, {cardCount} {cardCount === 1 ? "card" : "cards"}
           </h3>
-          {layout === "pairs" ? <p className="text-sm text-muted">Check that each card shows its front first, then its back.</p> : null}
+          {layout === "pairs" ? <p className="text-sm text-muted">Check that each card shows its front first, then its back. {PAIRING_LINE}</p> : null}
           <ol className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {plan.cards.map((card, i) => {
               const at = layout === "pairs" ? i * 2 : i;

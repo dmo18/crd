@@ -4,6 +4,9 @@ import { isFinished, MAX_QUEUE, type QueueState } from "./scan-queue";
 /** How the photos of a "Many photos, one card each" upload are laid out. */
 export type BatchLayout = "fronts" | "pairs";
 
+/** Shown on the check screen for front and back uploads. */
+export const PAIRING_LINE = "Photos are paired in the order shown here. If a front and back do not match, remove the photos and pick them again in order: front, back, front, back.";
+
 export type BatchCard<F> = { front: F; back?: F };
 export type BatchPlan<F> = { ok: true; cards: BatchCard<F>[] } | { ok: false; error: string };
 
