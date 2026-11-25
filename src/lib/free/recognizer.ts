@@ -12,6 +12,7 @@ import {
   type Box,
   type RecognitionPhoto,
   type RecognitionRequest,
+  type PhotoFix,
   type ReadEvidence,
   type RecognizedItem,
   type RecognizedCatalog,
@@ -54,6 +55,24 @@ export type FreeDeps = {
   /** Milliseconds now; tests pass a fake clock. */
   clock?: () => number;
 };
+
+type CropSide = { photo: number; box: Box | null; text: OcrResult | null };
+
+/**
+ * Many cards: the turn that makes each stored crop upright (S1b). Only the
+ * turn is reported; the card is already cut out. The item's own crop is its
+ * front side, or its lone side; a back paired with a front is stored as the
+ * card's back (item.backPhoto) and gets its own entry.
+ */
+function withCropTurns(card: ReadCard, own: CropSide, pairedBack?: CropSide): void {
+  const fixes: PhotoFix[] = [];
+  const add = (side: CropSide, role: "front" | "back") => {
+    if (side.box && side.text?.fix) fixes.push({ ...side.text.fix, card: null, cardTrusted: false, sourceIndex: side.photo, role });
+  };
+  add(own, "front");
+  if (pairedBack) add(pairedBack, "back");
+  if (fixes.length) card.item.fixes = fixes;
+}
 
 /** A card as read, with the name spellings the catalog look up may try. */
 type ReadCard = { item: RecognizedItem; names: string[]; yearFromStats?: boolean };
@@ -298,7 +317,12 @@ export class FreeRecognizer implements Recognizer {
     const back = photos.find((p) => p.role === "back");
     const frontText = await this.read(front.data);
     const backText = back ? await this.read(back.data, { back: true }) : null;
-    return this.cardFromText(frontText, backText, { sourceIndex: 0, box: null });
+    const card = await this.cardFromText(frontText, backText, { sourceIndex: 0, box: null });
+    const fixes: PhotoFix[] = [];
+    if (frontText?.fix) fixes.push({ ...frontText.fix, sourceIndex: photos.indexOf(front), role: "front" });
+    if (back && backText?.fix) fixes.push({ ...backText.fix, sourceIndex: photos.indexOf(back), role: "back" });
+    if (fixes.length) card.item.fixes = fixes;
+    return card;
   }
 
   /**
@@ -357,20 +381,29 @@ export class FreeRecognizer implements Recognizer {
           const back = sides[b];
           const card = await this.cardFromText(side.text, back.text, where);
           if (back.box) card.item.backPhoto = { sourceIndex: back.photo, box: back.box };
+          withCropTurns(card, side, back);
           out.push(card);
         } else {
-          out.push(await this.cardFromText(side.text, null, where, { lone: canPair && side.box !== null }));
+          const card = await this.cardFromText(side.text, null, where, { lone: canPair && side.box !== null });
+          withCropTurns(card, side);
+          out.push(card);
         }
         continue;
       }
       if (paired.has(i)) continue;
       if (!canPair) {
         // Backs only: each back is a card, read as a back.
-        out.push(await this.cardFromText(null, side.text, where));
+        const card = await this.cardFromText(null, side.text, where);
+        withCropTurns(card, side);
+        out.push(card);
         continue;
       }
       // A back without its front becomes a card only with a trustworthy name on it.
-      if (parseCardText(null, side.text).player) out.push(await this.cardFromText(null, side.text, where, { lone: true }));
+      if (parseCardText(null, side.text).player) {
+        const card = await this.cardFromText(null, side.text, where, { lone: true });
+        withCropTurns(card, side);
+        out.push(card);
+      }
     }
     return out;
   }

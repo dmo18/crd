@@ -4,7 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { setLogSink } from "@/lib/log";
-import { boxOf, createTextReader, LONG_EDGE, MAX_PASSES, readerSettings, sidewaysTurn, textReaderStatus, type OcrEngine, type WorkerRead } from "./ocr";
+import { boxOf, createTextReader, LONG_EDGE, MAX_PASSES, readerSettings, sidewaysTurn, textReaderStatus, turnWithTrust, type OcrEngine, type WorkerRead } from "./ocr";
 import { ReaderDownError, removeJobFolders, WorkerClient } from "./ocr-worker";
 
 /**
@@ -314,6 +314,33 @@ describe("sidewaysTurn", () => {
     expect(sidewaysTurn(read([line(wide, true), line(wide, false)]))).toBe(0);
     // Too little text to judge.
     expect(sidewaysTurn(read([line(wide, true, "AB")]))).toBe(0);
+  });
+});
+
+describe("turnWithTrust (S1b)", () => {
+  const line = (box: [number, number][], turned: boolean, text = "SOME TEXT") => ({ text, score: 0.9, box, turned });
+  const tall: [number, number][] = [[0, 0], [30, 0], [30, 300], [0, 300]];
+  const wide: [number, number][] = [[0, 0], [300, 0], [300, 30], [0, 30]];
+  const read = (lines: WorkerRead["lines"]): WorkerRead => ({ width: 500, height: 700, lines });
+
+  it("trusts a turn when several lines agree", () => {
+    expect(turnWithTrust(read([line(tall, true), line(tall, true), line(tall, true)]))).toEqual({ turn: 90, trusted: true });
+    expect(turnWithTrust(read([line(wide, true), line(wide, true)]))).toEqual({ turn: 180, trusted: true });
+  });
+  it("does not trust one long line, or lines that disagree, or too little text", () => {
+    expect(turnWithTrust(read([line(tall, true, "A LONG LINE OF TEXT HERE")])).trusted).toBe(false);
+    expect(turnWithTrust(read([line(tall, true), line(tall, true), line(tall, false), line(tall, false)])).trusted).toBe(false);
+    expect(turnWithTrust(read([line(tall, true, "AB")])).trusted).toBe(false);
+  });
+  it("reports the card box and the turn on the read, in the photo's own fractions", async () => {
+    const engine: OcrEngine = {
+      async read() { return read([line(tall, true), line(tall, true)]); },
+      status: () => "ready",
+      async close() {},
+    };
+    const result = await createTextReader(engine).read(await photo());
+    expect(result.fix).toMatchObject({ turn: 90, turnTrusted: true });
+    expect(result.fix!.lines.length).toBeGreaterThan(0);
   });
 });
 

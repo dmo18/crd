@@ -130,7 +130,31 @@ export type FieldCertainty = Partial<Record<CertainField, "sure" | "unsure">>;
  */
 export type BackPhoto = { sourceIndex: number; box: Box };
 
-export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence; backPhoto?: BackPhoto };
+/**
+ * What the free reader found out about how to show one photo (S1b): where the
+ * card sits in the photo, and the turn (degrees clockwise, 0 90 180 270) that
+ * makes the text upright. Boxes are fractions of the photo the reader was
+ * given. The two flags say how far each can be trusted: the card finder fails
+ * when the photo is all card and can be fooled by glare; the turn is trusted
+ * when enough text lines agree. `lines` are the text boxes the reader used.
+ */
+export type ReadFix = {
+  turn: 0 | 90 | 180 | 270;
+  turnTrusted: boolean;
+  card: Box | null;
+  cardTrusted: boolean;
+  lines: Box[];
+};
+
+/**
+ * The fix for one input photo of a scan. `sourceIndex` is the position of the
+ * photo in the request. In many-cards mode the photo is a card cut from it:
+ * `role` says whether that is the item's front or its back, and only the turn
+ * is used. Like `catalog`, never part of the zod schema.
+ */
+export type PhotoFix = ReadFix & { sourceIndex: number; role: "front" | "back" };
+
+export type RecognizedItem = z.infer<typeof recognizedItemSchema> & { catalog?: RecognizedCatalog; evidence?: ReadEvidence; backPhoto?: BackPhoto; fixes?: PhotoFix[] };
 export type RecognizedItemInput = z.input<typeof recognizedItemSchema>;
 
 export const recognitionResultSchema = z.object({

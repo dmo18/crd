@@ -1,7 +1,7 @@
 import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
-import type { Box } from "@/lib/recognition/types";
+import type { Box, ReadFix } from "@/lib/recognition/types";
 import { cornerBoxes, cropBox, findCard, joinSpacedLetters, keepCornerLine, mapBox, overlapShare, spacedBands, toView } from "./card-picture";
 import { ReaderDownError, WorkerClient, type OcrEngine, type ReaderStatus, type WorkerLine, type WorkerRead } from "./ocr-worker";
 
@@ -36,6 +36,8 @@ export type OcrResult = {
   passes?: number;
   /** How many small re-reads (corners, spaced bands) came on top. For tests and timing only. */
   crops?: number;
+  /** How to show the photo this was read from: its card box and the turn that makes it upright (S1b). */
+  fix?: ReadFix;
 };
 export type ReadOptions = {
   /**
@@ -182,10 +184,22 @@ function summarize(lines: OcrLine[], passes: number, crops = 0): OcrResult {
  * means the photo is upside down (turn 180).
  */
 export function sidewaysTurn(read: WorkerRead): 0 | 90 | 180 | 270 {
+  return turnWithTrust(read).turn;
+}
+
+/** At least this many lines must agree on a direction, and this share of the weight, for the turn to be trusted. */
+const TURN_MIN_LINES = 2;
+const TURN_AGREE = 0.75;
+
+/** The same turn, with whether enough text lines agree on it to act on it. */
+export function turnWithTrust(read: WorkerRead): { turn: 0 | 90 | 180 | 270; trusted: boolean } {
   let across = 0;
   let acrossTurned = 0;
+  let acrossTurnedLines = 0;
   let up = 0;
   let down = 0;
+  let upLines = 0;
+  let downLines = 0;
   for (const l of read.lines) {
     const xs = l.box.map((p) => p[0]);
     const ys = l.box.map((p) => p[1]);
@@ -193,19 +207,25 @@ export function sidewaysTurn(read: WorkerRead): 0 | 90 | 180 | 270 {
     const h = Math.max(...ys) - Math.min(...ys);
     const weight = l.text.replace(/\s/g, "").length * l.score;
     if (h >= TALL * w) {
-      if (l.turned) up += weight;
-      else down += weight;
+      if (l.turned) { up += weight; upLines++; } else { down += weight; downLines++; }
     } else {
       across += weight;
-      if (l.turned) acrossTurned += weight;
+      if (l.turned) { acrossTurned += weight; acrossTurnedLines++; }
     }
   }
   // Text running across but upside down (the worker turned most lines over):
   // the photo is upside down, so boxes sit mirrored from where they are on
   // the card (12R.5). Turned right round so corners and rows read right.
-  if (up + down <= across) return across >= 4 && acrossTurned > UPSIDE_DOWN_SHARE * across ? 180 : 0;
-  if (up + down < 4) return 0;
-  return up > down ? 90 : 270;
+  if (up + down <= across) {
+    if (across >= 4 && acrossTurned > UPSIDE_DOWN_SHARE * across) {
+      return { turn: 180, trusted: acrossTurnedLines >= TURN_MIN_LINES };
+    }
+    return { turn: 0, trusted: true };
+  }
+  if (up + down < 4) return { turn: 0, trusted: false };
+  const winner = up > down ? up : down;
+  const lines = up > down ? upLines : downLines;
+  return { turn: up > down ? 90 : 270, trusted: lines >= TURN_MIN_LINES && winner / (up + down) >= TURN_AGREE };
 }
 
 /** A picture sent to the reader; `inner` is where the part sits when it was padded. */
@@ -293,6 +313,15 @@ function placed(lines: OcrLine[], where: Region, source: OcrSource): OcrLine[] {
  * a failed re-read only loses that re-read, the best read so far stays.
  */
 export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOptions = {}): Promise<OcrResult> {
+  const sink: { fix?: ReadFix } = {};
+  const result = await readInner(engine, image, options, sink);
+  return sink.fix ? { ...result, fix: sink.fix } : result;
+}
+
+/** The share of confident lines the found card must hold for the finder to be believed. */
+const CARD_HOLDS_TEXT = 0.7;
+
+async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions, sink: { fix?: ReadFix }): Promise<OcrResult> {
   const base = await oriented(image);
   const pic = await part(base, { edge: LONG_EDGE });
   if (pic.width < 8 || pic.height < 8) return summarize([], 0);
@@ -318,13 +347,22 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
   // backs run across the long side) is turned, so boxes sit where they do on
   // the card and short words read better. The card is cut out only when it
   // fills clearly less than the photo; no read text is ever cut off.
-  const turn = sidewaysTurn(first);
+  const { turn, trusted: turnSure } = turnWithTrust(first);
   let card: Region | null = null;
+  let found: Box | null = null;
   try {
-    card = cropBox(await findCard(base), best.filter((l) => l.confidence >= 0.6).map((l) => l.box));
+    found = await findCard(base);
+    card = cropBox(found, best.filter((l) => l.confidence >= 0.6).map((l) => l.box));
   } catch {
     card = null;
   }
+  const sure = best.filter((l) => l.confidence >= 0.6);
+  const cardSure = found != null && sure.length > 0 && sure.filter((l) => overlapShare(l.box, found!) >= 0.9).length >= CARD_HOLDS_TEXT * sure.length;
+  const fix: ReadFix = {
+    turn, turnTrusted: turnSure, card: options.quick ? null : found, cardTrusted: !options.quick && cardSure,
+    lines: best.map((l) => l.box),
+  };
+  sink.fix = fix;
   // Many cards from one photo come here already cut out: only the turn.
   const worthCrop = !options.quick && card != null && card.w * card.h < CROP_AREA;
   let view = base;
@@ -345,6 +383,9 @@ export async function readWith(engine: OcrEngine, image: Buffer, options: ReadOp
       });
       best = second;
       view = (await part(base, { region, turn })).png;
+    } else if (turn) {
+      // The upright re-read did not confirm the turn.
+      fix.turnTrusted = false;
     }
   }
   if (options.quick) return summarize(best, passes, crops);
