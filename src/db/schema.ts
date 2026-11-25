@@ -3,7 +3,15 @@ import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex
 
 /** Shared value lists. Import these instead of retyping the strings. */
 export const ITEM_KINDS = ["card", "sealed", "bulk"] as const;
-export const ITEM_STATUSES = ["needs_review", "confirmed"] as const;
+/**
+ * `sold` and `removed` (given away, lost, traded) mean the item is no longer
+ * in the collection: see GONE_STATUSES and `liveItem` (src/lib/items/live.ts).
+ */
+export const ITEM_STATUSES = ["needs_review", "confirmed", "sold", "removed"] as const;
+/** Statuses of items that left the collection. Kept out of every total, count and duplicate check. */
+export const GONE_STATUSES = ["sold", "removed"] as const;
+/** What the inventory "status" filter accepts: a status, or `gone` for sold and removed together. */
+export const STATUS_FILTERS = [...ITEM_STATUSES, "gone"] as const;
 export const SCAN_MODES = ["single", "multi", "sealed", "bulk"] as const;
 export const SCAN_STATUSES = ["queued", "processing", "done", "failed"] as const;
 export const SPORTS = ["baseball", "basketball", "football", "hockey", "soccer", "golf", "racing", "wrestling", "boxing", "multi", "other"] as const;
@@ -182,6 +190,11 @@ export const items = sqliteTable("items", {
   pullList: text("pull_list"),
 
   quantity: integer("quantity").notNull().default(1),
+  /** Sold items: what the whole row sold for (cents) and the day. Both optional, null otherwise. */
+  soldPriceCents: integer("sold_price_cents"),
+  soldAt: ts("sold_at"),
+  /** The status before it was marked sold or removed, so "Back in my collection" can restore it. */
+  statusBefore: text("status_before", { enum: ["needs_review", "confirmed"] }),
   locationId: integer("location_id").references(() => locations.id, { onDelete: "set null" }),
   notes: text("notes"),
 

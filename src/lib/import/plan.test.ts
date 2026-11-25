@@ -149,6 +149,18 @@ describe("updates by ID", () => {
     expect(run(`ID,Player,Year\n${id},A,1990\n`)).toHaveProperty("error");
   });
 
+  it("sold and removed items are not in the collection: an ID of one is refused, and the Status column never changes a status", () => {
+    const sold = add({ player: "Sold one", status: "sold", soldPriceCents: 500 });
+    const live = add({ player: "Here", status: "confirmed" });
+    const p = ok(check(`ID,Player,Status\n${sold},A,confirmed\n${live},B,sold\n`));
+    expect(p.problems.map((x) => x.message)).toEqual([
+      `Row 2: The item with ID ${sold} is marked sold or removed. Put it back in your collection first, or clear the ID to add this row as new.`,
+    ]);
+    ok(run(`ID,Player,Status\n${live},B,sold\n`));
+    expect(get(live)).toMatchObject({ player: "B", status: "confirmed" });
+    expect(get(sold)).toMatchObject({ player: "Sold one", status: "sold", soldPriceCents: 500 });
+  });
+
   it("refuses an unknown, deleted or repeated ID, and a change of kind", () => {
     const gone = add({ player: "Gone", deletedAt: T0 });
     const live = add({ player: "Here" });

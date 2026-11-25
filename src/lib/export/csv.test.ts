@@ -8,7 +8,7 @@ const row = (over: Partial<Item> = {}): Item => ({
   isParallel: false, isInsert: false, isAutograph: false, isMemorabilia: false, serialNumber: null, rarityTier: null,
   rarityNotes: null, condition: null, conditionNotes: null, grader: null, grade: null, certNumber: null,
   worthGrading: null, gradingNotes: null, productType: null, packCount: null, sealState: null, estCount: null,
-  containerType: null, description: null, pullList: null, quantity: 1, locationId: null, notes: null, confidence: null,
+  containerType: null, description: null, pullList: null, quantity: 1, soldPriceCents: null, soldAt: null, statusBefore: null, locationId: null, notes: null, confidence: null,
   aiNotes: null, estLowCents: null, estHighCents: null, estValueCents: null, valueSource: null, valueBasis: null,
   valuedAt: null, manualValueCents: null, createdAt: new Date("2026-03-04T10:00:00Z"), updatedAt: new Date(), deletedAt: null,
   catalogCardId: null, firstSuggestion: null, fieldSources: null, catalogCandidates: null,
@@ -41,7 +41,8 @@ describe("itemsToCsv", () => {
     const lines = parse(csv);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/^ID,Kind,Status,Title,/);
-    expect(lines[0]).toMatch(/,Notes,Added \(ISO date\),Description$/);
+    // The sold columns come just before Description, which stays last.
+    expect(lines[0]).toMatch(/,Notes,Added \(ISO date\),Sold price \(USD\),Sold date,Description$/);
     expect(csv.endsWith("\r\n")).toBe(true);
     expect(csv.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
   });
@@ -74,6 +75,17 @@ describe("itemsToCsv", () => {
     expect(at("Value source")).toBe("Your value");
     expect(at("Added (ISO date)")).toBe("2026-03-04");
     expect(lines[1]).not.toContain("$");
+  });
+
+  it("writes the sold price and day of a sold item, and leaves them blank otherwise", () => {
+    const lines = parse(itemsToCsv([row({ status: "sold", soldPriceCents: 4550, soldAt: new Date("2026-11-20T00:00:00Z") }), row()], none));
+    const header = lines[0].split(",");
+    const cell = (line: string, h: string) => line.split(",")[header.indexOf(h)];
+    expect(cell(lines[1], "Status")).toBe("sold");
+    expect(cell(lines[1], "Sold price (USD)")).toBe("45.50");
+    expect(cell(lines[1], "Sold date")).toBe("2026-11-20");
+    expect(cell(lines[2], "Sold price (USD)")).toBe("");
+    expect(cell(lines[2], "Sold date")).toBe("");
   });
 
   it("leaves Rookie blank when unknown and writes No only for an answer", () => {

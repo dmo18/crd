@@ -19,6 +19,16 @@ export function filterParams(f: Base, over: Partial<Record<"missing" | "flag" | 
   put("missing", "missing" in over ? over.missing : f.missing);
   put("flag", "flag" in over ? over.flag : f.flag);
   put("version", f.version);
+  for (const k of ["autograph", "relic", "error", "parallel", "insert", "serial", "multi"] as const) if (f[k]) sp.set(k, "1");
+  put("grading", f.grading);
+  put("grader", f.grader);
+  put("grade", f.grade);
+  put("variation", f.variation);
+  put("player", f.player);
+  put("team", f.team);
+  put("set", f.set);
+  put("minValue", f.minValue);
+  put("maxValue", f.maxValue);
   if (f.sort && f.sort !== "newest") sp.set("sort", f.sort);
   return sp;
 }

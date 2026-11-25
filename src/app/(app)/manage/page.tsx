@@ -31,8 +31,10 @@ export default async function ManagePage({ searchParams }: { searchParams: Promi
       id: r.id, title: r.title, year: r.year, brand: r.brand, cardNumber: r.cardNumber, player: r.player, team: r.team,
       location: r.locationId == null ? null : names.get(r.locationId) ?? null,
       value: v.waitingForVersion ? CHOOSE_VERSION_LINE : v.cents == null ? "No value yet" : formatCents(v.cents), needsReview: r.status === "needs_review", thumb: thumbs.get(r.id) ?? null,
+      outcome: r.status === "sold" ? "Sold" as const : r.status === "removed" ? "Removed" as const : null,
     };
   });
+  const goneView = filters.status === "sold" || filters.status === "removed" || filters.status === "gone";
   const op = latestUndoable(db);
   const undo = op ? {
     id: op.id, summary: op.summary,
@@ -67,6 +69,7 @@ export default async function ManagePage({ searchParams }: { searchParams: Promi
           rows={rows} total={result.total} page={result.page} pageCount={result.pageCount}
           pageLinks={{ prev: result.page > 1 ? href(result.page - 1) : null, next: result.page < result.pageCount ? href(result.page + 1) : null }}
           filterKey={filterKey(filters)} filters={selectionFilters(filters)} exportQuery={exportQuery(filters)} locations={locationList} undo={undo}
+          goneView={goneView}
         />
       )}
     </>

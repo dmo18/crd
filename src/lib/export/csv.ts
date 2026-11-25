@@ -60,6 +60,9 @@ const COLUMNS: Col[] = [
   { header: "Confidence", get: (r) => raw(r.confidence == null ? "" : String(Math.round(r.confidence * 100) / 100)) },
   { header: "Notes", get: (r) => text(r.notes) },
   { header: "Added (ISO date)", get: (r) => raw(r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : "") },
+  { header: "Sold price (USD)", get: (r) => dollars(r.soldPriceCents) },
+  { header: "Sold date", get: (r) => raw(r.soldAt ? new Date(r.soldAt).toISOString().slice(0, 10) : "") },
+  // Last on purpose: the long free text sits at the end of each line.
   { header: "Description", get: (r) => text(r.description) },
 ];
 

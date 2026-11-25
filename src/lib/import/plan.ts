@@ -8,7 +8,7 @@ import { pruneOps } from "@/lib/items/bulk";
 import { insertPrepared, prepareNewItem } from "@/lib/items/create";
 import { MAX_QUANTITY } from "@/lib/items/duplicates";
 import { CONDITION_LABELS, KIND_LABELS, PRODUCT_LABELS, RARITY_LABELS, SEAL_LABELS } from "@/lib/items/labels";
-import { liveItem } from "@/lib/items/live";
+import { goneItem, liveItem } from "@/lib/items/live";
 import { withRookie } from "@/lib/items/rookie";
 import { serialColumns, splitSerial } from "@/lib/items/serial";
 import { clearVersionOnNewVariation, editableFields, itemEditSchema } from "@/lib/items/update";
@@ -273,6 +273,8 @@ function updatePatch(existing: Item, c: Checked, problem: (m: string) => void): 
 
 type LiveLookup = {
   byId: (ids: number[]) => Map<number, Item>;
+  /** Of these ids, the items marked sold or removed (not in Recently deleted). */
+  goneIds: (ids: number[]) => Set<number>;
   dupIndex: () => Map<string, { id: number; title: string }>;
   locationIds: Map<string, number>;
   locationName: (id: number | null) => string | null;
@@ -288,6 +290,14 @@ function lookups(tx: Db): LiveLookup {
       const unique = [...new Set(ids)];
       for (let i = 0; i < unique.length; i += CHUNK) {
         for (const r of tx.select().from(items).where(and(inArray(items.id, unique.slice(i, i + CHUNK)), liveItem)).all()) out.set(r.id, r);
+      }
+      return out;
+    },
+    goneIds(ids) {
+      const out = new Set<number>();
+      const unique = [...new Set(ids)];
+      for (let i = 0; i < unique.length; i += CHUNK) {
+        for (const r of tx.select({ id: items.id }).from(items).where(and(inArray(items.id, unique.slice(i, i + CHUNK)), goneItem)).all()) out.add(r.id);
       }
       return out;
     },
@@ -321,6 +331,7 @@ function plan(tx: Db, rows: string[][], mapping: ColumnChoice[], opts: ImportOpt
   const idCol = mapping.indexOf("id");
   const wanted = idCol < 0 ? [] : rows.map((r) => cleanCell(r[idCol])).filter((s) => /^\d{1,15}$/.test(s)).map(Number);
   const live = look.byId(wanted);
+  const gone = look.goneIds(wanted.filter((id) => !live.has(id)));
   const idRow = new Map<number, number>();
 
   const noteLocation = (name: string | null | undefined) => {
@@ -349,7 +360,8 @@ function plan(tx: Db, rows: string[][], mapping: ColumnChoice[], opts: ImportOpt
 
     if (c.id !== null) {
       const existing = live.get(c.id);
-      if (!existing) problem(`There is no item with ID ${c.id} in your collection (it may have been deleted). Clear the ID to add this row as new.`);
+      if (!existing && gone.has(c.id)) problem(`The item with ID ${c.id} is marked sold or removed. Put it back in your collection first, or clear the ID to add this row as new.`);
+      else if (!existing) problem(`There is no item with ID ${c.id} in your collection (it may have been deleted). Clear the ID to add this row as new.`);
       else if (idRow.has(c.id)) problem(`ID ${c.id} is also on row ${idRow.get(c.id)}. Each item can be on one row only.`);
       else if (c.kind !== null && c.kind !== existing.kind) problem(`Kind cannot be changed by an import (this item is a ${KIND_LABELS[existing.kind].toLowerCase()}).`);
       if (!existing || mine.length > 0) { finish({ type: "problem", row }); return; }

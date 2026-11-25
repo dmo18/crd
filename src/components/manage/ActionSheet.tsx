@@ -2,11 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button, Field, INPUT_CLASS, Notice } from "@/components/ui";
-import { CONDITIONS, ITEM_STATUSES, RARITY_TIERS, SPORTS } from "@/db/schema";
+import { CONDITIONS, RARITY_TIERS, SPORTS } from "@/db/schema";
 import { applyBulkAction, previewBulkAction } from "@/lib/items/bulk-actions";
+import { parseDollars } from "@/lib/money";
 import { CONDITION_LABELS, RARITY_LABELS, SPORT_LABELS } from "@/lib/items/labels";
 
-export type SheetKind = "set" | "replace" | "move" | "status" | "delete";
+export type SheetKind = "set" | "replace" | "move" | "status" | "delete" | "sold" | "removed" | "back";
 export type Done = { changed: number; summary: string; kind: SheetKind };
 type Preview = { count: number; fingerprint: string; samples: { id: number; title: string; before: string; after: string }[] };
 
@@ -27,6 +28,7 @@ const NO_CLEAR = [...FLAGS, "quantity"] as string[];
 
 const TITLES: Record<SheetKind, string> = {
   set: "Set a field", replace: "Find and replace", move: "Move to a location", status: "Mark as checked or needs review", delete: "Delete",
+  sold: "Mark as sold", removed: "Mark as removed", back: "Back in my collection",
 };
 const items = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "item" : "items"}`;
 
@@ -47,7 +49,9 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
   const [replace, setReplace] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   const [locationId, setLocationId] = useState("none");
-  const [status, setStatus] = useState<(typeof ITEM_STATUSES)[number]>("confirmed");
+  const [status, setStatus] = useState<"confirmed" | "needs_review">("confirmed");
+  const [price, setPrice] = useState("");
+  const [soldDate, setSoldDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +82,9 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
       case "move": return { type: "move", locationId: locationId === "none" ? null : Number(locationId) };
       case "status": return { type: "status", status };
       case "delete": return { type: "delete" };
+      case "sold": return { type: "outcome", outcome: "sold", soldPriceCents: price.trim() === "" ? null : parseDollars(price), soldDate: soldDate || null };
+      case "removed": return { type: "outcome", outcome: "removed" };
+      case "back": return { type: "outcome", outcome: "back" };
     }
   }
 
@@ -108,7 +115,8 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
     void run(() => applyBulkAction({ selection: applySelection(), action: buildAction() }), (r: { changed: number; summary: string }) =>
       onDone({ changed: r.changed, summary: r.summary, kind }));
 
-  const needsValue = kind === "set" && !isFlag && !clear && value.trim() === "";
+  const badPrice = kind === "sold" && price.trim() !== "" && parseDollars(price) == null;
+  const needsValue = (kind === "set" && !isFlag && !clear && value.trim() === "") || badPrice;
   const idp = `sheet-${kind}`;
   return (
     <dialog
@@ -209,6 +217,20 @@ export function ActionSheet({ kind, selection, count, locations, onClose, onDone
           {kind === "delete" ? (
             <Notice tone="warn">Deleted items go to Recently deleted for 30 days. You can bring them back from there.</Notice>
           ) : null}
+          {kind === "sold" ? (
+            <>
+              <Notice tone="accent">Sold items leave your totals and lists. You can put them back from the Sold and removed list.</Notice>
+              <Field label="Sold for ($, for each item or row)" htmlFor={`${idp}-price`} hint={badPrice ? undefined : "Optional. The same price is written on every item picked."}
+                error={badPrice ? "Type the price in dollars, like 12.50." : null}>
+                <input id={`${idp}-price`} value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" maxLength={20} placeholder="12.50" className={INPUT_CLASS} />
+              </Field>
+              <Field label="Date sold" htmlFor={`${idp}-date`} hint="Optional.">
+                <input id={`${idp}-date`} type="date" value={soldDate} onChange={(e) => setSoldDate(e.target.value)} className={INPUT_CLASS} />
+              </Field>
+            </>
+          ) : null}
+          {kind === "removed" ? <Notice tone="accent">For cards you gave away, lost or traded. They leave your totals and lists. You can put them back from the Sold and removed list.</Notice> : null}
+          {kind === "back" ? <Notice tone="accent">These go back into your totals and lists, as they were before.</Notice> : null}
           {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
           <p className="text-sm text-muted">Next you see how many items would change. Nothing changes until you confirm.</p>
           <div className="flex flex-col gap-3 sm:flex-row">

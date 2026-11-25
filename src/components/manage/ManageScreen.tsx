@@ -14,16 +14,20 @@ export type ManageRow = {
   id: number; title: string; year: number | null; brand: string | null; cardNumber: string | null;
   player: string | null; team: string | null; location: string | null; value: string;
   needsReview: boolean; thumb: string | null;
+  /** Set for a sold or removed item. */
+  outcome?: "Sold" | "Removed" | null;
 };
 
 const MAX_ITEMS = 5000;
 const items = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "item" : "items"}`;
 const ACTIONS: [SheetKind, string][] = [
   ["set", "Set a field"], ["replace", "Find and replace"], ["move", "Move to a location"],
-  ["status", "Mark checked or needs review"], ["delete", "Delete"],
+  ["status", "Mark checked or needs review"], ["sold", "Mark as sold"], ["removed", "Mark as removed"], ["delete", "Delete"],
 ];
+/** The list of sold and removed items: put them back, or delete them. */
+const GONE_ACTIONS: [SheetKind, string][] = [["back", "Back in my collection"], ["delete", "Delete"]];
 
-export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKey, filters, exportQuery, locations, undo }: {
+export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKey, filters, exportQuery, locations, undo, goneView = false }: {
   rows: ManageRow[]; total: number; page: number; pageCount: number;
   pageLinks: { prev: string | null; next: string | null };
   filterKey: string; filters: Record<string, unknown>;
@@ -31,6 +35,8 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
   exportQuery: string;
   locations: { id: number; name: string }[];
   undo: UndoOffer | null;
+  /** The list shows sold and removed items. */
+  goneView?: boolean;
 }) {
   const router = useRouter();
   const sel = useSelection();
@@ -63,6 +69,7 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
     sel.clear();
     setMessage(d.kind === "delete"
       ? `Deleted ${items(d.changed)}. They are in Recently deleted for 30 days.`
+      : d.kind === "back" || d.kind === "sold" || d.kind === "removed" ? endSentence(d.summary)
       : endSentence(`Changed ${items(d.changed)}: ${d.summary}`));
     router.refresh();
   }
@@ -102,7 +109,7 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <p className="font-semibold break-words">{r.title}</p>
                   <p className="text-sm text-muted break-words">{[r.player, r.year, r.location ? `In ${r.location}` : null].filter(Boolean).join(" · ") || "No details yet"}</p>
-                  <p className="text-sm text-muted">{r.value}{r.needsReview ? " · Needs review" : ""}</p>
+                  <p className="text-sm text-muted">{r.value}{r.needsReview ? " · Needs review" : ""}{r.outcome ? ` · ${r.outcome}` : ""}</p>
                 </div>
               </Link>
             </li>
@@ -142,7 +149,7 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
                   <td className="px-2">{r.team ?? ""}</td>
                   <td className="px-2">{r.location ?? ""}</td>
                   <td className="px-2 whitespace-nowrap tabular">{r.value}</td>
-                  <td className="px-2">{r.needsReview ? <Badge tone="warn">Needs review</Badge> : <Badge tone="accent">Checked</Badge>}</td>
+                  <td className="px-2">{r.outcome ? <Badge>{r.outcome}</Badge> : r.needsReview ? <Badge tone="warn">Needs review</Badge> : <Badge tone="accent">Checked</Badge>}</td>
                 </tr>
               ))}
             </tbody>
@@ -169,7 +176,7 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
           </div>
           {menu ? (
             <ul className="grid grid-cols-1 gap-2 pt-3 sm:grid-cols-2">
-              {ACTIONS.map(([k, label]) => (
+              {(goneView ? GONE_ACTIONS : ACTIONS).map(([k, label]) => (
                 <li key={k}>
                   <Button type="button" variant={k === "delete" ? "danger" : "secondary"} className="w-full" onClick={() => setSheet(k)}>{label}</Button>
                 </li>

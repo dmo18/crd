@@ -159,7 +159,8 @@ describe("migration 0009", () => {
     expect(csv).toHaveLength(6);
     expect(csv[0]).not.toMatch(/version|copy|edition|kept|original/i);
     expect(latestUndoable(db, new Date(4000))).toMatchObject({ id: 1, summary: "Set team on 1 item" });
-    expect(raw.prepare("select * from items order by rowid").all()).toEqual(before.items.map((r) => ({ ...r, ...Object.fromEntries(NEW_ITEM_COLUMNS.map((c) => [c, null])) })));
+    const itemsNow = raw.prepare("select * from items order by rowid").all() as object[];
+    expect(itemsNow).toEqual(before.items.map((r, i) => ({ ...r, ...Object.fromEntries(NEW_ITEM_COLUMNS.map((c) => [c, null])), ...laterNulls("items", itemsNow[i] ?? {}) })));
 
     // And its writers: undo of a bulk change saved before the migration, edit, confirm, catalog.
     expect(undoBulk(1, db, new Date(4000))).toMatchObject({ restored: 1, skipped: 0 });

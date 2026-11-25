@@ -78,6 +78,13 @@
       "when": 1795614088148,
       "tag": "0010_misty_sunfire",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1795619734116,
+      "tag": "0011_rainy_weapon_omega",
+      "breakpoints": true
     }
   ]
 }

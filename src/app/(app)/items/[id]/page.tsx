@@ -11,6 +11,7 @@ import { PhotoUpload } from "@/components/items/PhotoUpload";
 import { DeleteItemButton } from "@/components/items/DeleteItemButton";
 import { ItemBadges } from "@/components/items/ItemRow";
 import { ItemForm } from "@/components/items/ItemForm";
+import { BackButton, OutcomeForms } from "@/components/items/OutcomeForm";
 import { Button, Card, Notice } from "@/components/ui";
 import { getDb } from "@/db";
 import { images, items, locations, type Item } from "@/db/schema";
@@ -75,6 +76,38 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
             <Button type="submit" className="w-full">Restore</Button>
           </form>
         </Card>
+      </div>
+    );
+  }
+  if (item.status === "sold" || item.status === "removed") {
+    const thumb = db.select().from(images).where(eq(images.itemId, id)).orderBy(asc(images.id)).limit(1).get();
+    const sold = item.status === "sold";
+    const noun = item.kind === "card" ? "card" : "item";
+    return (
+      <div className="flex flex-col gap-4">
+        {thumb ? (
+          // Plain img: photos come from our own /api/images route.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={`/api/images/${thumb.thumbFile}`} alt={`Photo of ${item.title}`} className="mx-auto aspect-[3/4] max-h-72 rounded-xl bg-surface-2 object-contain" />
+        ) : null}
+        <h1 className="text-2xl font-bold text-balance break-words">{item.title}</h1>
+        <ItemBadges item={item} />
+        <Card className="flex flex-col gap-3">
+          <p className="font-semibold">{sold ? `This ${noun} was sold.` : `This ${noun} was removed from your collection.`}</p>
+          {sold ? (
+            <p className="text-sm">
+              {item.soldPriceCents != null ? `Sold for ${formatCents(item.soldPriceCents)}. ` : "No sale price was written down. "}
+              {/* The day is stored as midnight UTC, so it is shown in UTC: the same day the owner picked. */}
+              {item.soldAt ? `Sold on ${item.soldAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}.` : null}
+            </p>
+          ) : null}
+          <p className="text-sm text-muted">It is not counted in your totals, lists or duplicate checks. Put it back if this was a mistake.</p>
+          <BackButton id={item.id} />
+        </Card>
+        <section className="flex flex-col gap-2 border-t border-border pt-5">
+          <h2 className="text-lg font-semibold">Delete</h2>
+          <DeleteItemButton id={item.id} />
+        </section>
       </div>
     );
   }
@@ -210,6 +243,11 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
           item={item} check={toCheck}
           locations={db.select({ id: locations.id, name: locations.name }).from(locations).orderBy(locations.name).all()}
         />
+      </section>
+
+      <section className="flex flex-col gap-2 border-t border-border pt-5">
+        <h2 className="text-lg font-semibold">Sold or given away?</h2>
+        <OutcomeForms id={item.id} today={new Date().toISOString().slice(0, 10)} />
       </section>
 
       <section className="flex flex-col gap-2 border-t border-border pt-5">

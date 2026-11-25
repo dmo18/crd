@@ -72,7 +72,7 @@ export function headerKey(header: string): string {
 const EXACT: Record<string, ColumnChoice> = {
   // Export columns that are worked out by the app, or not the owner's to set: never brought back in.
   "status": SKIP, "title": SKIP, "value each (usd)": SKIP, "total value (usd)": SKIP, "estimate low (usd)": SKIP,
-  "estimate high (usd)": SKIP, "value source": SKIP, "confidence": SKIP, "added (iso date)": SKIP,
+  "estimate high (usd)": SKIP, "value source": SKIP, "confidence": SKIP, "added (iso date)": SKIP, "sold price (usd)": SKIP, "sold date": SKIP,
   // Export columns.
   "id": "id", "kind": "kind", "sport": "sport", "year": "year", "year end": "yearEnd", "brand": "brand", "set": "setName",
   "card number": "cardNumber", "player": "player", "team": "team", "variation": "variation", "rookie": "isRookie",

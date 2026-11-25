@@ -17,6 +17,8 @@ export function ItemBadges({ item }: { item: BadgeInfo }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {item.status === "needs_review" ? <Badge tone="warn">Needs review</Badge> : null}
+      {item.status === "sold" ? <Badge tone="neutral">Sold</Badge> : null}
+      {item.status === "removed" ? <Badge tone="neutral">Removed</Badge> : null}
       {item.isRookie ? <Badge tone="gold">Rookie</Badge> : null}
       {item.rarityTier === "key" || item.rarityTier === "grail" ? <Badge tone="gold">{RARITY_LABELS[item.rarityTier]}</Badge> : null}
       {item.kind !== "card" ? <Badge tone="accent">{KIND_LABELS[item.kind]}</Badge> : null}

@@ -11,6 +11,7 @@ const CHIPS: Chip[] = [
   { label: "Possible duplicates", key: "flag", value: "duplicates" },
   { label: "Unsure reads", key: "flag", value: "lowConfidence" },
   { label: "Needs review", key: "status", value: "needs_review" },
+  { label: "Sold and removed", key: "status", value: "gone" },
 ];
 
 /** One row of quick filters. Tap one to turn it on, tap it again to turn it off. */

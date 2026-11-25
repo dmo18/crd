@@ -1,7 +1,8 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import { getDb, type Db } from "@/db";
 import { ITEM_KINDS, items, type Item, type ItemKind } from "@/db/schema";
-import { liveItem } from "./live";
+import { goneItem, liveItem } from "./live";
+import { gradedCond, rawCond } from "./query";
 
 /** Per-unit value: the owner's figure wins, then the estimate, else 0. */
 const unitValue = sql`coalesce(${items.manualValueCents}, ${items.estValueCents}, 0)`;
@@ -96,4 +97,50 @@ export function decadeBreakdown(db: Db = getDb()): DecadeStat[] {
 
 export function recentItems(limit: number, db: Db = getDb()): Item[] {
   return db.select().from(items).where(liveItem).orderBy(desc(items.createdAt), desc(items.id)).limit(limit).all();
+}
+
+export type GroupStat = { label: string; units: number; valueCents: number };
+export const BREAKDOWN_TOP = 10;
+
+/** The columns the Home breakdowns group by. `set` is the set name. */
+const GROUP_COLUMNS = { sport: items.sport, player: items.player, team: items.team, set: items.setName } as const;
+export type BreakdownBy = keyof typeof GROUP_COLUMNS;
+
+/**
+ * Units and value (the same rule as every other total: the owner's figure,
+ * else the estimate, else 0, times the quantity) for each sport, player,
+ * team or set, biggest value first. Blank names are left out. Names that
+ * differ only in capitals or outer spaces count as one. `limit` cuts the list.
+ */
+export function breakdownBy(by: BreakdownBy, limit: number, db: Db = getDb()): GroupStat[] {
+  const col = GROUP_COLUMNS[by];
+  const key = sql`lower(trim(${col}))`;
+  const units = sql<number>`coalesce(sum(${items.quantity}), 0)`;
+  const valueCents = sql<number>`coalesce(sum(${unitValue} * ${items.quantity}), 0)`;
+  return db
+    .select({ label: sql<string>`min(trim(${col}))`, units, valueCents })
+    .from(items)
+    .where(and(liveItem, sql`nullif(trim(${col}), '') is not null`))
+    .groupBy(key)
+    .orderBy(desc(valueCents), desc(units), sql`min(trim(${col}))`)
+    .limit(limit)
+    .all()
+    .map((r) => ({ label: r.label, units: Number(r.units), valueCents: Number(r.valueCents) }));
+}
+
+/** Graded against raw cards, with the rule the Inventory filters use (src/lib/items/query.ts). */
+export function gradedSplit(db: Db = getDb()): { graded: GroupStat; raw: GroupStat } {
+  const one = (label: string, cond: SQL): GroupStat => {
+    const r = db.select({
+      units: sql<number>`coalesce(sum(${items.quantity}), 0)`,
+      valueCents: sql<number>`coalesce(sum(${unitValue} * ${items.quantity}), 0)`,
+    }).from(items).where(and(liveItem, cond)).get();
+    return { label, units: Number(r?.units ?? 0), valueCents: Number(r?.valueCents ?? 0) };
+  };
+  return { graded: one("Graded", gradedCond), raw: one("Raw", rawCond) };
+}
+
+/** Sold and removed items, not in Recently deleted: for the link on Home. */
+export function goneCount(db: Db = getDb()): number {
+  return Number(db.select({ n: sql<number>`count(*)` }).from(items).where(goneItem).get()?.n ?? 0);
 }

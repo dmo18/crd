@@ -4,7 +4,7 @@ import { EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
 import { requireOwner } from "@/lib/auth/guard";
 import { locations } from "@/db/schema";
-import { inventoryFilterSchema, listItems } from "@/lib/items/query";
+import { countFilters, inventoryFilterSchema, listItems } from "@/lib/items/query";
 import { formatCents } from "@/lib/money";
 import { exportQuery, filterParams } from "@/components/manage/filter-url";
 import { ExportLink } from "@/components/manage/ExportLink";
@@ -25,12 +25,9 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
   const locationList = db.select({ id: locations.id, name: locations.name }).from(locations).orderBy(locations.name).all();
   const cards = summarize(result.rows, db);
 
-  const hasFilters = Boolean(
-    filters.q || filters.kind || filters.sport || filters.status || filters.tier || filters.rookie ||
-    filters.yearFrom != null || filters.yearTo != null || filters.location != null || filters.value != null ||
-    filters.missing || filters.flag || filters.version,
-  );
-  const subtitle = [
+  const hasFilters = Boolean(filters.q) || countFilters(filters) > 0;
+  const goneView = filters.status === "sold" || filters.status === "removed" || filters.status === "gone";
+  const subtitle = goneView ? `${plural(result.total, "item", "items")} sold or removed. Not counted in your totals.` : [
     `${plural(result.total, "item", "items")}${hasFilters ? " matching" : ""}`,
     plural(result.totalUnits, "card or product", "cards and products"),
     formatCents(result.totalValueCents),

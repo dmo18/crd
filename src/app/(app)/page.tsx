@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { ValueChart } from "@/components/dashboard/ValueChart";
 import { DecadeBars } from "@/components/dashboard/DecadeBars";
+import { Breakdowns } from "@/components/dashboard/Breakdowns";
 import { ItemRow } from "@/components/items/ItemRow";
 import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { recognitionMode } from "@/lib/env";
 import { requireOwner } from "@/lib/auth/guard";
-import { decadeBreakdown, highlights, kindBreakdown, recentItems, topItems } from "@/lib/items/stats";
+import { BREAKDOWN_TOP, breakdownBy, decadeBreakdown, goneCount, gradedSplit, highlights, kindBreakdown, recentItems, topItems } from "@/lib/items/stats";
 import { formatCents } from "@/lib/money";
 import { summarize } from "@/lib/scans/view";
 import { collectionTotals, getSnapshots, recordSnapshot, valueSplit } from "@/lib/valuation/snapshots";
@@ -119,6 +120,12 @@ export default async function Home() {
           );
         })}
       </Card>
+
+      <Breakdowns
+        sports={breakdownBy("sport", 20)} players={breakdownBy("player", BREAKDOWN_TOP)}
+        teams={breakdownBy("team", BREAKDOWN_TOP)} sets={breakdownBy("set", BREAKDOWN_TOP)}
+        {...gradedSplit()} noPrice={hl.noValue} gone={goneCount()}
+      />
 
       {tiles.length > 0 ? (
         <Card className="flex flex-col gap-3">

@@ -1,18 +1,18 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, lt, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import {
-  bulkOps, ITEM_KINDS, ITEM_STATUSES, items, locations, RARITY_TIERS, scans, SPORTS, valuations,
+  bulkOps, ITEM_KINDS, items, STATUS_FILTERS, locations, RARITY_TIERS, scans, SPORTS, valuations,
   type BulkOpAction, type Item, type ItemStatus,
 } from "@/db/schema";
 import { formatCents } from "@/lib/money";
 import { markOwnerChanges } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
 import { CONDITION_LABELS, RARITY_LABELS, SPORT_LABELS } from "./labels";
-import { liveItem } from "./live";
+import { goneItem, liveItem, notDeleted } from "./live";
 import { readRookie, ROOKIE_STATE_LABELS, withRookie } from "./rookie";
-import { ITEM_FLAGS, MISSING_FIELDS, matchingIds, type InventoryFilters } from "./query";
+import { GRADINGS, ITEM_FLAGS, MISSING_FIELDS, matchingIds, type InventoryFilters } from "./query";
 import { editableFields, itemEditSchema } from "./update";
 
 /** Most ids one selection may list one by one. */
@@ -51,7 +51,7 @@ export const selectionFiltersSchema = z.strictObject({
   q: z.string().trim().min(1, "Type something to search for.").max(100, "That search is too long.").optional(),
   kind: z.enum(ITEM_KINDS).optional(),
   sport: z.enum(SPORTS).optional(),
-  status: z.enum(ITEM_STATUSES).optional(),
+  status: z.enum(STATUS_FILTERS).optional(),
   tier: z.array(z.enum(RARITY_TIERS)).min(1, "Pick at least one rarity.").max(RARITY_TIERS.length, "Too many rarities picked.").optional(),
   rookie: z.literal(true).optional(),
   yearFrom: z.number().int().min(1860, "That first year is too early.").max(2100, "That first year is too far ahead.").optional(),
@@ -61,6 +61,22 @@ export const selectionFiltersSchema = z.strictObject({
   missing: z.enum(MISSING_FIELDS).optional(),
   flag: z.enum(ITEM_FLAGS).optional(),
   version: z.literal("not_sure").optional(),
+  autograph: z.literal(true).optional(),
+  relic: z.literal(true).optional(),
+  error: z.literal(true).optional(),
+  parallel: z.literal(true).optional(),
+  insert: z.literal(true).optional(),
+  serial: z.literal(true).optional(),
+  multi: z.literal(true).optional(),
+  grading: z.enum(GRADINGS).optional(),
+  grader: z.string().trim().min(1).max(20).optional(),
+  grade: z.string().trim().min(1).max(20).optional(),
+  variation: z.string().trim().min(1).max(120).optional(),
+  player: z.string().trim().min(1).max(120).optional(),
+  team: z.string().trim().min(1).max(80).optional(),
+  set: z.string().trim().min(1).max(120).optional(),
+  minValue: z.number().min(0).max(9_999_999).optional(),
+  maxValue: z.number().min(0).max(9_999_999).optional(),
   // Ignored: a bulk change covers every page, in any order.
   sort: z.unknown().optional(),
   page: z.unknown().optional(),
@@ -72,7 +88,9 @@ export type BulkAction =
   | { type: "set"; field: BulkField; value: unknown; onlyEmpty: boolean; clear?: boolean }
   | { type: "replace"; field: BulkTextField; find: string; replace: string; matchCase: boolean }
   | { type: "move"; locationId: number | null }
-  | { type: "status"; status: ItemStatus }
+  | { type: "status"; status: "needs_review" | "confirmed" }
+  | { type: "outcome"; outcome: "sold"; soldPriceCents: number | null; soldDate: string | null }
+  | { type: "outcome"; outcome: "removed" | "back" }
   | { type: "delete" };
 export type BulkSample = { id: number; title: string; before: string; after: string };
 /** `fingerprint` is for "all matching": a short stamp of the exact list of items the preview saw. */
@@ -91,6 +109,15 @@ const selectionSchema = z.union([
   }),
 ]);
 
+/** A real calendar day (not 2026-02-31) between 1900 and next year. Never throws. */
+export function realDay(d: string): boolean {
+  const t = Date.parse(`${d}T00:00:00Z`);
+  if (!Number.isFinite(t)) return false;
+  const back = new Date(t).toISOString().slice(0, 10);
+  const year = Number(d.slice(0, 4));
+  return back === d && year >= 1900 && year <= new Date().getUTCFullYear() + 1;
+}
+
 export const bulkActionSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("set"), field: z.enum(BULK_FIELDS), value: z.unknown(), onlyEmpty: z.boolean(), clear: z.boolean().default(false) }),
   z.strictObject({
@@ -100,7 +127,12 @@ export const bulkActionSchema = z.discriminatedUnion("type", [
     matchCase: z.boolean(),
   }),
   z.strictObject({ type: z.literal("move"), locationId: z.number().int().positive().max(2_000_000_000).nullable() }),
-  z.strictObject({ type: z.literal("status"), status: z.enum(ITEM_STATUSES) }),
+  z.strictObject({ type: z.literal("status"), status: z.enum(["needs_review", "confirmed"]) }),
+  z.strictObject({
+    type: z.literal("outcome"), outcome: z.enum(["sold", "removed", "back"]),
+    soldPriceCents: z.number().int().min(0, "The price cannot be below zero.").max(99_999_999_999, "That price is too big.").nullable().default(null),
+    soldDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date like 2026-11-25.").refine(realDay, "That date is not real.").nullable().default(null),
+  }).refine((a) => a.outcome === "sold" || (a.soldPriceCents === null && a.soldDate === null), "Only a sale has a price and a date."),
   z.strictObject({ type: z.literal("delete") }),
 ]);
 
@@ -130,11 +162,19 @@ export function parseAction(raw: unknown): BulkAction | Fail {
 
 type Tx = Db;
 
-function liveRows(tx: Tx, ids: number[]): Item[] {
+/**
+ * Which rows an action works on: "Back in my collection" works on sold and
+ * removed items, delete on any item not already in Recently deleted (a sold
+ * item can go to the bin too), every other change on items in the collection.
+ */
+const scopeOf = (action: BulkAction): SQL =>
+  action.type === "outcome" && action.outcome === "back" ? goneItem : action.type === "delete" ? notDeleted : liveItem;
+
+function liveRows(tx: Tx, ids: number[], scope: SQL = liveItem): Item[] {
   const unique = [...new Set(ids)];
   const out: Item[] = [];
   for (let i = 0; i < unique.length; i += CHUNK) {
-    out.push(...tx.select().from(items).where(and(inArray(items.id, unique.slice(i, i + CHUNK)), liveItem)).all());
+    out.push(...tx.select().from(items).where(and(inArray(items.id, unique.slice(i, i + CHUNK)), scope)).all());
   }
   return out.sort((a, b) => a.id - b.id);
 }
@@ -149,11 +189,11 @@ export function fingerprintIds(ids: number[]): string {
  * The live items a selection covers, worked out on the server (deleted items are never in it).
  * With `strict` (apply), "all matching" must also carry the fingerprint the preview gave.
  */
-function resolveSelection(tx: Tx, sel: Selection, strict = false): Item[] | Fail {
+function resolveSelection(tx: Tx, sel: Selection, scope: SQL, strict = false): Item[] | Fail {
   if ("ids" in sel) {
     if (sel.ids.length === 0) return { error: "Select at least one item first." };
     if (new Set(sel.ids).size > MAX_BULK_IDS) return { error: `Tick up to ${MAX_BULK_IDS} items one by one, or use "Select all matching".` };
-    return liveRows(tx, sel.ids);
+    return liveRows(tx, sel.ids, scope);
   }
   const { sort: _sort, page: _page, ...filters } = sel.filters as InventoryFilters;
   const { ids, total } = matchingIds(filters, MAX_BULK_ITEMS, tx);
@@ -161,7 +201,7 @@ function resolveSelection(tx: Tx, sel: Selection, strict = false): Item[] | Fail
     return { error: `That is more than ${MAX_BULK_ITEMS.toLocaleString("en-US")} items. Narrow the search and try again.` };
   }
   if (total !== sel.expectedCount || ids.length !== total) return { error: "The list changed. Look again." };
-  const rows = liveRows(tx, ids);
+  const rows = liveRows(tx, ids, scope);
   if (strict && sel.fingerprint !== fingerprintIds(rows.map((r) => r.id))) return { error: "The list changed. Look again." };
   return rows;
 }
@@ -328,6 +368,30 @@ function planChanges(tx: Tx, rows: Item[], action: BulkAction, ctx: Ctx): Change
       }
       return out;
     }
+    case "outcome": {
+      const sale = action.outcome === "sold" ? action : null;
+      const soldAt = sale?.soldDate ? new Date(`${sale.soldDate}T00:00:00Z`) : null;
+      for (const row of rows) {
+        // Old values for undo: every column this change can touch.
+        const old: Columns = { status: row.status, soldPriceCents: row.soldPriceCents, soldAt: row.soldAt, statusBefore: row.statusBefore };
+        if (action.outcome === "back") {
+          out.push({
+            id: row.id, title: row.title, old,
+            patch: { status: row.statusBefore ?? "confirmed", soldPriceCents: null, soldAt: null, statusBefore: null },
+            before: row.status === "sold" ? "Sold" : "Removed", after: "In the collection",
+          });
+          continue;
+        }
+        const remember = row.status === "needs_review" || row.status === "confirmed" ? row.status : null;
+        out.push({
+          id: row.id, title: row.title, old,
+          patch: { status: action.outcome, soldPriceCents: sale ? sale.soldPriceCents : null, soldAt, statusBefore: remember },
+          before: "In the collection",
+          after: sale ? `Sold${sale.soldPriceCents != null ? ` for ${formatCents(sale.soldPriceCents)}` : ""}` : "Removed",
+        });
+      }
+      return out;
+    }
     case "delete": {
       for (const row of rows) {
         out.push({ id: row.id, title: row.title, patch: {}, old: { deletedAt: null }, before: "In the collection", after: "Recently deleted" });
@@ -353,6 +417,7 @@ export function summarize(action: BulkAction, n: number, ctx: Ctx): string {
       return `Moved ${count(n)} to ${where}`;
     }
     case "status": return `Marked ${count(n)} as ${action.status === "confirmed" ? "checked" : "needs review"}`;
+    case "outcome": return action.outcome === "back" ? `Put ${count(n)} back in the collection` : `Marked ${count(n)} as ${action.outcome}`;
     case "delete": return `Moved ${count(n)} to Recently deleted`;
   }
 }
@@ -362,7 +427,7 @@ function context(tx: Tx): Ctx {
 }
 
 function work(tx: Tx, sel: Selection, action: BulkAction, strict = false): { rows: Item[]; changes: Change[]; ctx: Ctx } | Fail {
-  const rows = resolveSelection(tx, sel, strict);
+  const rows = resolveSelection(tx, sel, scopeOf(action), strict);
   if ("error" in rows) return rows;
   const ctx = context(tx);
   const changes = planChanges(tx, rows, action, ctx);
@@ -403,7 +468,7 @@ const undoSchema = z.object({
   /** Places an import made: undo removes those it leaves empty and unchanged. */
   locations: z.array(z.object({ id: z.number().int().positive(), name: z.string() })).optional(),
 });
-const TIME_COLUMNS = new Set(["updatedAt", "deletedAt"]);
+const TIME_COLUMNS = new Set(["updatedAt", "deletedAt", "soldAt"]);
 const toJson = (old: Columns) =>
   Object.fromEntries(Object.entries(old).map(([k, v]) => [k, v instanceof Date ? v.getTime() : v]));
 const fromJson = (old: Record<string, unknown>) =>
@@ -441,7 +506,7 @@ export function applyBulk(
     if (w.changes.length === 0) return { error: "Nothing here needs this change." };
     for (const c of w.changes) {
       const set = action.type === "delete" ? { deletedAt: now } : { ...c.patch, updatedAt: now };
-      const res = tx.update(items).set(set as Partial<Item>).where(and(eq(items.id, c.id), liveItem, ...(opts.fromReview ? [eq(items.status, "needs_review")] : []))).run();
+      const res = tx.update(items).set(set as Partial<Item>).where(and(eq(items.id, c.id), scopeOf(action), ...(opts.fromReview ? [eq(items.status, "needs_review")] : []))).run();
       if (res.changes !== 1) throw new Error("bulk row changed during apply");
       if (c.newValueCents != null) {
         tx.insert(valuations).values({
@@ -457,7 +522,7 @@ export function applyBulk(
       items: w.changes.map((c) => [c.id, toJson(action.type === "delete" ? c.old : { ...c.old, updatedAt: byId.get(c.id)!.updatedAt })]),
     };
     const op = tx.insert(bulkOps).values({
-      at: now, action: action.type as BulkOpAction, summary, itemCount: w.changes.length, undo: JSON.stringify(undo),
+      at: now, action: (action.type === "outcome" ? "status" : action.type) as BulkOpAction, summary, itemCount: w.changes.length, undo: JSON.stringify(undo),
     }).returning({ id: bulkOps.id }).get();
     pruneOps(tx, now);
     return { changed: w.changes.length, opId: op.id, summary, ids: w.changes.map((c) => c.id), skipped };

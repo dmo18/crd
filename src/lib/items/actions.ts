@@ -9,6 +9,7 @@ import { requireOwner } from "@/lib/auth/guard";
 import { restoreItems } from "./bin";
 import { createItem } from "./create";
 import { confirmItem, deleteItem, updateItem } from "./update";
+import { setOutcome } from "./outcome";
 import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 
 export type SaveState = { status: "idle" | "saved" | "error"; errors: Record<string, string>; savedAt?: number };
@@ -92,4 +93,22 @@ export async function restoreItemAction(formData: FormData): Promise<void> {
   revalidatePath("/review");
   revalidatePath("/scans");
   redirect(`/items/${id.data}`);
+}
+
+export type OutcomeState = { error: string | null };
+
+/** Marks one item sold or removed, or puts it back. On success the page shows the new state. */
+export async function outcomeAction(_prev: OutcomeState, formData: FormData): Promise<OutcomeState> {
+  await requireOwner();
+  const result = setOutcome({
+    id: str(formData.get("id")), outcome: str(formData.get("outcome")), price: str(formData.get("price")), date: str(formData.get("date")),
+  });
+  if (!result.ok) return { error: result.error };
+  await auditThisRequest("bulk_edit", "ok", `${result.summary}, from the item page`);
+  const id = idSchema.safeParse(formData.get("id"));
+  if (id.success) revalidateItem(id.data);
+  revalidatePath("/manage");
+  revalidatePath("/review");
+  revalidatePath("/scans");
+  redirect(`/items/${idSchema.parse(formData.get("id"))}`);
 }

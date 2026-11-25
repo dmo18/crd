@@ -70,9 +70,14 @@ describe("migration 0010", () => {
     const before = oldDatabase(file);
     const db = createDb(file);
     const raw = rawOf(db);
+    // Columns of later migrations (0011 on) are new and empty too.
+    const laterNulls = (t: string, row: object) => {
+      const known = new Set([...Object.keys(before[t][0]), ...(t === "scans" ? ["batch_key"] : [])]);
+      return Object.fromEntries(Object.keys(row).filter((c) => !known.has(c)).map((c) => [c, null]));
+    };
     for (const t of TABLES_WITH_ROWS) {
-      const after = raw.prepare(`select * from ${t} order by rowid`).all();
-      expect(after, t).toEqual(before[t].map((r) => (t === "scans" ? { ...r, batch_key: null } : r)));
+      const after = raw.prepare(`select * from ${t} order by rowid`).all() as object[];
+      expect(after, t).toEqual(before[t].map((r, i) => ({ ...(t === "scans" ? { ...r, batch_key: null } : r), ...laterNulls(t, after[i] ?? {}) })));
     }
     expect(raw.pragma("integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(raw.pragma("foreign_key_check")).toEqual([]);
