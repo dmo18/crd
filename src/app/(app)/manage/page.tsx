@@ -1,5 +1,5 @@
 import { InventoryFilters } from "@/components/items/InventoryFilters";
-import { filterKey, filterParams, selectionFilters } from "@/components/manage/filter-url";
+import { exportQuery, filterKey, filterParams, selectionFilters } from "@/components/manage/filter-url";
 import { ManageScreen, type ManageRow } from "@/components/manage/ManageScreen";
 import { UndoNotice } from "@/components/manage/UndoNotice";
 import { EmptyState, LinkButton, PageHeader } from "@/components/ui";
@@ -66,7 +66,7 @@ export default async function ManagePage({ searchParams }: { searchParams: Promi
         <ManageScreen
           rows={rows} total={result.total} page={result.page} pageCount={result.pageCount}
           pageLinks={{ prev: result.page > 1 ? href(result.page - 1) : null, next: result.page < result.pageCount ? href(result.page + 1) : null }}
-          filterKey={filterKey(filters)} filters={selectionFilters(filters)} locations={locationList} undo={undo}
+          filterKey={filterKey(filters)} filters={selectionFilters(filters)} exportQuery={exportQuery(filters)} locations={locationList} undo={undo}
         />
       )}
     </>

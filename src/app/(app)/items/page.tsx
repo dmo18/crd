@@ -6,7 +6,8 @@ import { requireOwner } from "@/lib/auth/guard";
 import { locations } from "@/db/schema";
 import { inventoryFilterSchema, listItems } from "@/lib/items/query";
 import { formatCents } from "@/lib/money";
-import { filterParams } from "@/components/manage/filter-url";
+import { exportQuery, filterParams } from "@/components/manage/filter-url";
+import { ExportLink } from "@/components/manage/ExportLink";
 import { summarize } from "@/lib/scans/view";
 
 export const metadata = { title: "Inventory" };
@@ -49,10 +50,11 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
   return (
     <>
       <PageHeader title="Inventory" subtitle={subtitle} />
-      <div className="pb-4">
+      <div className="grid grid-cols-1 gap-2 pb-4 sm:grid-cols-2">
         <LinkButton href={`/manage${filterParams(filters).size ? `?${filterParams(filters).toString()}` : ""}`} variant="secondary" className="w-full">
           Select and edit
         </LinkButton>
+        <ExportLink query={exportQuery(filters)} label="Export what I am looking at" />
       </div>
       <InventoryFilters filters={filters} locations={locationList} />
       {result.total === 0 ? (

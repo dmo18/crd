@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Badge, Button } from "@/components/ui";
 import { ActionSheet, type Done, type SheetKind } from "./ActionSheet";
+import { ExportLink } from "./ExportLink";
 import { MAX_TICKED, useSelection } from "./selection";
 import { UndoNotice, type UndoOffer } from "./UndoNotice";
 
@@ -21,10 +22,12 @@ const ACTIONS: [SheetKind, string][] = [
   ["status", "Mark checked or needs review"], ["delete", "Delete"],
 ];
 
-export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKey, filters, locations, undo }: {
+export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKey, filters, exportQuery, locations, undo }: {
   rows: ManageRow[]; total: number; page: number; pageCount: number;
   pageLinks: { prev: string | null; next: string | null };
   filterKey: string; filters: Record<string, unknown>;
+  /** Link query of the current filters, for the export. */
+  exportQuery: string;
   locations: { id: number; name: string }[];
   undo: UndoOffer | null;
 }) {
@@ -79,6 +82,9 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
         {tooMany ? <p className="text-sm text-muted">That is more than {MAX_ITEMS.toLocaleString("en-US")} items. Narrow the search to change them all at once.</p> : null}
         {limitNote ? <p role="alert" className="text-sm text-danger">{limitNote}</p> : null}
         {sel.all ? <p className="text-sm font-semibold" role="status">All {items(total)} matching are selected, on every page.</p> : null}
+        {!sel.all && sel.ids.size > 0
+          ? <ExportLink query={`ids=${[...sel.ids].sort((a, b) => a - b).join(",")}`} label={`Export the ${items(sel.ids.size)} selected`} />
+          : <ExportLink query={exportQuery} label="Export what I am looking at" />}
       </div>
 
       <div className="lg:relative lg:left-1/2 lg:w-[min(72rem,calc(100vw-3rem))] lg:-translate-x-1/2">

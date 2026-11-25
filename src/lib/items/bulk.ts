@@ -393,7 +393,11 @@ export function previewBulk(sel: Selection, action: BulkAction, db: Db = getDb()
 /** Undo data as stored in bulk_ops.undo. Times are milliseconds. */
 const undoSchema = z.object({
   v: z.literal(1),
+  /** "import" for a spreadsheet import (src/lib/import), stored with action "set". */
+  kind: z.literal("import").optional(),
   items: z.array(z.tuple([z.number().int().positive(), z.record(z.string(), z.unknown())])),
+  /** Items an import added: undo moves them to Recently deleted. */
+  created: z.array(z.number().int().positive()).optional(),
 });
 const TIME_COLUMNS = new Set(["updatedAt", "deletedAt"]);
 const toJson = (old: Columns) =>
@@ -483,7 +487,8 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
     let skipped = 0;
     // Reads deleted rows on purpose: undo of a delete brings them back.
     const rows = new Map<number, Item>();
-    const allIds = parsed.items.map(([id]) => id);
+    const created = parsed.created ?? [];
+    const allIds = [...parsed.items.map(([id]) => id), ...created];
     for (let i = 0; i < allIds.length; i += CHUNK) {
       for (const r of tx.select().from(items).where(inArray(items.id, allIds.slice(i, i + CHUNK))).all()) rows.set(r.id, r);
     }
@@ -510,6 +515,13 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
           basis: "Value put back by undo.", createdAt: now,
         }).run();
       }
+      restored += 1;
+    }
+    // Items an import added go to Recently deleted, unless deleted or edited since.
+    for (const id of created) {
+      const row = rows.get(id);
+      if (!row || row.deletedAt != null || row.updatedAt.getTime() > at) { skipped += 1; continue; }
+      tx.update(items).set({ deletedAt: now }).where(and(eq(items.id, id), liveItem)).run();
       restored += 1;
     }
     tx.update(bulkOps).set({ undoneAt: now }).where(eq(bulkOps.id, op.id)).run();

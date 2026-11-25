@@ -105,6 +105,9 @@ describe("formula guard, leading whitespace", () => {
     expect(guardFormula(" =HYPERLINK(1)")).toBe("' =HYPERLINK(1)");
     expect(guardFormula("\n=1+1")).toBe("'\n=1+1");
     expect(guardFormula("Ken Griffey Jr.")).toBe("Ken Griffey Jr.");
+    // Text already starting with an apostrophe before a trigger gets one more, so the import can take exactly one off.
+    expect(guardFormula("'=1+1")).toBe("''=1+1");
+    expect(guardFormula("'89 Topps")).toBe("'89 Topps");
     expect(guardFormula("Topps - Traded")).toBe("Topps - Traded");
   });
 });

@@ -66,7 +66,9 @@ const COLUMNS: Col[] = [
 /** Stops spreadsheets from running a cell as a formula. */
 export function guardFormula(value: string): string {
   // Leading spaces and line breaks are skipped by some spreadsheets, so look past them too.
-  return /^[\s]*[=+\-@]|^[\t\r\n]/.test(value) ? `'${value}` : value;
+  // Text that already starts with apostrophes before a trigger gets one more, so the import
+  // (src/lib/import/csv.ts unguardCell) can take exactly one off and get the same text back.
+  return /^'*[\s]*[=+\-@]|^'*[\t\r\n]/.test(value) ? `'${value}` : value;
 }
 
 /** RFC 4180 quoting. */

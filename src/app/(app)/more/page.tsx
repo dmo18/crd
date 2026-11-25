@@ -46,7 +46,7 @@ export default async function MorePage() {
       </Card>
 
       <Card className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">Export</h2>
+        <h2 className="text-lg font-semibold">Export and import</h2>
         <a
           href="/api/export" download
           className="inline-flex min-h-11 items-center justify-center rounded-xl border border-border bg-surface-2 px-4 text-base font-semibold text-text"
@@ -54,6 +54,8 @@ export default async function MorePage() {
           Download spreadsheet (CSV)
         </a>
         <p className="text-sm text-muted">Opens in Excel, Numbers or Google Sheets. Good for insurance records.</p>
+        <LinkButton href="/more/import" variant="secondary">Import from a spreadsheet</LinkButton>
+        <p className="text-sm text-muted">Bring in cards from a CSV file, or bring back an edited export to update the same items.</p>
       </Card>
 
       <Card className="flex flex-col gap-2">

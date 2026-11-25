@@ -19,7 +19,34 @@ export type CreateResult = { ok: true; id: number } | { ok: false; errors: Recor
 
 export const NEEDS_ONE = "Fill in at least a player, a set or a description so you can find this again.";
 
+export type PreparedItem = { ok: true; row: NewItem; manualValue: number | null } | { ok: false; errors: Record<string, string> };
+
 export function createItem(kindInput: unknown, input: unknown, db: Db = getDb()): CreateResult {
+  const now = new Date();
+  const prepared = prepareNewItem(kindInput, input, db, now);
+  if (!prepared.ok) return prepared;
+  const id = db.transaction((tx) => insertPrepared(tx as unknown as Db, prepared.row, prepared.manualValue, now));
+  return { ok: true, id };
+}
+
+/** Saves a prepared item and its first value history line. Call inside a transaction. */
+export function insertPrepared(tx: Db, row: NewItem, manualValue: number | null, now: Date): number {
+  const made = tx.insert(items).values(row).returning({ id: items.id }).get();
+  if (manualValue !== null) {
+    tx.insert(valuations).values({
+      itemId: made.id, source: "manual", lowCents: null, highCents: null, valueCents: manualValue,
+      basis: "Value entered by you.", createdAt: now,
+    }).run();
+  }
+  return made.id;
+}
+
+/**
+ * Checks a new item with the rules of Add by hand and builds the row to
+ * save, without saving it. The spreadsheet import uses it too, so imported
+ * rows obey exactly the same rules.
+ */
+export function prepareNewItem(kindInput: unknown, input: unknown, db: Db = getDb(), now: Date = new Date()): PreparedItem {
   const kind = kindSchema.safeParse(kindInput);
   if (!kind.success) return { ok: false, errors: { form: "Pick card, sealed or bulk." } };
   const raw: Record<string, unknown> = { ...(input as Record<string, unknown>) };
@@ -52,7 +79,6 @@ export function createItem(kindInput: unknown, input: unknown, db: Db = getDb())
   if (locationId !== null && !db.select({ id: locations.id }).from(locations).where(eq(locations.id, locationId)).get()) {
     return { ok: false, errors: { locationId: "That location no longer exists." } };
   }
-  const now = new Date();
   const row: NewItem = {
     ...(values as Partial<NewItem>),
     kind: kind.data,
@@ -65,16 +91,6 @@ export function createItem(kindInput: unknown, input: unknown, db: Db = getDb())
     updatedAt: now,
   };
   if (kind.data === "sealed") { row.productType ??= "other"; row.sealState ??= "unknown"; }
-  const id = db.transaction((tx) => {
-    const made = tx.insert(items).values(row).returning({ id: items.id }).get();
-    if (manualValue !== null) {
-      tx.insert(valuations).values({
-        itemId: made.id, source: "manual", lowCents: null, highCents: null, valueCents: manualValue,
-        basis: "Value entered by you.", createdAt: now,
-      }).run();
-    }
-    return made.id;
-  });
-  return { ok: true, id };
+  return { ok: true, row, manualValue };
 }
 export type { ItemEditInput };
