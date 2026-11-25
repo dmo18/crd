@@ -185,10 +185,13 @@ describe("the fix after a one card scan", () => {
     const back = backRow();
     const front = rows().find((r) => r.role === "front")!;
     expect(offerTrim(item, back)).toBe(true);
-    // The front had no fix at all: nothing is said about it.
-    expect(offerTrim(item, front)).toBe(false);
-    // Trimmed or turned by the owner since: the size changed, the hint goes.
+    // The front had no fix at all: it was not cut to the card either, so the hint shows for it too.
+    expect(offerTrim(item, front)).toBe(true);
+    // Trimmed or turned by the owner since: the shape changed, the hint goes.
     expect(offerTrim(item, { ...back, width: back.width - 40 })).toBe(false);
+    expect(offerTrim(item, { ...back, width: back.height, height: back.width })).toBe(false);
+    // The smaller archive copy of the same photo (same shape) still gets it.
+    expect(offerTrim(item, { ...back, width: Math.round(back.width * 0.6), height: Math.round(back.height * 0.6) })).toBe(true);
     // A cut the app made: no hint.
     const cut = await scanOf([{ role: "back", data: await tablePhoto({ ...SIDEWAYS, red: "left" }) }]);
     await processScan(cut, { db, recognizer: fakeWith([{ sourceIndex: 1, role: "back", ...fix({ turn: 90, card: sidewaysBox, cardTrusted: true, lines: [{ x: 0.3, y: 0.4, w: 0.3, h: 0.1 }] }) }]) });

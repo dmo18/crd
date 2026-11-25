@@ -100,7 +100,8 @@ export const firstSuggestionSchema = z.object({
   /**
    * Photos the app did not cut to the card at the scan (the card box was not
    * trusted), with their size then: "Trim the photo" is offered while the
-   * photo still has that size (the owner has not trimmed or turned it since).
+   * photo still has that shape (the owner has not trimmed or turned it
+   * since; the archive copy is smaller but of the same shape).
    */
   uncut: z.array(uncutPhotoSchema).max(4).optional().catch(undefined),
   /** Time in milliseconds. */
@@ -114,7 +115,12 @@ export type FirstSuggestion = z.infer<typeof firstSuggestionSchema>;
  */
 export function offerTrim(item: Pick<Item, "firstSuggestion">, photo: { id: number; width: number; height: number }): boolean {
   const u = parseFirstSuggestion(item.firstSuggestion)?.uncut?.find((x) => x.id === photo.id);
-  return Boolean(u && u.w === photo.width && u.h === photo.height);
+  if (!u || u.w <= 0 || u.h <= 0 || photo.width <= 0 || photo.height <= 0) return false;
+  // The small archive copy (long edge 1200) keeps the shape, not the size: a
+  // photo of 923 by 2000 at the scan is 554 by 1200 later and still uncut.
+  // A trim or a turn changes the shape, and a photo never grows by itself.
+  const same = Math.abs(photo.width / photo.height - u.w / u.h) <= 0.01 * (u.w / u.h);
+  return same && photo.width <= u.w && photo.height <= u.h;
 }
 
 export function buildFirstSuggestion(

@@ -73,6 +73,7 @@ async function fixScanPhotos(db: Db, rows: ImageRow[], item: RecognizedItem): Pr
     const now = db.select({ width: images.width, height: images.height }).from(images).where(eq(images.id, row.id)).get();
     if (now && !uncut.some((u) => u.id === row.id)) uncut.push({ id: row.id, w: now.width, h: now.height });
   };
+  const cut = new Set<number>();
   for (const fix of item.fixes ?? []) {
     const row = rows[fix.sourceIndex];
     if (!row) continue;
@@ -82,11 +83,14 @@ async function fixScanPhotos(db: Db, rows: ImageRow[], item: RecognizedItem): Pr
       const result = await fixPhoto(row, plan, db);
       if (!result.ok) log.warn("photo_fix_skipped", { scanId: row.scanId, imageId: row.id });
       if (!result.ok || !plan.box) note(row);
+      else cut.add(row.id);
     } catch (err) {
       log.warn("photo_fix_failed", { scanId: row.scanId, error: errorKind(err) });
       note(row);
     }
   }
+  // A photo the reader gave no fix for (no card found in it) was not cut either.
+  for (const row of rows) if ((row.role === "front" || row.role === "back") && !cut.has(row.id)) note(row);
   return uncut;
 }
 

@@ -43,8 +43,12 @@ const marks = (row: Item) => JSON.parse(row.fieldSources ?? "null");
 const reading = (row: Item) => ({
   sport: row.sport, year: row.year, brand: row.brand, setName: row.setName, cardNumber: row.cardNumber, player: row.player,
   team: row.team, variation: row.variation, title: row.title, confidence: row.confidence, status: row.status,
-  notes: row.aiNotes, firstSuggestion: row.firstSuggestion === null ? null : { ...JSON.parse(row.firstSuggestion), at: 0 },
+  // The uncut photos are those of each scan (their ids differ from scan to scan): their sizes count, not their ids.
+  notes: row.aiNotes, firstSuggestion: row.firstSuggestion === null ? null : withoutPhotoIds({ ...JSON.parse(row.firstSuggestion), at: 0 }),
 });
+function withoutPhotoIds(s: { uncut?: { id: number; w: number; h: number }[] }) {
+  return s.uncut ? { ...s, uncut: s.uncut.map(({ w, h }) => ({ w, h })) } : s;
+}
 
 describe("a scan with the catalog (fake, recorded answers, no network)", () => {
   it("S1a: exactly one verified match is linked by the scan as This is my card would; Undo puts the item back", async () => {

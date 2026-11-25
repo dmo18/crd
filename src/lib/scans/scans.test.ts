@@ -99,6 +99,8 @@ describe("processScan", () => {
     expect(JSON.parse(item.firstSuggestion!)).toEqual({
       v: 1, confidence: 0.5, reader: "fake-model", at: at.getTime(),
       fields: { sport: "baseball", year: 1989, brand: "Upper Deck", setName: "Upper Deck", cardNumber: "1", player: "Ken Griffey Jr." },
+      // The reader gave no fix for the photo, so it was not cut to the card: "Trim the photo" is offered for it.
+      uncut: [{ id: db.select().from(images).where(eq(images.scanId, scanId)).get()!.id, w: 900, h: 1200 }],
     });
     expect(item.catalogCardId).toBeNull();
     expect(item.catalogCandidates).toBeNull();
