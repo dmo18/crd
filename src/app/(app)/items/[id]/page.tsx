@@ -17,7 +17,7 @@ import { images, items, locations, type Item } from "@/db/schema";
 import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
-import { checkLine, confidenceLabel, valueSourceLabel } from "@/lib/items/labels";
+import { checkNotice, confidenceLabel, valueSourceLabel } from "@/lib/items/labels";
 import { fieldsToCheck } from "@/lib/catalog/sources";
 import { linkedFacts } from "@/lib/catalog/pick";
 import { parsePullList } from "@/lib/items/from-recognition";
@@ -93,7 +93,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   const pulls = parsePullList(item.pullList);
   // Fields the reader was not sure of, still as it read them.
   const toCheck = item.kind === "card" ? fieldsToCheck(item) : [];
-  const checkText = checkLine(toCheck);
+  const checkText = checkNotice(toCheck);
   const notes: [string, string][] = [];
   if (item.rarityNotes) notes.push(["About its rarity", item.rarityNotes]);
   if (item.conditionNotes) notes.push(["About its condition", item.conditionNotes]);
@@ -142,7 +142,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
         <div className="flex flex-col gap-3">
           <Notice tone="warn">
             The reader was not sure about this one. Check the details, fix anything wrong, then confirm.
-            {checkText ? <> {checkText} They are marked Check this below.</> : null}
+            {checkText ? <> {checkText}</> : null}
           </Notice>
           <form action={confirmItemAction}>
             <input type="hidden" name="id" value={item.id} />

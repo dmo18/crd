@@ -4,6 +4,7 @@ import { findCard, type FindResult } from "@/lib/catalog/find";
 import { createScanBudget } from "@/lib/catalog/lookup";
 import type { Catalog } from "@/lib/catalog/types";
 import { errorKind, log } from "@/lib/log";
+import { endSentence } from "@/lib/title";
 import { checkPhotoCount } from "@/lib/recognition/limits";
 import {
   CERTAIN_FIELDS,
@@ -557,7 +558,7 @@ export class FreeRecognizer implements Recognizer {
       notes.push(`Possible match: ${formatKeyCard(match.card)}. ${what}, so check it.`);
     }
     if (!key && facts) {
-      notes.push(`Player confirmed on Wikidata: ${facts.name}${facts.description ? `, ${facts.description}` : ""}.`);
+      notes.push(endSentence(`Player confirmed on Wikidata: ${facts.name}${facts.description ? `, ${facts.description}` : ""}`));
       if (facts.hallOfFame) item.rarityNotes = "Hall of Fame player. Cards of Hall of Famers usually sell for more.";
       const year = item.year;
       if (year != null && facts.careerStart != null && year - facts.careerStart >= 0 && year - facts.careerStart <= 1) {

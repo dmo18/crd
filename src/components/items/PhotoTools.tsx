@@ -66,7 +66,7 @@ export function PhotoTools({ itemId, imageId, src, alt, hasOriginal, canReplace 
         <div className="flex items-center gap-2">
           <Button type="button" variant="secondary" className="flex-1" disabled={zoom === ZOOMS[0]}
             onClick={() => setZoom(ZOOMS[Math.max(0, ZOOMS.indexOf(zoom) - 1)]!)}>Smaller</Button>
-          <p className="min-w-20 text-center text-sm text-muted" aria-live="polite">{zoom} times</p>
+          <p className="min-w-20 text-center text-sm text-muted" aria-live="polite">{zoom === 1 ? "Normal size" : `${zoom} times`}</p>
           <Button type="button" variant="secondary" className="flex-1" disabled={zoom === ZOOMS[ZOOMS.length - 1]}
             onClick={() => setZoom(ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + 1)]!)}>Bigger</Button>
         </div>

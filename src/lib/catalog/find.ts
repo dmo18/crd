@@ -3,6 +3,7 @@ import { PRODUCT_NAMES } from "@/lib/free/parse";
 import type { CertainField } from "@/lib/recognition/types";
 import { MAX_STORED_CANDIDATES, type OfferCandidate } from "./candidates";
 import { cleanCardNumber, setIdFromUrl } from "./clean";
+import { endSentence } from "@/lib/title";
 import { createScanBudget, type ScanBudget } from "./lookup";
 import { baseWithVersions } from "./versions";
 import { firstFits, parseName, type Candidate } from "./match";
@@ -419,15 +420,15 @@ export async function checklistStep(
       if (playerAgrees(read.player, row.player)) {
         // The checklist is the second sign for the read name.
         fills.push({ field: "player", value: read.player, sure: true });
-        notes.push(`The catalog's set list confirms number ${num} is ${row.player}.`);
+        notes.push(endSentence(`The catalog's set list confirms number ${num} is ${row.player}`));
       } else {
-        notes.push(`The catalog's set list has ${row.player} as number ${num}. The card reads ${read.player}. Check the name.`);
+        notes.push(`The catalog's set list has ${row.player} as number ${num}. ${endSentence(`The card reads ${read.player}`)} Check the name.`);
         return { fills, notes, row: null };
       }
     } else {
       const sure = teamsAgree(read.team, row.team);
       fills.push({ field: "player", value: row.player!, sure });
-      notes.push(`Player filled from the catalog's set list for number ${num}: ${row.player}. Check it.`);
+      notes.push(`${endSentence(`Player filled from the catalog's set list for number ${num}: ${row.player}`)} Check it.`);
     }
     if (!read.team && row.team) fills.push({ field: "team", value: row.team, sure: false });
     return { fills, notes, row };

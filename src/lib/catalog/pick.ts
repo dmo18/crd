@@ -15,7 +15,7 @@ import { saveCatalogCardIn } from "./store";
 import type { Catalog } from "./types";
 import { normalizeText } from "./normalize";
 import { fieldsToCheck, isFilled, notReadFields, parseFieldSources, parseFirstSuggestion, sourceOf, type FieldSources } from "./sources";
-import { buildTitle } from "@/lib/title";
+import { buildTitle, endSentence } from "@/lib/title";
 import { baseWithVersions, buildVersionOptions, catalogVersionCards, catalogVersionName, hasSeveralVersions, isVersionRow, parseVersions, readTexts, serializeVersions } from "./versions";
 import { knownVersionsFor } from "./versions-known";
 
@@ -407,10 +407,11 @@ function isCertainField(f: CatalogField): f is (typeof CERTAIN_FIELDS)[number] {
 /** The plain result line of "Look up again" (S1a rule G). */
 export function lookUpAgainLine(r: LookupAgainResult): string {
   if (!r.ok) return r.error;
-  if (r.matched) return `Matched to the catalog: ${r.matched}.`;
+  if (r.matched) return endSentence(`Matched to the catalog: ${r.matched}`);
   if (r.found > 0) return r.found === 1 ? "Found 1 possible card." : `Found ${r.found} possible cards.`;
   if (r.notChecked) return r.notChecked === "off" ? "The card catalog is switched off." : "The catalog did not answer. Try again later.";
-  return "None found in the catalog. Check the year, brand and player, then try again.";
+  // Review already says "Not found in the catalog" under it: the line only says the look up happened (review fix 10).
+  return "Looked up again just now.";
 }
 
 /** What Review shows for one item: the catalog's part, in plain data for the screen. */

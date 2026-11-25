@@ -7,6 +7,7 @@ import { undoBulkAction } from "@/lib/items/bulk-actions";
 import { CSV_MESSAGES, MAX_CSV_BYTES, parseCsv } from "@/lib/import/csv";
 import { guessMapping, IMPORT_FIELD_LABELS, IMPORT_FIELDS, SKIP, type ColumnChoice } from "@/lib/import/fields";
 import type { DuplicateChoice, ImportPreview, ImportResult } from "@/lib/import/plan";
+import { endSentence } from "@/lib/title";
 
 type Step = "pick" | "match" | "preview" | "done";
 type FileData = { text: string; header: string[]; samples: string[][]; rowCount: number };
@@ -229,7 +230,7 @@ export function ImportFlow() {
             <ul className="flex flex-col gap-2 text-sm">
               {preview.duplicates.map((d) => (
                 <li key={d.row} className="break-words">
-                  Row {d.row}: {d.title}. You have <Link href={`/items/${d.matchId}`} className="text-accent underline">{d.matchTitle}</Link>
+                  Row {d.row}: {endSentence(d.title)} You have <Link href={`/items/${d.matchId}`} className="text-accent underline">{d.matchTitle}</Link>
                 </li>
               ))}
             </ul>

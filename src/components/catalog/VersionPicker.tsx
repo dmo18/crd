@@ -34,6 +34,7 @@ export function VersionPicker({ itemId, title, view }: { itemId: number; title: 
             <input type="hidden" name="id" value={itemId} />
             <input type="hidden" name="listAt" value={view.list.at} />
             {view.list.catalogLine ? <p className="text-sm text-muted">{view.list.catalogLine}</p> : null}
+            {view.list.options.some((o) => o.evidence.some((e) => e.url)) ? <p className="text-sm text-muted">Catalog entries below are from MyCardfolio.</p> : null}
             <fieldset className="flex flex-col gap-2">
               <legend className="pb-1 text-sm font-semibold">{view.assumed ? "The normal version is selected for now. Tap Save to keep it, or pick another" : "Pick one, then tap Save"}</legend>
               {view.list.options.map((o) => (
@@ -49,7 +50,7 @@ export function VersionPicker({ itemId, title, view }: { itemId: number; title: 
                         <>
                           {" "}
                           <a href={e.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center font-semibold text-accent underline">
-                            From MyCardfolio (opens in a new tab)
+                            Open in the catalog (new tab)
                           </a>
                         </>
                       ) : null}

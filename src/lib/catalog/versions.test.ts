@@ -44,11 +44,11 @@ describe("buildVersionOptions on the recordings", () => {
   it("base and Tiffany become two options with links; the known list joins Tiffany as a second line", () => {
     const o = buildVersionOptions(thomas, SEARCHES["1990 topps 414 thomas"]);
     expect(names(o)).toEqual([BASE_NAME, "Tiffany", "O-Pee-Chee", ANOTHER_NAME, NOT_SURE_NAME]);
-    expect(o[0].evidence).toEqual([{ from: "catalog", text: "From MyCardfolio: 1990 Topps #414 Frank Thomas", url: expect.stringContaining("551111") }]);
+    expect(o[0].evidence).toEqual([{ from: "catalog", text: "In the catalog: 1990 Topps #414 Frank Thomas", url: expect.stringContaining("551111") }]);
     expect(o[0].card?.sourceId).toBe("551111");
     expect(o[1].card?.sourceId).toBe("551963");
     expect(o[1].evidence.map((e) => e.from)).toEqual(["catalog", "known_list"]);
-    expect(o[1].evidence[0]).toMatchObject({ text: "From MyCardfolio: 1990 Topps #414 Frank Thomas (Tiffany)", url: expect.stringMatching(/^https:\/\/mycardfolio\.com\/.*551963$/) });
+    expect(o[1].evidence[0]).toMatchObject({ text: "In the catalog: 1990 Topps #414 Frank Thomas (Tiffany)", url: expect.stringMatching(/^https:\/\/mycardfolio\.com\/.*551963$/) });
     expect(o[1].knownId).toBe("topps-tiffany");
     expect(o[2]).toMatchObject({ card: null, knownId: "opc", evidence: [{ from: "known_list" }] });
   });

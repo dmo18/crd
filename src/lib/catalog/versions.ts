@@ -151,7 +151,7 @@ function addEvidence(o: VersionOption, e: Evidence): void {
 }
 
 function catalogEvidence(c: CatalogCard | StoredCandidate): Evidence {
-  return { from: "catalog", text: `From MyCardfolio: ${cardLine(c)}`, url: sourceUrl(c.url) };
+  return { from: "catalog", text: `In the catalog: ${cardLine(c)}`, url: sourceUrl(c.url) };
 }
 
 /**

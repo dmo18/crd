@@ -94,3 +94,10 @@ export function checkLine(fields: readonly CatalogField[]): string | null {
   if (fields.length === 0) return null;
   return `Not sure of: ${fields.map((f) => CARD_FIELD_LABELS[f]).join(", ")}. Check ${fields.length === 1 ? "it" : "them"} against the card.`;
 }
+
+/** The item page's version: the same line and where to find the fields, in the right number. */
+export function checkNotice(fields: readonly CatalogField[]): string | null {
+  const line = checkLine(fields);
+  if (!line) return null;
+  return `${line} ${fields.length === 1 ? "It is" : "They are"} marked Check this below.`;
+}

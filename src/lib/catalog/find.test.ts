@@ -382,7 +382,7 @@ describe("E, F and G: item page and Look up again", () => {
 
   it("Look up again: none, found N and the catalog did not answer", async () => {
     const ricci = insert({ year: 1990, brand: "Upper Deck", cardNumber: "355", player: "Mike Ricci", sport: "hockey" });
-    expect(lookUpAgainLine(await lookUpAgain(ricci.id, { db, catalog: new Recorded({}) }))).toMatch(/^None found in the catalog/);
+    expect(lookUpAgainLine(await lookUpAgain(ricci.id, { db, catalog: new Recorded({}) }))).toBe("Looked up again just now.");
     const acuna = insert({ year: 2021, brand: "Panini", setName: "Prizm", cardNumber: "SG-4", player: "Ronald Acuña Jr." });
     expect(lookUpAgainLine(await lookUpAgain(acuna.id, { db, catalog: new Recorded({ "2021 prizm sg-4 acuna": ACUNA }) }))).toBe("Found 1 possible card.");
     const down = insert({ year: 1990, brand: "Topps", cardNumber: "336", player: "Ken Griffey Jr." });

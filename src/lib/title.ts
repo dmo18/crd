@@ -31,3 +31,9 @@ export function buildTitle(f: TitleFields): string {
   }
   return title.trim() || f.description?.trim().slice(0, 60) || "Unidentified item";
 }
+
+/** Ends a sentence that may end with a name: "Ken Griffey Jr." gets no second period. */
+export function endSentence(s: string): string {
+  const t = s.trimEnd();
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Badge, Button } from "@/components/ui";
+import { endSentence } from "@/lib/title";
 import { ActionSheet, type Done, type SheetKind } from "./ActionSheet";
 import { ExportLink } from "./ExportLink";
 import { MAX_TICKED, useSelection } from "./selection";
@@ -62,7 +63,7 @@ export function ManageScreen({ rows, total, page, pageCount, pageLinks, filterKe
     sel.clear();
     setMessage(d.kind === "delete"
       ? `Deleted ${items(d.changed)}. They are in Recently deleted for 30 days.`
-      : `Changed ${items(d.changed)}: ${d.summary}.`);
+      : endSentence(`Changed ${items(d.changed)}: ${d.summary}`));
     router.refresh();
   }
 

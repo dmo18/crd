@@ -105,7 +105,7 @@ export async function pickCandidateAction(_prev: CatalogActionState, formData: F
   await auditThisRequest("catalog_card_linked", "ok", `${label} is ${r.line}`);
   refresh();
   revalidatePath(`/items/${id.data}`);
-  return { message: r.confirmed ? null : "Linked. Some details differ, see below." };
+  return { message: r.confirmed ? null : "Linked. Some details differ from the catalog, see above." };
 }
 
 /** "Use the catalog's values" in Review: replaces what the reader read differently, then confirms. */
