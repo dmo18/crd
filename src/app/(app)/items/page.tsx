@@ -56,7 +56,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
       <InventoryFilters filters={filters} locations={locationList} />
       {result.total === 0 ? (
         hasFilters ? (
-          <EmptyState title="No matches" body="Nothing in your collection fits these filters."
+          <EmptyState title="No matches" body={goneView ? "Nothing sold or removed fits these filters." : "Nothing in your collection fits these filters."}
             action={<LinkButton href="/items" variant="secondary">Clear filters</LinkButton>} />
         ) : (
           <EmptyState title="Nothing here yet" body="Scan a card, pack or box and it will show up here."

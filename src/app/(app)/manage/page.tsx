@@ -61,7 +61,7 @@ export default async function ManagePage({ searchParams }: { searchParams: Promi
       {result.total === 0 ? (
         <>
           <UndoNotice offer={undo} message={null} />
-          <EmptyState title="No matches" body="Nothing in your collection fits these filters."
+          <EmptyState title="No matches" body={goneView ? "Nothing sold or removed fits these filters." : "Nothing in your collection fits these filters."}
             action={<LinkButton href="/manage" variant="secondary">Clear filters</LinkButton>} />
         </>
       ) : (
