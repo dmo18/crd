@@ -61,7 +61,8 @@ export const VALUE_SOURCE_LABELS = {
   ai_estimate: "App estimate",
   sample: "Sample data",
   manual: "Your value",
-  price_feed: "Price guide",
+  price_feed: "Price feed",
+  price_guide: "Price guide (rough)",
 } as const;
 
 /** Plain name for a stored value origin; the owner's own figure wins over any estimate. */

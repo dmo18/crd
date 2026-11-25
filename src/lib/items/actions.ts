@@ -9,6 +9,7 @@ import { requireOwner } from "@/lib/auth/guard";
 import { restoreItems } from "./bin";
 import { createItem } from "./create";
 import { confirmItem, deleteItem, updateItem } from "./update";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 
 export type SaveState = { status: "idle" | "saved" | "error"; errors: Record<string, string>; savedAt?: number };
 
@@ -28,6 +29,7 @@ function str(v: FormDataEntryValue | null): string {
 }
 
 function revalidateItem(id: number) {
+  refreshGuideQuietly(id);
   revalidatePath(`/items/${id}`);
   revalidatePath("/items");
   revalidatePath("/");

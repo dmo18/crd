@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auditThisRequest, requestContext } from "@/lib/audit/request";
 import { requireOwner } from "@/lib/auth/guard";
 import { ANOTHER_MAX, chooseVersion, GONE, LIST_CHANGED, loadVersionOptions, MAX_VERSION_OPTIONS } from "./versions";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 
 /**
  * "Which version is it?" on the item page and in Review. "Show versions"
@@ -23,6 +24,7 @@ const listAtSchema = z.coerce.number().int().positive().max(Number.MAX_SAFE_INTE
 const textSchema = z.string().max(ANOTHER_MAX * 2).optional();
 
 function refresh(id: number) {
+  refreshGuideQuietly(id);
   revalidatePath(`/items/${id}`);
   revalidatePath("/items");
   revalidatePath("/review");

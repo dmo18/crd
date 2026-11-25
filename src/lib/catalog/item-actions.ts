@@ -8,6 +8,7 @@ import { auditThisRequest } from "@/lib/audit/request";
 import { itemLabel } from "@/lib/audit/subjects";
 import { requireOwner } from "@/lib/auth/guard";
 import { takeCatalogValues, undoLink } from "./pick";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 
 const idSchema = z.coerce.number().int().positive().max(2_000_000_000);
 
@@ -19,6 +20,7 @@ export async function unlinkCatalogAction(formData: FormData): Promise<void> {
   const label = itemLabel(id.data);
   // Unlink and Undo of an automatic match: the link goes, the list to pick from comes back.
   const r = undoLink(id.data, getDb());
+  refreshGuideQuietly(id.data);
   if (r.ok) await auditThisRequest("catalog_card_unlinked", "ok", label);
   revalidatePath(`/items/${id.data}`);
   revalidatePath("/review");
@@ -31,6 +33,7 @@ export async function catalogValuesOnItemAction(formData: FormData): Promise<voi
   const id = idSchema.safeParse(formData.get("id"));
   if (!id.success) redirect("/items");
   const r = takeCatalogValues(id.data);
+  refreshGuideQuietly(id.data);
   if (r.ok && r.replaced.length > 0) await auditThisRequest("catalog_card_linked", "ok", `${itemLabel(id.data)}, used the catalog's values`);
   revalidatePath(`/items/${id.data}`);
   redirect(`/items/${id.data}`);

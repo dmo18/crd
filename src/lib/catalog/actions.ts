@@ -15,6 +15,7 @@ import { getCatalog } from "./provider";
 import { addCardToCollection, saveCatalogCard } from "./store";
 import { FAILURE_MESSAGES, SEARCH_MAX, SEARCH_MIN } from "./messages";
 import type { CatalogCard } from "./types";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 
 /** One search row as the browser sees it. Add and link take only `sourceId` back. */
 export type SearchRow = {
@@ -117,6 +118,7 @@ export async function addCatalogCardAction(_prev: AddState, formData: FormData):
     target = itemId;
     await auditThisRequest("catalog_card_linked", "ok", cardLine(card));
   }
+  refreshGuideQuietly(target);
   revalidatePath(`/items/${target}`);
   revalidatePath("/items");
   revalidatePath("/");

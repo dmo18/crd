@@ -13,6 +13,7 @@ import { checkScanStreak } from "@/lib/audit/alert-rules";
 import { errorKind, log } from "@/lib/log";
 import { keepReaderSamples } from "./samples";
 import { recordSnapshot } from "@/lib/valuation/snapshots";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 import { RecognitionError, type RecognitionPhoto, type RecognizedItem, type Recognizer } from "@/lib/recognition/types";
 
 const GENERIC_FAILURE = "Something went wrong with this scan. Try again.";
@@ -170,6 +171,8 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
       tx.update(scans).set({ status: "done", itemCount: recognized.length, recognizer: recognizer.name, finishedAt: at, error: null })
         .where(eq(scans.id, scanId)).run();
     });
+    // The built-in price guide for each new item. Never fails the scan.
+    refreshGuideQuietly(db.select({ id: items.id }).from(items).where(eq(items.scanId, scanId)).all().map((r) => r.id), db, at);
     try {
       recordSnapshot(db, at);
     } catch {

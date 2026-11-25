@@ -12,7 +12,7 @@ export const RARITY_TIERS = ["common", "minor_star", "star", "key", "grail"] as 
 export const PRODUCT_TYPES = ["pack", "rack_pack", "cello_pack", "blister", "box", "case", "factory_set", "other"] as const;
 export const SEAL_STATES = ["factory_sealed", "possibly_resealed", "opened", "unknown"] as const;
 export const IMAGE_ROLES = ["front", "back", "source", "crop"] as const;
-export const VALUE_SOURCES = ["ai_estimate", "manual", "sample", "price_feed"] as const;
+export const VALUE_SOURCES = ["ai_estimate", "manual", "sample", "price_feed", "price_guide"] as const;
 /** What a booked sign-in attempt was for. All kinds count toward the same limits. */
 export const ATTEMPT_KINDS = ["login", "setup", "change_password"] as const;
 /** Events kept in the activity log (More, Activity). */
