@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
+import type { UncutPhoto } from "@/lib/catalog/sources";
 import { getDb, type Db } from "@/db";
 import { images, items, scans, valuations, type ImageRow, type ValueSource } from "@/db/schema";
 import { startPhotoArchiver } from "@/lib/images/archive";
@@ -54,19 +55,28 @@ function turnOf(r: RecognizedItem, role: "front" | "back"): 0 | 90 | 180 | 270 {
  * here never fails the scan: the kind of error is logged and that photo stays
  * as it was.
  */
-async function fixScanPhotos(db: Db, rows: ImageRow[], item: RecognizedItem): Promise<void> {
+async function fixScanPhotos(db: Db, rows: ImageRow[], item: RecognizedItem): Promise<UncutPhoto[]> {
+  // The photos not cut to the card: the item page offers "Trim the photo" for them.
+  const uncut: UncutPhoto[] = [];
+  const note = (row: ImageRow) => {
+    const now = db.select({ width: images.width, height: images.height }).from(images).where(eq(images.id, row.id)).get();
+    if (now && !uncut.some((u) => u.id === row.id)) uncut.push({ id: row.id, w: now.width, h: now.height });
+  };
   for (const fix of item.fixes ?? []) {
     const row = rows[fix.sourceIndex];
     if (!row) continue;
     try {
       const plan = planFix(fix, row.width, row.height);
-      if (!plan) continue;
+      if (!plan) { note(row); continue; }
       const result = await fixPhoto(row, plan, db);
       if (!result.ok) log.warn("photo_fix_skipped", { scanId: row.scanId, imageId: row.id });
+      if (!result.ok || !plan.box) note(row);
     } catch (err) {
       log.warn("photo_fix_failed", { scanId: row.scanId, error: errorKind(err) });
+      note(row);
     }
   }
+  return uncut;
 }
 
 function safeMessage(err: unknown): string {
@@ -138,15 +148,16 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
 
     // One card scans: turn each stored photo upright and cut it to the card
     // when the reader is sure (S1b). The untouched photo stays as the original.
+    let uncut: UncutPhoto[] = [];
     if (scan.mode === "single" && recognized.length === 1) {
-      await fixScanPhotos(db, photoRows, recognized[0]!);
+      uncut = await fixScanPhotos(db, photoRows, recognized[0]!);
     }
 
     const valueSource: ValueSource = recognizer.name === "sample" ? "sample" : "ai_estimate";
     const at = now();
     db.transaction((tx) => {
       recognized.forEach((r: RecognizedItem, i: number) => {
-        const row = itemFromRecognition(r, { scanId, locationId: scan.locationId, valueSource, now: at, recognizer: recognizer.name });
+        const row = itemFromRecognition(r, { scanId, locationId: scan.locationId, valueSource, now: at, recognizer: recognizer.name, uncut });
         const item = tx.insert(items).values(row).returning().get();
         if (r.kind === "card" && r.catalog?.status === "matched") linkVerifiedMatch(tx as unknown as Db, item.id, at);
         if (row.estValueCents != null) {

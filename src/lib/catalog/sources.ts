@@ -68,6 +68,9 @@ export function markOwnerChanges(existing: Pick<Item, CatalogField | "fieldSourc
 }
 
 /** What the reader first read, kept as it was for good (`items.firstSuggestion`). */
+const uncutPhotoSchema = z.object({ id: z.number().int().positive(), w: z.number().int().positive(), h: z.number().int().positive() });
+export type UncutPhoto = z.infer<typeof uncutPhotoSchema>;
+
 export const firstSuggestionSchema = z.object({
   v: z.literal(1),
   fields: z.object({
@@ -94,16 +97,31 @@ export const firstSuggestionSchema = z.object({
   hold: z.array(z.enum(HOLD_REASONS)).max(HOLD_REASONS.length).optional().catch(undefined),
   /** Filled fields the reader did not read on the card (key card list, Wikidata). */
   notRead: z.array(z.enum(CATALOG_FIELDS)).max(CATALOG_FIELDS.length).optional().catch(undefined),
+  /**
+   * Photos the app did not cut to the card at the scan (the card box was not
+   * trusted), with their size then: "Trim the photo" is offered while the
+   * photo still has that size (the owner has not trimmed or turned it since).
+   */
+  uncut: z.array(uncutPhotoSchema).max(4).optional().catch(undefined),
   /** Time in milliseconds. */
   at: z.number().int(),
 });
 export type FirstSuggestion = z.infer<typeof firstSuggestionSchema>;
 
+/**
+ * "Trim the photo" for this photo: the app did not cut it to the card at the
+ * scan, and the owner has not turned or trimmed it since.
+ */
+export function offerTrim(item: Pick<Item, "firstSuggestion">, photo: { id: number; width: number; height: number }): boolean {
+  const u = parseFirstSuggestion(item.firstSuggestion)?.uncut?.find((x) => x.id === photo.id);
+  return Boolean(u && u.w === photo.width && u.h === photo.height);
+}
+
 export function buildFirstSuggestion(
   values: FieldValues,
   meta: {
     confidence: number | null; reader: string | null; at: Date; unsure?: readonly CatalogField[];
-    hold?: readonly (typeof HOLD_REASONS)[number][]; notRead?: readonly CatalogField[];
+    hold?: readonly (typeof HOLD_REASONS)[number][]; notRead?: readonly CatalogField[]; uncut?: readonly UncutPhoto[];
   },
 ): string {
   const fields: Record<string, unknown> = {};
@@ -116,6 +134,7 @@ export function buildFirstSuggestion(
     ...(unsure.length > 0 ? { unsure } : {}),
     ...(hold.length > 0 ? { hold } : {}),
     ...(notRead.length > 0 ? { notRead } : {}),
+    ...(meta.uncut && meta.uncut.length > 0 ? { uncut: meta.uncut.slice(0, 4).map((u) => ({ id: u.id, w: u.w, h: u.h })) } : {}),
   });
 }
 

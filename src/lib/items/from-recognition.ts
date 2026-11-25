@@ -1,7 +1,7 @@
 import type { CatalogField, NewItem, ValueSource } from "@/db/schema";
 import { CERTAIN_FIELDS, REVIEW_THRESHOLD, type RecognizedItem } from "@/lib/recognition/types";
 import { serializeCatalog } from "@/lib/catalog/candidates";
-import { buildFirstSuggestion, sourcesFor, type FieldSources } from "@/lib/catalog/sources";
+import { buildFirstSuggestion, sourcesFor, type FieldSources, type UncutPhoto } from "@/lib/catalog/sources";
 import { buildTitle } from "@/lib/title";
 import { rookieFromScan } from "./rookie";
 import { suggestionFromRead } from "./serial";
@@ -22,7 +22,7 @@ export function midpointCents(low: number | null, high: number | null): number |
  */
 export function itemFromRecognition(
   r: RecognizedItem,
-  ctx: { scanId: number; locationId: number | null; valueSource: ValueSource; now: Date; recognizer?: string | null },
+  ctx: { scanId: number; locationId: number | null; valueSource: ValueSource; now: Date; recognizer?: string | null; uncut?: readonly UncutPhoto[] },
 ): NewItem {
   const low = r.estimate?.lowCents ?? null;
   const high = r.estimate?.highCents ?? null;
@@ -66,6 +66,7 @@ export function itemFromRecognition(
     firstSuggestion: buildFirstSuggestion(cardRead, {
       confidence: r.confidence, reader: ctx.recognizer ?? null, at: ctx.now, unsure: isCard ? unsureFields(r) : [],
       hold: isCard ? r.evidence?.hold ?? [] : [], notRead: isCard ? r.evidence?.notRead ?? [] : [],
+      uncut: ctx.uncut ?? [],
     }),
     ...rookieFromScan(isCard, r.isRookie, r.evidence),
     isError: isCard && r.isError,

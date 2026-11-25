@@ -362,7 +362,31 @@ function yearFromTable(lines: Line[]): YearFind | null {
   // two apart (a season not played, or a row the reader lost).
   const step = last - rows[rows.length - 2].season;
   if (step < 0 || step > 2) return null;
+  // A stat row right under the last one whose season the reader got wrong
+  // ("1884" for 1984): a row of the table all the same, so the table runs one
+  // season further. Only for one year seasons, one row step below, in the
+  // same column.
+  if (!twoYear && misreadRowBelow(lines, lines[lastRow.i], rows)) {
+    return { year: last + 2, how: "stats", score: 2, lastSeason: last + 1, twoYear };
+  }
   return { year: last + 1, how: "stats", score: 2, lastSeason: last, twoYear };
+}
+
+/**
+ * A stat row just below the table's last row whose first token has four
+ * digits but is no season ("1884"): the next row of the table, misread.
+ */
+function misreadRowBelow(lines: Line[], lastLine: Line, rows: { y: number }[]): boolean {
+  const gaps = rows.slice(1).map((r, k) => r.y - rows[k].y).filter((g) => g > 0);
+  const usual = middle(gaps);
+  if (!(usual > 0)) return false;
+  return lines.some((l) => {
+    if (l === lastLine || l.tokens.length < 2 || !/^\d{4}$/.test(l.tokens[0]) || rowSeason(l.tokens[0]) != null) return false;
+    const dy = l.box.y - lastLine.box.y;
+    if (dy < 0.5 * usual || dy > 1.5 * usual) return false;
+    if (Math.abs(l.box.x - lastLine.box.x) > Math.max(lastLine.box.h, l.box.h)) return false;
+    return isStatRow(l);
+  });
 }
 
 function findYear(lines: Line[], brandLines: Set<Line>): YearFind | null {

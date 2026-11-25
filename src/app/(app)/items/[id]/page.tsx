@@ -18,7 +18,7 @@ import { requireOwner } from "@/lib/auth/guard";
 import { confirmItemAction, restoreItemAction } from "@/lib/items/actions";
 import { daysLeft, timeLeftText } from "@/lib/items/bin";
 import { checkNotice, confidenceLabel, valueSourceLabel } from "@/lib/items/labels";
-import { fieldsToCheck } from "@/lib/catalog/sources";
+import { fieldsToCheck, offerTrim } from "@/lib/catalog/sources";
 import { linkedFacts } from "@/lib/catalog/pick";
 import { parsePullList } from "@/lib/items/from-recognition";
 import { recognitionMode } from "@/lib/env";
@@ -116,6 +116,14 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
                 <img src={`/api/images/${p.thumbFile}`} alt={`${ROLE_NAMES[p.role]} photo of ${item.title}`} className="aspect-[3/4] w-full rounded-xl bg-surface-2 object-contain" />
                 <span className="text-sm text-muted">{ROLE_NAMES[p.role]} (tap to zoom, turn or trim)</span>
               </Link>
+              {offerTrim(item, p) ? (
+                <p className="text-xs text-muted">
+                  The app did not cut this photo to the card.{" "}
+                  <Link href={`/items/${item.id}/photo/${p.id}`} className="inline-flex min-h-11 items-center text-sm font-semibold text-accent underline">
+                    Trim the photo
+                  </Link>
+                </p>
+              ) : null}
             </li>
           ))}
         </ul>

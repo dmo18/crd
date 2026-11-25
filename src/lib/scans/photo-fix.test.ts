@@ -4,7 +4,8 @@ import sharp from "sharp";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
-import { images, scans } from "@/db/schema";
+import { images, items, scans } from "@/db/schema";
+import { offerTrim } from "@/lib/catalog/sources";
 import { removeOrphanPhotos } from "@/lib/images/cleanup";
 import { ARCHIVE_EDGE, readPhoto, sameFamily, uploadsDir, workDir } from "@/lib/images/store";
 import { restorePhoto } from "@/lib/items/photos";
@@ -175,6 +176,25 @@ describe("the fix after a one card scan", () => {
       expect({ w: row.width, h: row.height }).toEqual({ w: 900, h: 1200 });
       expect(row.originalFile).toBeTruthy();
     }
+  });
+
+  it("offers Trim the photo for a photo the app did not cut, until the owner changes it (review fix 6)", async () => {
+    const scanId = await scanOf([{ role: "back", data: await tablePhoto({ ...SIDEWAYS, red: "left" }) }]);
+    await processScan(scanId, { db, recognizer: fakeWith([{ sourceIndex: 1, role: "back", ...fix({ turn: 90, card: sidewaysBox, cardTrusted: false }) }]) });
+    const item = db.select().from(items).get()!;
+    const back = backRow();
+    const front = rows().find((r) => r.role === "front")!;
+    expect(offerTrim(item, back)).toBe(true);
+    // The front had no fix at all: nothing is said about it.
+    expect(offerTrim(item, front)).toBe(false);
+    // Trimmed or turned by the owner since: the size changed, the hint goes.
+    expect(offerTrim(item, { ...back, width: back.width - 40 })).toBe(false);
+    // A cut the app made: no hint.
+    const cut = await scanOf([{ role: "back", data: await tablePhoto({ ...SIDEWAYS, red: "left" }) }]);
+    await processScan(cut, { db, recognizer: fakeWith([{ sourceIndex: 1, role: "back", ...fix({ turn: 90, card: sidewaysBox, cardTrusted: true, lines: [{ x: 0.3, y: 0.4, w: 0.3, h: 0.1 }] }) }]) });
+    const cutItem = db.select().from(items).where(eq(items.scanId, cut)).get()!;
+    const cutBack = db.select().from(images).where(eq(images.scanId, cut)).all().find((r) => r.role === "back")!;
+    expect(offerTrim(cutItem, cutBack)).toBe(false);
   });
 
   it("leaves a photo alone when neither the turn nor the box is trusted", async () => {

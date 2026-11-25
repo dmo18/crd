@@ -751,3 +751,32 @@ describe("team and year rules from the second Part C review (task 10.10)", () =>
     expect(team([["89 MARMNERS", 0.4], ["OF", 0.5]])).toEqual({ team: null, hint: "Seattle Mariners" });
   });
 });
+
+describe("Haslett 1985 Topps football: the stat table's last row misread (review fix 6)", () => {
+  // The reader's lines of the phone photo of the back, with the copyright line lost.
+  const cells: [string, number, number, number, number][] = [
+    ["JIM HASLETT", 0.07, 0.33, 0.49, 0.08], ["204", 0.09, 0.17, 0.1, 0.05], ["BUFFALO", 0.12, 0.33, 0.17, 0.04], ["BILLS", 0.14, 0.33, 0.11, 0.04],
+    ["INSIDE LINEBACKER", 0.17, 0.56, 0.28, 0.04], ["Jim's most productive game of 1984", 0.22, 0.18, 0.68, 0.07],
+    ["YEAR TEAM", 0.53, 0.15, 0.16, 0.04], ["INTERCEPTION RECORD", 0.53, 0.53, 0.28, 0.04], ["1979 BILLS", 0.56, 0.15, 0.16, 0.04],
+    ["NFL", 0.57, 0.43, 0.06, 0.03], ["1980 BILLS", 0.58, 0.15, 0.16, 0.04], ["NFL", 0.59, 0.43, 0.06, 0.03], ["15", 0.58, 0.62, 0.04, 0.02],
+    ["7.5", 0.58, 0.7, 0.05, 0.03], ["1981", 0.6, 0.15, 0.1, 0.03], ["BILLS", 0.6, 0.23, 0.08, 0.03], ["NFL", 0.61, 0.43, 0.06, 0.03],
+    ["30", 0.6, 0.62, 0.03, 0.03], ["15.0", 0.61, 0.69, 0.06, 0.03], ["1982", 0.62, 0.15, 0.09, 0.03], ["BILLS", 0.63, 0.23, 0.08, 0.03],
+    ["0.0", 0.63, 0.69, 0.06, 0.03], ["NFL", 0.64, 0.43, 0.06, 0.03], ["1983", 0.65, 0.15, 0.07, 0.03], ["BILLS", 0.65, 0.23, 0.07, 0.03],
+    ["0.0", 0.65, 0.7, 0.05, 0.03], ["NFL", 0.66, 0.42, 0.06, 0.03], ["1884", 0.67, 0.15, 0.08, 0.03], ["BILLS", 0.67, 0.22, 0.08, 0.03],
+    ["0.0", 0.67, 0.7, 0.05, 0.03], ["NFL", 0.68, 0.42, 0.06, 0.03], ["LIFETIME TOTALS", 0.7, 0.14, 0.21, 0.04], ["45", 0.72, 0.61, 0.04, 0.03],
+    ["DRAFTED: BILLS#2-1979 ACQUIRED: VIA DRAFT", 0.81, 0.15, 0.45, 0.05],
+  ];
+  const back = ocr(cells.map(([t, y, x, w, h]) => [t, y, x, w, h, 0.95] as Row));
+  const front = ocr([["TOPPS", 0.07, 0.1, 0.1, 0.03, 0.99]]);
+
+  it("a misread season right under the last row still counts: stats through 1984, a 1985 card", () => {
+    const p = parseCardText(front, back);
+    expect(p.year).toBe(1985);
+    expect(p.evidence).toContain("Read stat table ending with 1984, so the card is likely from 1985");
+  });
+
+  it("with the copyright year read, the same", () => {
+    const p = parseCardText(front, ocr([...cells.map(([t, y, x, w, h]) => [t, y, x, w, h, 0.95] as Row), ["©1985 TOPPS CHEWING GUM, INC. PRTD. IN U.S.A.", 0.92, 0.19, 0.45, 0.02, 0.97]]));
+    expect(p.year).toBe(1985);
+  });
+});
