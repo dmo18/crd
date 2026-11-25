@@ -6,7 +6,7 @@ import { itemLabel } from "@/lib/audit/subjects";
 import { liveItem } from "@/lib/items/live";
 import { CERTAIN_FIELDS, HOLD_WORDS, REVIEW_THRESHOLD, type HoldReason } from "@/lib/recognition/types";
 import { applyCatalogCard, type CatalogDifference } from "./apply";
-import { candidateCard, parseCatalog, serializeCatalog, type LinkSnapshot, type NotCheckedReason, type StoredCandidate } from "./candidates";
+import { candidateCard, linkSnapshot, parseCatalog, serializeCatalog, type LinkSnapshot, type NotCheckedReason, type StoredCandidate } from "./candidates";
 import { sourceUrl } from "./clean";
 import { cardLine } from "./line";
 import { findCard } from "./find";
@@ -124,21 +124,12 @@ export function pickCandidateIn(
   // What the item had and what the link wrote are kept with it, so Undo and Unlink put the item back exactly.
   const kept = serializeCatalog({
     status: "linked", items: stored!.items,
-    linked: { position, auto, before: snapshotOf(item, changedFields), wrote: snapshotOf(written, changedFields) },
+    linked: { position, auto, before: linkSnapshot(item, changedFields), wrote: linkSnapshot(written, changedFields) },
   }, now);
   tx.update(items).set({
     ...patch, ...version, ...extra, catalogCandidates: kept, ...(raise ? { status: "confirmed" as const } : {}), updatedAt: now,
   }).where(and(eq(items.id, itemId), liveItem)).run();
   return { ok: true, line: cardLine(row), differences, confirmed: raise };
-}
-
-/** The parts of an item a link changes. `fields`: the catalog fields it filled. */
-function snapshotOf(item: Item, fields: readonly CatalogField[]): LinkSnapshot {
-  return {
-    status: item.status, confidence: item.confidence, title: item.title, fieldSources: item.fieldSources,
-    version: { state: item.versionState, source: item.versionSource, options: item.versionOptions },
-    fields: Object.fromEntries(fields.map((f) => [f, item[f] ?? null])),
-  };
 }
 
 /** The fields a verified match confirms (S1a rule C). */

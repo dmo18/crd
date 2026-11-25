@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CATALOG_FIELDS, ITEM_STATUSES, SPORTS, VERSION_SOURCES, VERSION_STATES } from "@/db/schema";
+import { CATALOG_FIELDS, ITEM_STATUSES, SPORTS, VERSION_SOURCES, VERSION_STATES, type CatalogField, type Item } from "@/db/schema";
 import type { Candidate } from "./match";
 import type { CatalogCard, CatalogFailure } from "./types";
 
@@ -75,6 +75,15 @@ const snapshotSchema = z.object({
 });
 /** What an item held, or what a link wrote on it, for the parts a link changes. */
 export type LinkSnapshot = z.infer<typeof snapshotSchema>;
+
+/** The parts of an item a link changes. `fields`: the catalog fields it filled. */
+export function linkSnapshot(item: Item, fields: readonly CatalogField[]): LinkSnapshot {
+  return {
+    status: item.status, confidence: item.confidence, title: item.title, fieldSources: item.fieldSources,
+    version: { state: item.versionState, source: item.versionSource, options: item.versionOptions },
+    fields: Object.fromEntries(fields.map((f) => [f, item[f] ?? null])),
+  };
+}
 
 const linkedSchema = z.object({
   position: z.number().int().min(0).max(MAX_STORED_CANDIDATES - 1),

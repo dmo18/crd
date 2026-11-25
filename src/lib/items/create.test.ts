@@ -2,7 +2,8 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { catalogCards, items, valuations } from "@/db/schema";
-import { linkCatalogCard, unlinkCatalogCard } from "@/lib/catalog/apply";
+import { linkCatalogCard } from "@/lib/catalog/apply";
+import { undoLink } from "@/lib/catalog/pick";
 import { createItem, NEEDS_ONE } from "./create";
 
 let db: Db;
@@ -70,17 +71,15 @@ describe("link later and unlink", () => {
     expect(get(r.id).catalogCardId).not.toBeNull();
     expect(JSON.parse(get(r.id).fieldSources!)).toMatchObject({ player: "owner", team: "owner", year: "catalog", cardNumber: "catalog" });
   });
-  it("unlink changes no field value; the catalog's marks become reading marks, the owner's stay", () => {
+  it("unlink puts back what the link filled (review fix 3); the owner's values and marks stay", () => {
     const r = createItem("card", { player: "Junior" }, db);
     if (!r.ok) throw new Error("create");
+    const before = get(r.id);
     linkCatalogCard(r.id, catalog(), db);
-    const linked = get(r.id);
-    const before = { ...linked, catalogCardId: null, updatedAt: null, fieldSources: null };
-    expect(unlinkCatalogCard(r.id, db).ok).toBe(true);
+    expect(get(r.id)).toMatchObject({ year: 1990, cardNumber: "336" });
+    expect(undoLink(r.id, db).ok).toBe(true);
     const after = get(r.id);
-    expect({ ...after, updatedAt: null, fieldSources: null }).toEqual(before);
-    const marks = JSON.parse(after.fieldSources!);
-    expect(marks.player).toBe("owner");
-    expect(Object.entries(marks).filter(([k]) => k !== "player").every(([, v]) => v === "reading")).toBe(true);
+    expect({ ...after, updatedAt: null }).toEqual({ ...before, updatedAt: null });
+    expect(JSON.parse(after.fieldSources!)).toEqual({ player: "owner" });
   });
 });

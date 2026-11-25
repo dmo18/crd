@@ -3,6 +3,7 @@ import { getDb, type Db } from "@/db";
 import { CATALOG_FIELDS, catalogCards, items, type CatalogCardRow, type CatalogField, type Item } from "@/db/schema";
 import { liveItem } from "@/lib/items/live";
 import { buildTitle } from "@/lib/title";
+import { linkSnapshot, serializeCatalog } from "./candidates";
 import { isFilled, parseFieldSources, sourceOf, type FieldSources } from "./sources";
 
 /** The part of a catalog card the filling rule needs. */
@@ -72,10 +73,16 @@ export function applyCatalogCard(item: Item, card: CatalogValues, opts: { useCat
 
 export type LinkResult = { ok: true; differences: CatalogDifference[] } | { ok: false; error: string };
 
-/** Links a confirmed catalog card to an item by the filling rule. Adds no value row and leaves the status alone. */
+/**
+ * Links a confirmed catalog card to an item by the filling rule ("Find this
+ * card in the catalog"). Adds no value row and leaves the status alone. What
+ * the item had and what the link wrote are kept with the link, so Unlink
+ * (undoLink) puts the item back as it was.
+ */
 export function linkCatalogCard(
   itemId: number, catalogCardId: number, db: Db = getDb(), opts: { useCatalogValues?: boolean; now?: Date } = {},
 ): LinkResult {
+  const now = opts.now ?? new Date();
   return db.transaction((tx) => {
     const item = tx.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
     if (!item) return { ok: false, error: "This item no longer exists." };
@@ -83,30 +90,13 @@ export function linkCatalogCard(
     const card = tx.select().from(catalogCards).where(eq(catalogCards.id, catalogCardId)).get();
     if (!card) return { ok: false, error: "That catalog card no longer exists." };
     const { patch, differences } = applyCatalogCard(item, card, opts);
-    // A linked item has no list of candidates to pick from any more.
-    tx.update(items).set({ ...patch, catalogCandidates: null, updatedAt: opts.now ?? new Date() }).where(and(eq(items.id, itemId), liveItem)).run();
+    const changed = CATALOG_FIELDS.filter((f) => f in patch && patch[f] !== item[f]);
+    // A linked item has no list of candidates to pick from any more; only the link's own record is kept.
+    const catalogCandidates = serializeCatalog({
+      status: "linked", items: [],
+      linked: { position: 0, auto: false, before: linkSnapshot(item, changed), wrote: linkSnapshot({ ...item, ...patch } as Item, changed) },
+    }, now);
+    tx.update(items).set({ ...patch, catalogCandidates, updatedAt: now }).where(and(eq(items.id, itemId), liveItem)).run();
     return { ok: true, differences };
-  }, { behavior: "immediate" });
-}
-
-/**
- * Unlinks: sets the catalog link to null and keeps every value. The fields
- * the catalog filled are marked `reading` from then on, so a later link to
- * another card lists or replaces them under the normal rules instead of
- * treating them as empty or as the owner's.
- */
-export function unlinkCatalogCard(itemId: number, db: Db = getDb()): { ok: boolean } {
-  return db.transaction((tx) => {
-    const item = tx.select({ id: items.id, fieldSources: items.fieldSources }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
-    if (!item) return { ok: false };
-    const patch: Partial<Item> = { catalogCardId: null };
-    const marks = parseFieldSources(item.fieldSources);
-    if (marks) {
-      let changed = false;
-      for (const f of CATALOG_FIELDS) if (marks[f] === "catalog") { marks[f] = "reading"; changed = true; }
-      if (changed) patch.fieldSources = JSON.stringify(marks);
-    }
-    const res = tx.update(items).set(patch).where(and(eq(items.id, itemId), liveItem)).run();
-    return { ok: res.changes > 0 };
   }, { behavior: "immediate" });
 }

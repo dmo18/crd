@@ -289,7 +289,10 @@ describe("Look up again and None of these: limits, audit and races", () => {
     const saved = savedCard();
     expect(get(item.id).catalogCandidates).not.toBeNull();
     expect(linkCatalogCard(item.id, saved.catalogCardId, db).ok).toBe(true);
-    expect(get(item.id).catalogCandidates).toBeNull();
+    // Only the link's own record stays (what it changed, for Unlink): no candidate is kept.
+    const { parseCatalog } = await import("@/lib/catalog/candidates");
+    expect(parseCatalog(get(item.id).catalogCandidates)).toMatchObject({ status: "linked", items: [] });
+    expect(pick.reviewCatalogView(get(item.id), db)?.candidates).toEqual([]);
   });
 });
 

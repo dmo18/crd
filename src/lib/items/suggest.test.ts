@@ -24,7 +24,7 @@ vi.mock("next/cache", () => ({ revalidatePath: () => undefined }));
 
 const actions = await import("./suggest-actions");
 const { answerRookie, answerSerial } = await import("./suggest");
-const { unlinkCatalogCard } = await import("@/lib/catalog/apply");
+const { undoLink } = await import("@/lib/catalog/pick");
 const { dismissCandidates, pickCandidate } = await import("@/lib/catalog/pick");
 const { serializeCatalog } = await import("@/lib/catalog/candidates");
 const { chooseVersion } = await import("@/lib/catalog/versions");
@@ -220,7 +220,7 @@ describe("answering the rookie question", () => {
     db.update(items).set({ catalogCandidates: serializeCatalog({ status: "candidates", items: [griffey] }, new Date()) }).where(eq(items.id, id)).run();
     expect(pickCandidate(id, 0, "551033", db)).toMatchObject({ ok: true });
     expect(get(id)).toMatchObject(mine);
-    expect(unlinkCatalogCard(id, db)).toEqual({ ok: true });
+    expect(undoLink(id, db)).toEqual({ ok: true });
     expect(get(id)).toMatchObject(mine);
     expect(chooseVersion(id, { position: 0, listAt: 1, text: null })).toBeTruthy();
     expect(get(id)).toMatchObject(mine);

@@ -6,7 +6,8 @@ import { applyBulk, undoBulk } from "@/lib/items/bulk";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { updateItem } from "@/lib/items/update";
 import { recognizedItemSchema } from "@/lib/recognition/types";
-import { applyCatalogCard, linkCatalogCard, unlinkCatalogCard } from "./apply";
+import { applyCatalogCard, linkCatalogCard } from "./apply";
+import { undoLink } from "./pick";
 import { canonicalKey } from "./key";
 
 let db: Db;
@@ -145,7 +146,7 @@ describe("applyCatalogCard (the filling rule)", () => {
   });
 });
 
-describe("linkCatalogCard and unlinkCatalogCard", () => {
+describe("linkCatalogCard and Unlink", () => {
   it("refuses a missing item, a deleted item, a missing card and other kinds", () => {
     const card = griffeyCard();
     expect(linkCatalogCard(999, card.id, db)).toEqual({ ok: false, error: "This item no longer exists." });
@@ -158,34 +159,39 @@ describe("linkCatalogCard and unlinkCatalogCard", () => {
     expect(get(box.id).catalogCardId).toBeNull();
   });
 
-  it("unlinking sets the link to null, keeps every value and turns catalog marks into reading marks", () => {
+  it("unlinking sets the link to null and puts back what the link filled, with the marks it had (review fix 3)", () => {
     const item = scanned({ player: "Ken Griffey Jr.", year: 1990 });
     const card = griffeyCard();
     linkCatalogCard(item.id, card.id, db, { now: later(5) });
     const linked = get(item.id);
     expect(marks(linked)).toMatchObject({ player: "reading", year: "reading", brand: "catalog", cardNumber: "catalog", sport: "catalog" });
-    expect(unlinkCatalogCard(item.id, db)).toEqual({ ok: true });
+    expect(undoLink(item.id, db, later(6))).toEqual({ ok: true });
     const after = get(item.id);
-    expect({ ...after, fieldSources: null }).toEqual({ ...linked, catalogCardId: null, fieldSources: null });
-    expect(marks(after)).toEqual({ player: "reading", year: "reading", brand: "reading", cardNumber: "reading", sport: "reading" });
-    expect(unlinkCatalogCard(999, db)).toEqual({ ok: false });
+    expect({ ...after, updatedAt: null }).toEqual({ ...item, updatedAt: null });
+    expect(marks(after)).toEqual({ player: "reading", year: "reading" });
+    expect(undoLink(999, db)).toEqual({ ok: false });
   });
 
-  it("after unlinking, a link to another card lists the old catalog values as differences", () => {
+  it("after unlinking an older link (kept without what it changed), a link to another card lists the old catalog values as differences", () => {
     const item = scanned({ player: "Ken Griffey Jr.", year: 1990 });
     linkCatalogCard(item.id, griffeyCard().id, db);
-    unlinkCatalogCard(item.id, db);
+    // A link made before review fix 3 kept no record of what it changed.
+    db.update(items).set({ catalogCandidates: null }).where(eq(items.id, item.id)).run();
+    undoLink(item.id, db);
+    expect(marks(get(item.id))).toEqual({ player: "reading", year: "reading", brand: "reading", cardNumber: "reading", sport: "reading" });
     const other = griffeyCard({ cardNumber: "999", player: "Ken Griffey Jr. " });
     const r = linkCatalogCard(item.id, other.id, db);
     expect(r).toEqual({ ok: true, differences: [{ field: "cardNumber", itemValue: "336", catalogValue: "999" }] });
     expect(get(item.id).cardNumber).toBe("336");
   });
 
-  it("unlinking an old item without marks keeps it without marks", () => {
+  it("unlinking an old item without marks puts it back without marks", () => {
     const item = insert({ player: "Ken Griffey Jr." });
     linkCatalogCard(item.id, griffeyCard().id, db);
-    unlinkCatalogCard(item.id, db);
-    expect(marks(get(item.id))).toEqual({ year: "reading", brand: "reading", cardNumber: "reading", sport: "reading" });
+    undoLink(item.id, db);
+    const after = get(item.id);
+    expect(marks(after)).toBeNull();
+    expect(after).toMatchObject({ player: "Ken Griffey Jr.", year: null, brand: null, cardNumber: null, sport: null, title: "Old" });
   });
 
   it("deleting a catalog card unlinks its items and removes its source rows", () => {
@@ -268,7 +274,7 @@ describe("owner edits and the first suggestion", () => {
     const row = get(item.id);
     expect(row.firstSuggestion).toBe(first);
     expect(row).toMatchObject({ player: "Ken Griffey", brand: "Topps Co", year: 1990, cardNumber: "336", catalogCardId: card.id });
-    unlinkCatalogCard(item.id, db);
+    undoLink(item.id, db);
     expect(get(item.id).firstSuggestion).toBe(first);
   });
 });
