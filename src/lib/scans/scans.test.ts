@@ -6,6 +6,7 @@ import { createDb, type Db } from "@/db";
 import { images, items, locations, scans, valuations } from "@/db/schema";
 import { readPhoto, uploadsDir } from "@/lib/images/store";
 import { RecognitionError, recognizedItemSchema, type RecognitionRequest, type RecognizedItemInput, type Recognizer } from "@/lib/recognition/types";
+import { duplicateIds, findDuplicateMatches } from "@/lib/items/duplicates";
 import { createScan, ScanInputError } from "./create";
 import { enqueueScan, processScan, queueIdle, queueOrder, RECOGNITION_DEADLINE_MS, recoverScans, retryScan, TOO_SLOW } from "./process";
 import { getScanView, recentScans, scanPhotoThumbs, scanStatusCounts, scanViews } from "./view";
@@ -126,6 +127,24 @@ describe("processScan", () => {
     expect((await readPhoto(crops[0].file)).data.length).toBeGreaterThan(0);
     // The original photo stays with the scan, not with any one card.
     expect(db.select().from(images).where(eq(images.role, "source")).get()!.itemId).toBeNull();
+  });
+
+  it("a card from a many-cards scan meets the same duplicate check as one from a one card scan", async () => {
+    const owned = db.insert(items).values({
+      kind: "card", title: "1993 Fleer #65 Tim Hardaway", status: "confirmed", sport: "basketball", year: 1993, brand: "Fleer", cardNumber: "65", player: "Tim Hardaway",
+    }).returning({ id: items.id }).get().id;
+    const hardaway: RecognizedItemInput = { kind: "card", confidence: 0.65, sport: "basketball", year: 1993, brand: "Fleer", cardNumber: "65", player: "Tim Hardaway", estimate: null };
+    const many = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }] }, db);
+    await processScan(many.scanId, { db, recognizer: fake([{ ...hardaway, sourceIndex: 0, box: { x: 0.05, y: 0.05, w: 0.4, h: 0.4 } }]) });
+    const one = await createScan({ mode: "single", photos: [{ role: "front", data: await photo() }] }, db);
+    await processScan(one.scanId, { db, recognizer: fake([hardaway]) });
+    const fromMany = db.select().from(items).where(eq(items.scanId, many.scanId)).get()!;
+    const fromOne = db.select().from(items).where(eq(items.scanId, one.scanId)).get()!;
+    expect(fromMany.status).toBe("needs_review");
+    for (const scanned of [fromMany, fromOne]) {
+      expect(findDuplicateMatches(scanned.id, db).map((m) => [m.item.id, m.kind])).toEqual([[owned, "same"]]);
+      expect(duplicateIds(db)).toContain(scanned.id);
+    }
   });
 
   it("a card read from its back alone keeps its cut-out as its back photo, not as a front", async () => {
