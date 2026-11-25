@@ -7,7 +7,7 @@ import { NOT_CHECKED_LINES } from "@/lib/catalog/candidates";
 import { searchWords } from "@/lib/catalog/find";
 import { parseFirstSuggestion } from "@/lib/catalog/sources";
 import { unlinkCatalogAction, catalogValuesOnItemAction } from "@/lib/catalog/item-actions";
-import { applyCatalogCard } from "@/lib/catalog/apply";
+import { applyCatalogCard, isListing } from "@/lib/catalog/apply";
 import { FIELD_WORDS, linkedFacts, reviewCatalogView } from "@/lib/catalog/pick";
 import { Button } from "@/components/ui";
 import { CARD_FIELD_LABELS, SPORT_LABELS } from "@/lib/items/labels";
@@ -23,8 +23,10 @@ export function CatalogBlock({ item }: { item: Item }) {
   const card = item.catalogCardId == null ? null : db.select().from(catalogCards).where(eq(catalogCards.id, item.catalogCardId)).get() ?? null;
   const facts = card ? linkedFacts(item, db) : null;
   const first = parseFirstSuggestion(item.firstSuggestion);
-  // Fields the scanner read differently from the linked card ("This is my card" keeps them until the owner chooses).
-  const differences = card ? applyCatalogCard(item, card).differences : [];
+  // Fields the reader read differently from the linked card ("This is my card" keeps them until the owner chooses).
+  // An unverified listing is not checked: its details are shown as such, never offered against the card's.
+  const listing = card ? isListing(card) : false;
+  const differences = card && !listing ? applyCatalogCard(item, card).differences : [];
   // The same suggestions as Review, with "This is my card", for a card that skipped Review.
   const view = card ? null : reviewCatalogView(item, db);
   const search = new URLSearchParams({ itemId: String(item.id) });
@@ -32,7 +34,8 @@ export function CatalogBlock({ item }: { item: Item }) {
   if (words.length >= 2) search.set("q", words);
   const known: [string, string][] = facts
     ? ([
-      ["Set", facts.setName ?? "Base set"],
+      // A listing names no set: nothing is known about it, not "Base set".
+      ["Set", facts.setName ?? (listing ? "" : "Base set")],
       ["Card number", facts.cardNumber ?? ""],
       ["Team", facts.team ?? ""],
       ["Card details", facts.details ?? ""],
@@ -49,11 +52,12 @@ export function CatalogBlock({ item }: { item: Item }) {
             ) : (
               <p className="font-semibold break-words">{facts.line}</p>
             )}
-            {facts.verified ? null : <div><Badge tone="warn">Unverified listing</Badge></div>}
+            {listing ? <div><Badge tone="warn">Unverified listing</Badge></div> : null}
             {facts.hold.map((h) => <p key={h} className="text-sm font-semibold break-words">{h}</p>)}
             {facts.confirmed.length > 0 ? (
               <p className="text-sm">The catalog agrees with the card on: {facts.confirmed.map((f) => CARD_FIELD_LABELS[f]).join(", ")}.</p>
             ) : null}
+            {listing ? <p className="text-sm font-semibold">From an unverified listing. Not checked.</p> : null}
             {known.length > 0 ? (
               <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
                 {known.map(([k, v]) => (

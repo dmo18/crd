@@ -278,3 +278,56 @@ describe("owner edits and the first suggestion", () => {
     expect(get(item.id).firstSuggestion).toBe(first);
   });
 });
+
+describe("the Acuna walk-through (blocker 1)", () => {
+  const plain = (over: Record<string, unknown>) => ({ id: 77, sport: "baseball" as const, year: 1990, brand: "Topps", setName: null, cardNumber: "336", player: null, team: null, variation: null, verified: true, ...over }) as unknown as Parameters<typeof applyCatalogCard>[1];
+  const acuna = { year: 2021, brand: "Panini", setName: "Prizm", cardNumber: "SG-4", player: "Ronald Acuña Jr.", sport: "baseball" };
+
+  it("an unverified listing never replaces what the card reads, and takeCatalogValues refuses it", async () => {
+    const item = scanned(acuna);
+    const listing = griffeyCard({ year: 2021, brand: "Prizm", setName: null, cardNumber: "SG-4", player: "Ronald Acuna Jr." });
+    db.update(catalogCards).set({ verified: false }).where(eq(catalogCards.id, listing.id)).run();
+    const row = db.select().from(catalogCards).where(eq(catalogCards.id, listing.id)).get()!;
+    const r = applyCatalogCard(item, row, { useCatalogValues: true });
+    expect(r.replaced).toEqual([]);
+    expect(r.patch).not.toHaveProperty("brand");
+    expect(r.patch).not.toHaveProperty("player");
+    const { takeCatalogValues, UNVERIFIED_VALUES } = await import("./pick");
+    db.update(items).set({ catalogCardId: listing.id }).where(eq(items.id, item.id)).run();
+    expect(takeCatalogValues(item.id, {}, db)).toEqual({ ok: false, error: UNVERIFIED_VALUES });
+    expect(get(item.id)).toMatchObject({ brand: "Panini", player: "Ronald Acuña Jr." });
+  });
+
+  it("a clean entry's product word goes through the maker table: Prizm is the set, Panini the brand", () => {
+    const item = scanned({ ...acuna, brand: undefined, setName: undefined });
+    const r = applyCatalogCard(item, griffeyCard({ year: 2021, brand: "Prizm", setName: null, cardNumber: "SG-4", player: "Ronald Acuna Jr." }));
+    expect(r.patch).toMatchObject({ brand: "Panini", setName: "Prizm" });
+    const topps = applyCatalogCard(scanned({ player: "Ken Griffey Jr.", year: 1993 }), griffeyCard({ year: 1993, brand: "Stadium Club", player: "Ken Griffey Jr." }));
+    expect(topps.patch).toMatchObject({ brand: "Topps", setName: "Stadium Club" });
+    const finest = applyCatalogCard(scanned({ player: "Ken Griffey Jr.", year: 1994 }), griffeyCard({ year: 1994, brand: "Topps", variation: "Finest", player: "Ken Griffey Jr." }));
+    expect(finest.patch).toMatchObject({ brand: "Topps", setName: "Finest" });
+    expect(finest.patch).not.toHaveProperty("variation");
+    // A plain maker stays the brand, a real variation stays a variation.
+    const tiffany = applyCatalogCard(scanned({ player: "Ken Griffey Jr.", year: 1990 }), griffeyCard({ variation: "Tiffany" }));
+    expect(tiffany.patch).toMatchObject({ brand: "Topps", variation: "Tiffany" });
+  });
+
+  it("a clean entry with the product as brand agrees with Panini and Prizm read on the card", () => {
+    const item = scanned(acuna);
+    const r = applyCatalogCard(item, griffeyCard({ year: 2021, brand: "Prizm", setName: null, cardNumber: "SG-4", player: "Ronald Acuna Jr" }), { useCatalogValues: true });
+    expect(r.differences).toEqual([]);
+    expect(r.replaced).toEqual([]);
+    expect(r.patch).not.toHaveProperty("brand");
+    expect(r.patch).not.toHaveProperty("player");
+  });
+
+  it("a value that differs only by accents, case, punctuation or suffix form is no difference; the more complete form stays", () => {
+    const item = scanned({ ...acuna, player: "RONALD ACUNA, JR" });
+    const r = applyCatalogCard(item, plain({ year: 2021, brand: "Panini", setName: "Prizm", cardNumber: "SG-4", player: "Ronald Acuña Junior" }));
+    expect(r.differences).toEqual([]);
+    const taken = applyCatalogCard(item, plain({ year: 2021, brand: "Panini", setName: "Prizm", cardNumber: "SG-4", player: "Ronald Acuña Jr." }), { useCatalogValues: true });
+    expect(taken.patch.player).toBe("Ronald Acuña Jr.");
+    const keep = applyCatalogCard(scanned(acuna), plain({ year: 2021, brand: "Panini", setName: "Prizm", cardNumber: "SG-4", player: "Ronald Acuna Jr" }), { useCatalogValues: true });
+    expect(keep.patch).not.toHaveProperty("player");
+  });
+});

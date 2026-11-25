@@ -69,6 +69,7 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
       {view.linked ? (
         <div className="flex flex-col gap-1">
           <p className="text-sm"><span className="text-muted">Catalog card: </span><span className="font-semibold break-words">{view.linked.line}</span></p>
+          {view.linked.verified ? null : <p className="text-sm font-semibold">From an unverified listing. Not checked.</p>}
           <SourceLink url={view.linked.url} />
           {view.linked.differences.length > 0 ? (
             <div className="flex flex-col gap-2 rounded-xl border border-warn bg-warn-soft p-3">
@@ -123,7 +124,7 @@ export function CatalogCandidates({ id, title, view, notCheckedLine }: {
 
       {view.status === "not_checked" ? (
         <>
-          <p className="text-sm"><span className="font-semibold">Catalog not checked.</span> {notCheckedLine} The readerThe scanner&apos;s reading is keptapos;s reading is kept.</p>
+          <p className="text-sm"><span className="font-semibold">Catalog not checked.</span> {notCheckedLine} What the reader read is kept.</p>
           {lookUpButton ? <div className="flex">{lookUpButton}</div> : null}
         </>
       ) : null}

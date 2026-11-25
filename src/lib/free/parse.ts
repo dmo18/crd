@@ -726,6 +726,27 @@ export const PRODUCT_NAMES: readonly string[] = [
   ...new Set([...BRANDS.flatMap((d) => [d.set, d.modern?.set]), ...SET_LOGOS.map(([, name]) => name)].filter((v): v is string => Boolean(v))),
 ];
 
+const productKey = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * A product name as a catalog writes it ("Prizm", "Panini Prizm", "Stadium
+ * Club", "Ultra") through the maker and product table: its maker as the brand
+ * and the product as the set, in the card's year. Null when the words are
+ * not a product of a known maker (a plain maker such as "Topps", or an
+ * unknown word); a name that is only a set ("Select" before 2010) is null too.
+ */
+export function productMaker(words: string | null | undefined, year: number | null): { brand: string; set: string } | null {
+  const k = productKey(String(words ?? ""));
+  if (!k) return null;
+  for (const def of BRANDS) {
+    const names = hitNames(def, year);
+    if (!names.set || !names.brand) continue;
+    const forms = [def.key, names.set, `${names.brand} ${names.set}`].map(productKey);
+    if (forms.includes(k) && productKey(names.brand) !== k) return { brand: names.brand, set: names.set };
+  }
+  return null;
+}
+
 /**
  * Makers that are one company, or owned one another, in the years cards
  * carry both names (Leaf, Inc. owned Donruss; Pinnacle Brands made Score

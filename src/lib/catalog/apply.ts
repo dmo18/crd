@@ -5,9 +5,30 @@ import { liveItem } from "@/lib/items/live";
 import { buildTitle } from "@/lib/title";
 import { linkSnapshot, serializeCatalog } from "./candidates";
 import { isFilled, parseFieldSources, sourceOf, type FieldSources } from "./sources";
+import { productMaker } from "@/lib/free/parse";
 
-/** The part of a catalog card the filling rule needs. */
-export type CatalogValues = Pick<CatalogCardRow, "id" | CatalogField>;
+/** The part of a catalog card the filling rule needs. `verified: false`: an unverified listing. */
+export type CatalogValues = Pick<CatalogCardRow, "id" | CatalogField> & { verified?: boolean | null };
+
+/** An unverified listing (a seller's entry, not a clean catalog card): its values are never taken over an item's. */
+export function isListing(card: { verified?: boolean | null }): boolean {
+  return card.verified === false;
+}
+
+/**
+ * The catalog's values in the app's own form: a product the catalog gives as
+ * its "brand" ("Prizm", "Stadium Club") or as a variation after the maker
+ * ("Panini" with "Prizm") goes through the maker and product table, so the
+ * maker is the brand and the product the set. A set the catalog names itself
+ * (an insert) stays. Pure.
+ */
+export function catalogInAppForm<T extends Pick<CatalogCardRow, "year" | "brand" | "setName" | "variation">>(card: T): T {
+  const asBrand = productMaker(card.brand, card.year ?? null);
+  if (asBrand) return { ...card, brand: asBrand.brand, setName: card.setName ?? asBrand.set };
+  const asVariation = card.brand && card.variation ? productMaker(`${card.brand} ${card.variation}`, card.year ?? null) : null;
+  if (asVariation) return { ...card, brand: asVariation.brand, variation: null, setName: card.setName ?? asVariation.set };
+  return card;
+}
 /** A field the reader read differently from the catalog. Shown under the pick. */
 export type CatalogDifference = { field: CatalogField; itemValue: string | number; catalogValue: string | number };
 export type ApplyResult = {
@@ -21,8 +42,18 @@ export type ApplyResult = {
   differences: CatalogDifference[];
 };
 
+/** Accents, case, punctuation and the form of a name suffix ignored: "Acuña Jr." and "ACUNA JR" are one value. */
+export function looseKey(s: string): string {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/\bjunior\b/g, "jr").replace(/\bsenior\b/g, "sr")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Letters with accents in a value: the more there are, the more complete the spelling. */
+const marksOf = (v: unknown) => (typeof v === "string" ? (v.normalize("NFD").match(/[\u0300-\u036f]/g) ?? []).length : 0);
+
 const same = (a: unknown, b: unknown) =>
-  typeof a === "string" && typeof b === "string" ? a.trim().toLowerCase() === b.trim().toLowerCase() : a === b;
+  typeof a === "string" && typeof b === "string" ? looseKey(a) === looseKey(b) : a === b;
 
 /**
  * The filling rule, used everywhere a catalog card meets an item:
@@ -39,6 +70,9 @@ const same = (a: unknown, b: unknown) =>
 export function applyCatalogCard(item: Item, card: CatalogValues, opts: { useCatalogValues?: boolean } = {}): ApplyResult {
   const marks: FieldSources = parseFieldSources(item.fieldSources) ?? {};
   const before = JSON.stringify(marks);
+  card = catalogInAppForm(card);
+  // An unverified listing never replaces what the card reads: "Use the catalog's values" is not for it.
+  const replace = opts.useCatalogValues === true && !isListing(card);
   const values: Partial<Record<CatalogField, unknown>> = {};
   const filled: CatalogField[] = [];
   const replaced: CatalogField[] = [];
@@ -51,8 +85,15 @@ export function applyCatalogCard(item: Item, card: CatalogValues, opts: { useCat
       values[f] = theirs;
       marks[f] = "catalog";
       filled.push(f);
+    } else if ((source === "reading" || source === "checklist") && same(item[f], theirs)) {
+      // The same value in another form: the more complete one stays ("Acuña" over "Acuna").
+      if (replace && marksOf(theirs) > marksOf(item[f])) {
+        values[f] = theirs;
+        marks[f] = "catalog";
+        replaced.push(f);
+      }
     } else if ((source === "reading" || source === "checklist") && !same(item[f], theirs)) {
-      if (opts.useCatalogValues) {
+      if (replace) {
         values[f] = theirs;
         marks[f] = "catalog";
         replaced.push(f);

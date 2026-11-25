@@ -5,7 +5,7 @@ import { countAuditSince, recordAudit } from "@/lib/audit/store";
 import { itemLabel } from "@/lib/audit/subjects";
 import { liveItem } from "@/lib/items/live";
 import { CERTAIN_FIELDS, HOLD_WORDS, REVIEW_THRESHOLD, type HoldReason } from "@/lib/recognition/types";
-import { applyCatalogCard, type CatalogDifference } from "./apply";
+import { applyCatalogCard, isListing, type CatalogDifference } from "./apply";
 import { candidateCard, linkSnapshot, parseCatalog, serializeCatalog, type LinkSnapshot, type NotCheckedReason, type StoredCandidate } from "./candidates";
 import { sourceUrl } from "./clean";
 import { cardLine } from "./line";
@@ -33,6 +33,7 @@ export const ALREADY_LINKED = "This item is already linked. Unlink it first.";
 export const NOT_ON_LIST = "That choice is no longer on the list. Look at the list again.";
 export const LOOKUP_WAIT = "Wait a few seconds before looking this card up again.";
 export const LOOKUP_HOURLY = "Too many catalog look ups this hour. Try again later.";
+export const UNVERIFIED_VALUES = "This is an unverified listing, so its details are not used. Change any detail yourself if it is wrong.";
 export const LOOKUP_NEEDS = "Add a player or a card number first, then look it up again.";
 
 export type PickResult =
@@ -300,6 +301,7 @@ export function takeCatalogValues(itemId: number, opts: { confirm?: boolean; now
     if (item.catalogCardId == null) return { ok: false, error: "This item is not linked to a catalog card." } as const;
     const row = tx.select().from(catalogCards).where(eq(catalogCards.id, item.catalogCardId)).get();
     if (!row) return { ok: false, error: "That catalog card no longer exists." } as const;
+    if (isListing(row)) return { ok: false, error: UNVERIFIED_VALUES } as const;
     const { patch, replaced } = applyCatalogCard(item, row, { useCatalogValues: true });
     tx.update(items).set({
       ...patch, ...(opts.confirm ? { status: "confirmed" as const, catalogCandidates: null } : {}), updatedAt: now,
@@ -414,7 +416,7 @@ export function lookUpAgainLine(r: LookupAgainResult): string {
 /** What Review shows for one item: the catalog's part, in plain data for the screen. */
 export type ReviewCatalogView = {
   /** Linked card line and the fields the reader read differently. */
-  linked: { line: string; url: string | null; differences: { label: string; read: string; catalog: string }[] } | null;
+  linked: { line: string; url: string | null; verified: boolean; differences: { label: string; read: string; catalog: string }[] } | null;
   status: "candidates" | "none" | "not_checked" | null;
   reason: NotCheckedReason | null;
   /** `differs`: how it differs from what the card reads, in plain words. */
@@ -438,9 +440,10 @@ export function reviewCatalogView(item: Item, db: Db = getDb(), now: Date = new 
     const row = db.select().from(catalogCards).where(eq(catalogCards.id, item.catalogCardId)).get();
     if (row) {
       const src = db.select({ url: catalogSources.url }).from(catalogSources).where(eq(catalogSources.catalogCardId, row.id)).get();
-      const { differences } = applyCatalogCard(item, row);
+      // An unverified listing is not checked: its details are not offered against the card's.
+      const { differences } = isListing(row) ? { differences: [] } : applyCatalogCard(item, row);
       linked = {
-        line: cardLine(row), url: sourceUrl(src?.url),
+        line: cardLine(row), url: sourceUrl(src?.url), verified: !isListing(row),
         differences: differences.map((d) => ({ label: FIELD_WORDS[d.field], read: d.itemValue == null ? "" : String(d.itemValue), catalog: d.catalogValue == null ? "" : String(d.catalogValue) })),
       };
     }
