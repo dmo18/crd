@@ -780,3 +780,67 @@ describe("Haslett 1985 Topps football: the stat table's last row misread (review
     expect(p.year).toBe(1985);
   });
 });
+
+describe("owner scan 8 rules", () => {
+  it("the maker's copyright line wins over a licensor's, with the maker's I read as a small l (lmpel)", () => {
+    const back = ocr([
+      ["WILLIAM MERVIN MILLS", 0.05, 0.05, 0.9, 0.08],
+      ["During the 1964 Tokyo Olympic Games he became the first American to win", 0.4],
+      ["©1988 USOC", 0.9, 0.05, 0.2, 0.02],
+      ["Al Raghts Reserved", 0.92, 0.05, 0.2, 0.02],
+      ["1991 lmpel Marketing inc 36 USC 380", 0.94, 0.05, 0.5, 0.02],
+    ]);
+    const p = parseCardText(null, back);
+    expect(p.year).toBe(1991);
+    expect(p.brand).toBe("Impel");
+  });
+
+  it("a slightly turned stat table: the last season alone with its club under the rows still counts", () => {
+    // The 1991 row's numbers sit lower than its first cell, so the reader keeps "1991 Orioles" apart.
+    const cell = (t: string, y: number, x: number, w = 0.04): Row => [t, y, x, w, 0.035, 0.95];
+    const back = ocr([
+      ["ROBERT MILACKI", 0.1, 0.09, 0.2, 0.05],
+      ["RECENT MAJOR LEAGUE PERFORMANCE", 0.64, 0.15, 0.4, 0.04],
+      cell("Year", 0.74, 0.096), cell("Team", 0.742, 0.138),
+      cell("1988", 0.767, 0.098), cell("Orioles", 0.763, 0.136, 0.05), cell("0.72", 0.756, 0.203), cell("3 25", 0.745, 0.25, 0.055),
+      cell("1989", 0.799, 0.102), cell("Orioles", 0.792, 0.139, 0.05), cell("3.74", 0.786, 0.207), cell("37 243", 0.775, 0.248, 0.06),
+      cell("1990", 0.830, 0.106), cell("Orioles", 0.825, 0.142, 0.05), cell("4.46", 0.818, 0.211), cell("27 135.1", 0.806, 0.251, 0.076),
+      ["1991 Orioles", 0.855, 0.108, 0.089, 0.044, 0.95], cell("4.01", 0.835, 0.214), cell("31 184", 0.825, 0.254, 0.062),
+    ]);
+    expect(parseCardText(null, back).year).toBe(1992);
+    // Another club name under the table is no row of it.
+    const other = ocr(back.lines.map((l): Row => [l.text === "1991 Orioles" ? "1991 Rookie" : l.text, l.box.y, l.box.x, l.box.w, l.box.h, l.confidence]));
+    expect(parseCardText(null, other).year).toBe(1991);
+  });
+
+  it("a back cut from a photo of several cards: its corner number counts within the card's print", () => {
+    // Desk around the card: the print spans x 0.08 to 0.91 of the picture.
+    const back = ocr([
+      ["101", 0.034, 0.653, 0.084, 0.08, 0.99],
+      ["ROBERT", 0.116, 0.089, 0.18, 0.1],
+      ["MILACKI", 0.2, 0.089, 0.18, 0.1],
+      ["Contract Status: 1 yr. thru", 0.15, 0.651, 0.26, 0.05],
+      ["Born: July 28, 1964", 0.3, 0.1, 0.2, 0.04],
+      ["Orioles top winner in '91", 0.4, 0.651, 0.26, 0.05],
+      ["Career 3.86 98 587.1 560", 0.89, 0.08, 0.4, 0.04],
+      ["out of Yavapai (AZ) Coll.", 0.88, 0.67, 0.24, 0.05],
+    ]);
+    expect(parseCardText(null, back).cardNumber).toBe("101");
+  });
+
+  it("only the end of the front's name read (DAWAY): the back's large name ending so, unsure", () => {
+    const front = ocr([["WARHOR", 0.5, 0.4, 0.2, 0.04], ["10", 0.55, 0.45, 0.05, 0.04], ["DAWAY", 0.1, 0.3, 0.2, 0.04]]);
+    const back = ocr([
+      ["65", 0.05, 0.9, 0.05, 0.03],
+      // Large, but in the middle of the back (over the stat table), not its heading.
+      ["TIM HARDAWAY", 0.5, 0.1, 0.4, 0.06],
+      ["Year Club G FG% FT% REB AST", 0.6, 0.1, 0.8, 0.03],
+      ["© 1993 FLEER CORP.", 0.92, 0.1, 0.4, 0.03],
+    ]);
+    const p = parseCardText(front, back);
+    expect(p.player).toBe("Tim Hardaway");
+    expect(p.certainty.player).toBe("unsure");
+    // A word that ends no name on the back gives none.
+    expect(parseCardText(ocr([["WARRIORS", 0.1, 0.3, 0.2, 0.04]]), back).player).toBeNull();
+  });
+});

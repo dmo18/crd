@@ -401,7 +401,34 @@ function yearFromTable(lines: Line[]): YearFind | null {
   if (!twoYear && misreadRowBelow(lines, lines[lastRow.i], rows)) {
     return { year: last + 2, how: "stats", score: 2, lastSeason: last + 1, twoYear };
   }
+  // The next season right under the last row, with the club of the rows
+  // above and its numbers not joined to it ("1991 Orioles" alone: the table
+  // lies a little turned, so the row's cells sit at other heights).
+  if (!twoYear && clubRowBelow(lines, rows, last)) {
+    return { year: last + 2, how: "stats", score: 2, lastSeason: last + 1, twoYear };
+  }
   return { year: last + 1, how: "stats", score: 2, lastSeason: last, twoYear };
+}
+
+/**
+ * A line just below the table's last row, in its column, that is the next
+ * season and a club word the rows above use ("1991 Orioles" under "1990
+ * Orioles 4.46 ..."), with nothing else on it but numbers.
+ */
+function clubRowBelow(lines: Line[], rows: { y: number; i: number }[], last: number): boolean {
+  const gaps = rows.slice(1).map((r, k) => r.y - rows[k].y).filter((g) => g > 0);
+  const usual = middle(gaps);
+  if (!(usual > 0)) return false;
+  const lastLine = lines[rows[rows.length - 1].i];
+  const clubs = new Set(rows.flatMap((r) => lines[r.i].tokens.slice(1).filter((t) => /^[A-Za-z]{3,}$/.test(t)).map((t) => t.toUpperCase())));
+  return lines.some((l) => {
+    if (l === lastLine || l.tokens.length < 2 || rowSeason(l.tokens[0]) !== last + 1 || !/^\d{4}$/.test(l.tokens[0])) return false;
+    const dy = l.box.y - lastLine.box.y;
+    if (dy < 0.5 * usual || dy > 1.5 * usual) return false;
+    if (Math.abs(l.box.x - lastLine.box.x) > Math.max(lastLine.box.h, l.box.h)) return false;
+    const rest = l.tokens.slice(1);
+    return clubs.has(rest[0].toUpperCase()) && rest.slice(1).every((t) => /^[\d.]+$/.test(t));
+  });
 }
 
 /**
@@ -779,7 +806,7 @@ const BRANDS: BrandDef[] = [
   { key: "parkhurst", brand: "Parkhurst", re: /\bPARKHURST\b/g, sport: "hockey", sportWeight: 2 },
   { key: "itg", brand: "In The Game", re: /\bIN\s*THE\s*GAME\b/g, copyrightOnly: true, sport: "hockey", sportWeight: 1 },
   // Impel Marketing made the U.S. Olympic and early SkyBox era sets.
-  { key: "impel", brand: "Impel", re: /\bIMPEL\b/g },
+  { key: "impel", brand: "Impel", re: /\b[IL]MPEL\b/g },
   { key: "playoff", brand: "Playoff", re: /\bPLAYOFF\s*(?:CORP|INC)\b/g, copyrightOnly: true },
   { key: "wildcard", brand: "Wild Card", re: /\bWILD\s*CARD\b/g, copyrightOnly: true },
   { key: "presspass", brand: "Press Pass", re: /\bPRESS\s*PASS\b/g },
@@ -1155,6 +1182,27 @@ const CORNER_Y = 0.18;
 
 type CornerNumber = { number: string; top: boolean };
 
+/** Printed text this far from the picture's edges (on a side) means the picture shows more than the card. */
+const TEXT_SPAN = 0.9;
+
+/**
+ * A line's box on the card rather than on the picture: when the side's text
+ * spans clearly less than the picture (a card cut from a photo of several,
+ * with desk or blank around it, owner scan 8), boxes are measured within
+ * the text's extent, which is where the card's print is.
+ */
+function onCard(b: LineBox, side: Line[]): LineBox {
+  if (side.length < 4) return b;
+  const x0 = Math.min(...side.map((o) => o.box.x));
+  const y0 = Math.min(...side.map((o) => o.box.y));
+  const x1 = Math.max(...side.map((o) => o.box.x + o.box.w));
+  const y1 = Math.max(...side.map((o) => o.box.y + o.box.h));
+  const w = x1 - x0;
+  const h = y1 - y0;
+  if (!(w > 0 && h > 0) || (w >= TEXT_SPAN && h >= TEXT_SPAN)) return b;
+  return { x: (b.x - x0) / w, y: (b.y - y0) / h, w: b.w / w, h: b.h / h };
+}
+
 /**
  * A short number standing alone in a corner of the back ("65", "101", "98T").
  * Not a stat (another number on the same row beside it), not a decimal, not
@@ -1164,7 +1212,7 @@ function numberFromCorner(l: Line, side: Line[]): CornerNumber | null {
   const t = l.tokens;
   const traded = t.length === 2 && /^[Tt]$/.test(t[1]);
   if (t.length !== 1 && !traded) return null;
-  const b = l.box;
+  const b = onCard(l.box, side);
   const top = b.y < CORNER_Y;
   const bottom = b.y + b.h > 1 - CORNER_Y;
   const corner = b.x < CORNER_X || b.x + b.w > 1 - CORNER_X;
@@ -2150,6 +2198,8 @@ const SPORT_NAME_NICKS = /\bAthletics$/;
 const HEADING_LARGE = 1.25;
 /** A front name read without its space keeps at most this many letters of its first name (misread ones). */
 const BANNER_PREFIX = 3;
+/** The end of a front name read alone ("DAWAY" of HARDAWAY) has at least this many letters. */
+const NAME_TAIL = 5;
 
 function middle(values: number[]): number {
   if (values.length === 0) return 0;
@@ -2301,6 +2351,7 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
   let hint: string | null = null;
   const frontReads: NameRead[] = [];
   const glued: Line[] = [];
+  const tails: Line[] = [];
   for (const l of front) {
     // A name is never taken from a sentence; its first word may be a first name hint.
     if (isSentence(l)) {
@@ -2315,6 +2366,7 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
     frontReads.push(...nameRuns(l));
     const only = l.tokens.length === 1 ? l.tokens[0].replace(/[^A-Za-z]/g, "") : "";
     if (only.length >= 7 && only === only.toUpperCase() && !STOP_WORDS.has(only)) glued.push(l);
+    if (only.length >= NAME_TAIL && only === only.toUpperCase() && !STOP_WORDS.has(only)) tails.push(l);
   }
   for (const l of back) if (isSentence(l)) hint = hint ?? firstNameOf(l);
   const { names: heads, header } = backHeadings(back);
@@ -2388,6 +2440,33 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
         fromBanner = true;
         nameLines.add(g);
         nameLines.add(hit.line);
+        break;
+      }
+    }
+  }
+  // "DAWAY": only the end of the front's name was read (the rest lost in
+  // glare, owner scan 8), alone on its line, 5 letters or more. The back's
+  // name in large type whose surname ends with it, and only one such name,
+  // gives the whole name, unsure (two places agree on part of the surname).
+  if (!chosen && tails.length > 0) {
+    const usual = middle(back.filter((l) => l.raw.replace(/[^A-Za-z0-9]/g, "").length >= 3).map((l) => l.box.h));
+    const banners = back
+      .filter((l) => usual > 0 && l.box.h >= HEADING_LARGE * usual && !isSentence(l) && !labelLine(l))
+      .flatMap((l) => nameRuns(l))
+      .filter((n) => n.words.length >= 2);
+    for (const g of tails) {
+      const word = g.tokens[0].replace(/[^A-Za-z]/g, "").toUpperCase();
+      const hits = banners.filter((b) => {
+        const sur = b.words[b.words.length - 1].toUpperCase().replace(/[^A-Z]/g, "");
+        return sur.length > word.length && sur.endsWith(word);
+      });
+      if (hits.length === 1) {
+        chosen = hits[0];
+        agree = true;
+        suffix = hits[0].suffix;
+        fromBanner = true;
+        nameLines.add(g);
+        nameLines.add(hits[0].line);
         break;
       }
     }
