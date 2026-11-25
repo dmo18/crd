@@ -447,8 +447,13 @@ export type ImportResult = {
   updatedItems: { id: number; title: string }[];
 };
 
-/** For tests: lets a test fail on purpose while rows are being saved. */
+/** For tests only: lets a test fail on purpose while rows are being saved. Not part of applyImport's signature. */
 export type ImportHooks = { beforeSave?: (index: number) => void };
+const testHooks = globalThis as unknown as { __crdImportHooks?: ImportHooks };
+/** For tests only: sets (or with nothing, clears) the hooks the next imports run. */
+export function setImportHooksForTests(hooks?: ImportHooks): void {
+  testHooks.__crdImportHooks = hooks;
+}
 
 /**
  * Step 4: saves every row in one immediate transaction. Any error rolls
@@ -459,8 +464,9 @@ export type ImportHooks = { beforeSave?: (index: number) => void };
 export function applyImport(
   text: string, rawMapping: unknown, opts: ImportOptions,
   confirm: { skipProblems: boolean; expected?: ImportCounts },
-  db: Db = getDb(), now: Date = new Date(), hooks: ImportHooks = {},
+  db: Db = getDb(), now: Date = new Date(),
 ): ImportResult | Fail {
+  const hooks = testHooks.__crdImportHooks ?? {};
   const file = readFile(text, rawMapping);
   if ("error" in file) return file;
   // Items the import saved: they get a guide price once the save is done (never an owner value, never `updatedAt`).
@@ -479,9 +485,11 @@ export function applyImport(
 
     // New locations first (names checked above), found again by name, any capitals.
     const locationIds = new Map(tx.select({ id: locations.id, name: locations.name }).from(locations).all().map((l) => [l.name.toLowerCase(), l.id]));
+    const madeLocations: { id: number; name: string }[] = [];
     for (const name of p.newLocations) {
       const made = tx.insert(locations).values({ name, createdAt: now }).returning({ id: locations.id }).get();
       locationIds.set(name.toLowerCase(), made.id);
+      madeLocations.push({ id: made.id, name });
     }
     const locId = (name: string | null) => (name == null ? null : locationIds.get(name.toLowerCase()) ?? null);
 
@@ -532,7 +540,8 @@ export function applyImport(
     const op = tx.insert(bulkOps).values({
       // bulk_ops has no "import" action; "set" with `kind: "import"` in the undo data marks it (no schema change).
       at: now, action: "set", summary, itemCount: created.length + undoItems.length,
-      undo: JSON.stringify({ v: 1, kind: "import", items: undoItems, created }),
+      // `locations`: the places the import made; undo removes those it leaves empty and unchanged.
+      undo: JSON.stringify({ v: 1, kind: "import", items: undoItems, created, locations: madeLocations }),
     }).returning({ id: bulkOps.id }).get();
     pruneOps(tx, now);
     return {

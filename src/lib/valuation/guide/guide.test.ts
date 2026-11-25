@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { KEY_CARDS } from "@/lib/free/key-cards";
 import { normalizeBrand, normalizeCardNumber } from "@/lib/catalog/normalize";
-import { GUIDE_MISSING, guidePrice, numericGrade, playerTier, printRun, type GuideFields } from "./index";
+import { GUIDE_CEILING_CENTS, GUIDE_MISSING, guidePrice, numericGrade, playerTier, printRun, TOO_RARE, type GuideFields } from "./index";
 import { findPricedCard, PRICED_CARDS } from "./key-prices";
 import { factsFitYear } from "./apply";
 import { listedNames, listedTier } from "./players";
@@ -105,6 +105,27 @@ describe("guide tables", () => {
     expect(listedTier("josé canseco", null)).toBe("star");
     expect(listedTier("Bo Jackson", null)).toBeNull(); // listed in two sports
     expect(listedTier("Wayne Gretzky", "baseball")).toBeNull();
+  });
+});
+
+describe("the guide's ceiling (review fix 9)", () => {
+  it("a graded one of one autograph of a great stops at 25,000 dollars and says to check real sales", () => {
+    const r = guidePrice(card({
+      year: 2018, brand: "Topps", cardNumber: "US1", player: "Mike Trout", sport: "baseball", isAutograph: true, isMemorabilia: true,
+      serialNumber: "1/1", serialEdition: "1", grader: "PSA", grade: "10",
+    }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.highCents).toBe(GUIDE_CEILING_CENTS);
+    expect(r.lowCents).toBeLessThanOrEqual(GUIDE_CEILING_CENTS);
+    expect(r.valueCents).toBeLessThanOrEqual(GUIDE_CEILING_CENTS);
+    expect(r.reason.startsWith(TOO_RARE)).toBe(true);
+    expect(r.trust).toBe("Very rough");
+  });
+
+  it("a card under the ceiling has no such line", () => {
+    const r = guidePrice(card({ year: 1990, brand: "Donruss", player: "Joe Nobody", cardNumber: "512" }));
+    expect(r.ok && r.reason).not.toContain(TOO_RARE);
   });
 });
 

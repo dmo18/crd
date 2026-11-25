@@ -7,7 +7,7 @@ import { latestUndoable, undoBulk } from "@/lib/items/bulk";
 import { purgeItems } from "@/lib/items/bin";
 import { parseCsv } from "./csv";
 import { guessMapping, SKIP, type ColumnChoice } from "./fields";
-import { applyImport, checkMapping, duplicateKey, previewImport, type ImportOptions } from "./plan";
+import { applyImport, setImportHooksForTests, checkMapping, duplicateKey, previewImport, type ImportOptions } from "./plan";
 
 let db: Db;
 const T0 = new Date("2026-11-01T12:00:00Z");
@@ -189,9 +189,12 @@ describe("all or nothing", () => {
   it("a failure on the last row saves nothing at all", () => {
     const id = add({ player: "Old" });
     const text = `ID,Player,Location\n,New One,Box 9\n,New Two,\n${id},Changed,\n`;
-    expect(() => applyImport(text, guess(text), OPTS, { skipProblems: false }, db, NOW, {
-      beforeSave: (i) => { if (i === 2) throw new Error("forced"); },
-    })).toThrow("forced");
+    setImportHooksForTests({ beforeSave: (i) => { if (i === 2) throw new Error("forced"); } });
+    try {
+      expect(() => applyImport(text, guess(text), OPTS, { skipProblems: false }, db, NOW)).toThrow("forced");
+    } finally {
+      setImportHooksForTests();
+    }
     expect(all()).toHaveLength(1);
     expect(get(id).player).toBe("Old");
     expect(db.select().from(locations).all()).toHaveLength(0);
@@ -259,6 +262,31 @@ describe("undo", () => {
     db.update(items).set({ notes: "mine", updatedAt: new Date(NOW.getTime() + 1000) }).where(eq(items.id, made.id)).run();
     expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 0, skipped: 1 });
     expect(get(made.id).deletedAt).toBeNull();
+  });
+
+  it("removes the places the import made when undo leaves them empty and unchanged (review fix 9)", () => {
+    const r = ok(run("Player,Box\nA,Box 9\nB,Box 10\nC,Box 11\n"));
+    const place = (name: string) => db.select().from(locations).all().find((l) => l.name === name);
+    // Box 10: the owner renamed nothing but wrote a note on it. Box 11: another item was moved in since.
+    db.update(locations).set({ notes: "shelf" }).where(eq(locations.name, "Box 10")).run();
+    const other = add({ player: "Mine", locationId: place("Box 11")!.id });
+    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 3, skipped: 0 });
+    expect(place("Box 9")).toBeUndefined();
+    expect(place("Box 10")).toBeDefined();
+    expect(place("Box 11")).toBeDefined();
+    expect(get(other).locationId).toBe(place("Box 11")!.id);
+    // The item in the bin from Box 9 no longer points at a place that is gone.
+    const a = all().find((i) => i.player === "A")!;
+    expect(a).toMatchObject({ locationId: null, deletedAt: LATER });
+  });
+
+  it("keeps a place the import made when an item it added stays (edited since)", () => {
+    const r = ok(run("Player,Box\nA,Box 9\n"));
+    const made = all()[0];
+    db.update(items).set({ notes: "mine", updatedAt: new Date(NOW.getTime() + 1000) }).where(eq(items.id, made.id)).run();
+    ok(undoBulk(r.opId, db, LATER));
+    expect(db.select().from(locations).all().map((l) => l.name)).toEqual(["Box 9"]);
+    expect(get(made.id).locationId).not.toBeNull();
   });
 
   it("forgets added items purged from the bin", async () => {

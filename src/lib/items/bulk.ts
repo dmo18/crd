@@ -3,7 +3,7 @@ import { and, desc, eq, inArray, isNotNull, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import {
-  bulkOps, ITEM_KINDS, ITEM_STATUSES, items, locations, RARITY_TIERS, SPORTS, valuations,
+  bulkOps, ITEM_KINDS, ITEM_STATUSES, items, locations, RARITY_TIERS, scans, SPORTS, valuations,
   type BulkOpAction, type Item, type ItemStatus,
 } from "@/db/schema";
 import { formatCents } from "@/lib/money";
@@ -398,6 +398,8 @@ const undoSchema = z.object({
   items: z.array(z.tuple([z.number().int().positive(), z.record(z.string(), z.unknown())])),
   /** Items an import added: undo moves them to Recently deleted. */
   created: z.array(z.number().int().positive()).optional(),
+  /** Places an import made: undo removes those it leaves empty and unchanged. */
+  locations: z.array(z.object({ id: z.number().int().positive(), name: z.string() })).optional(),
 });
 const TIME_COLUMNS = new Set(["updatedAt", "deletedAt"]);
 const toJson = (old: Columns) =>
@@ -522,11 +524,26 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
       ids.push(id);
     }
     // Items an import added go to Recently deleted, unless deleted or edited since.
+    const binned = new Set<number>();
     for (const id of created) {
       const row = rows.get(id);
       if (!row || row.deletedAt != null || row.updatedAt.getTime() > at) { skipped += 1; continue; }
       tx.update(items).set({ deletedAt: now }).where(and(eq(items.id, id), liveItem)).run();
+      binned.add(id);
       restored += 1;
+    }
+    // Places the import made go too, when nothing else uses them and the owner did not change them.
+    for (const place of parsed.locations ?? []) {
+      const loc = tx.select().from(locations).where(eq(locations.id, place.id)).get();
+      if (!loc || loc.name !== place.name || loc.kind != null || loc.notes != null) continue;
+      // Reads deleted rows on purpose: an item in the bin still belongs to its place.
+      const users = tx.select({ id: items.id }).from(items).where(eq(items.locationId, place.id)).all();
+      if (users.some((u) => !binned.has(u.id))) continue;
+      if (tx.select({ id: scans.id }).from(scans).where(eq(scans.locationId, place.id)).get()) continue;
+      for (let i = 0; i < users.length; i += CHUNK) {
+        tx.update(items).set({ locationId: null }).where(inArray(items.id, users.slice(i, i + CHUNK).map((u) => u.id))).run();
+      }
+      tx.delete(locations).where(eq(locations.id, place.id)).run();
     }
     tx.update(bulkOps).set({ undoneAt: now }).where(eq(bulkOps.id, op.id)).run();
     return { restored, skipped, summary: op.summary, ids };

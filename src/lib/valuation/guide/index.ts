@@ -90,7 +90,20 @@ export function numericGrade(grade: string | null | undefined): number | null {
   return n >= 1 && n <= 10 ? n : null;
 }
 
+/**
+ * The highest guide figure: 25,000 dollars. Above it the tables only
+ * multiply guesses (a graded one of one of a great reached millions), so the
+ * range stops here and says to check real sales.
+ */
+export const GUIDE_CEILING_CENTS = 2_500_000;
+export const TOO_RARE = "Too rare for a guide price. Check real sales.";
+
 function finish(range: Range, tier: Exclude<GuidePrice, { ok: false }>["tier"], trust: GuideTrust, reason: string): GuidePrice {
+  if (range[1] > GUIDE_CEILING_CENTS) {
+    range = [Math.min(range[0], GUIDE_CEILING_CENTS), GUIDE_CEILING_CENTS];
+    trust = "Very rough";
+    reason = `${TOO_RARE} ${reason}`;
+  }
   const low = Math.max(1, Math.round(range[0]));
   const high = Math.max(low, Math.round(range[1]));
   const valueCents = Math.min(high, Math.max(low, Math.round(Math.sqrt(low * high))));
