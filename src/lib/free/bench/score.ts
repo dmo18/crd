@@ -166,3 +166,33 @@ export function checkBar(all: Summary, sure: Summary, filed: Filed): BarResult {
   }
   return { pass: reasons.length === 0, reasons };
 }
+
+/**
+ * Many-cards scans: which item the reader made stands for which expected
+ * card. Each expected card, in order of the best fit first, takes the unused
+ * item with the most right filled fields (at least one, the player or the
+ * number among them); a card with no such item is missing. Returns, per
+ * expected card, the index of its item or null.
+ */
+export function matchItems(answers: Answer[], reads: ReadValues[]): (number | null)[] {
+  const fit = (a: Answer, r: ReadValues) => {
+    const marks = markCard(r, a);
+    const key = marks.player === "right" && r.player != null ? 1 : marks.cardNumber === "right" && r.cardNumber != null ? 1 : 0;
+    const right = FIELDS.filter((f) => marks[f] === "right" && r[f] != null && r[f] !== "").length;
+    return key > 0 ? right : 0;
+  };
+  const pairs: { a: number; r: number; s: number }[] = [];
+  answers.forEach((a, ai) => reads.forEach((r, ri) => {
+    const s = fit(a, r);
+    if (s > 0) pairs.push({ a: ai, r: ri, s });
+  }));
+  pairs.sort((x, y) => y.s - x.s || x.a - y.a || x.r - y.r);
+  const out: (number | null)[] = answers.map(() => null);
+  const used = new Set<number>();
+  for (const p of pairs) {
+    if (out[p.a] !== null || used.has(p.r)) continue;
+    out[p.a] = p.r;
+    used.add(p.r);
+  }
+  return out;
+}

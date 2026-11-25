@@ -17,7 +17,7 @@ import { FreeRecognizer } from "../src/lib/free/recognizer";
 import { closeTextReader, getTextReader, type OcrResult, type TextReader } from "../src/lib/free/ocr";
 import { parseBenchArgs, showsCards, wanted } from "../src/lib/free/bench/args";
 import {
-  FIELDS, checkBar, countFiled, markCard, summarize, sureMarks,
+  FIELDS, checkBar, countFiled, markCard, matchItems, summarize, sureMarks,
   type Answer, type CardMarks, type Field, type ReadCertainty, type ReadValues, type Summary,
 } from "../src/lib/free/bench/score";
 import { REVIEW_THRESHOLD, type RecognitionPhoto, type Recognizer } from "../src/lib/recognition/types";
@@ -29,7 +29,19 @@ globalThis.fetch = (async (input: unknown) => {
 }) as typeof fetch;
 
 const answerValue = z.union([z.string(), z.number(), z.null()]);
+const expectedCard = z.object({
+  answer: z.object(Object.fromEntries(FIELDS.map((f) => [f, answerValue])) as Record<Field, typeof answerValue>),
+  mayBeBlank: z.array(z.enum(FIELDS)).default([]),
+});
 const answersSchema = z.object({
+  // Many-cards scans (owner scan 8): photos in the order sent, the cards they hold.
+  scans: z.array(z.object({
+    id: z.string().min(1),
+    mode: z.literal("multi"),
+    photos: z.array(z.string()).min(1).max(12),
+    cards: z.array(expectedCard).min(1),
+    split: z.enum(["tune", "holdout"]).optional(),
+  })).default([]),
   cards: z.array(z.object({
     id: z.string().min(1),
     front: z.string(),
@@ -44,13 +56,17 @@ type BenchCard = {
   id: string; split: string; dir: string; front: string; back?: string;
   answer: Answer; mayBeBlank: Field[];
 };
+type BenchScan = { id: string; split: string; dir: string; photos: string[]; answers: Answer[] };
 
-async function loadDir(dir: string): Promise<BenchCard[]> {
+async function loadDir(dir: string): Promise<{ cards: BenchCard[]; scans: BenchScan[] }> {
   const parsed = answersSchema.parse(JSON.parse(await readFile(path.join(dir, "answers.json"), "utf8")));
-  return parsed.cards.map((c) => ({
-    id: c.id, split: c.split ?? "all", dir, front: c.front, back: c.back,
-    answer: c.answer as Answer, mayBeBlank: c.mayBeBlank,
-  }));
+  return {
+    cards: parsed.cards.map((c) => ({
+      id: c.id, split: c.split ?? "all", dir, front: c.front, back: c.back,
+      answer: c.answer as Answer, mayBeBlank: c.mayBeBlank,
+    })),
+    scans: parsed.scans.map((s) => ({ id: s.id, split: s.split ?? "all", dir, photos: s.photos, answers: s.cards.map((c) => c.answer as Answer) })),
+  };
 }
 
 async function toPhoto(file: string, role: "front" | "back"): Promise<RecognitionPhoto> {
@@ -74,6 +90,8 @@ type CardResult = {
   id: string; split: string; read: ReadValues; marks: CardMarks;
   certainty: ReadCertainty; confidence: number; filed: boolean;
 };
+/** A many-cards scan: items made against cards expected, and items made that stand for no card. */
+type ScanResult = { id: string; split: string; made: number; expected: number; missing: number; extra: number; extraFiled: number; seconds: number };
 
 function table(title: string, summary: Summary): string[] {
   const lines = ["", title, "field      fill  wrong  r/x/-"];
@@ -84,10 +102,13 @@ function table(title: string, summary: Summary): string[] {
   return lines;
 }
 
-function section(name: string, results: CardResult[]) {
+function section(name: string, results: CardResult[], scans: ScanResult[] = []) {
   const summary = summarize(results.map((r) => r.marks));
   const sure = summarize(results.map((r) => sureMarks(r.marks, r.certainty)));
-  const filed = countFiled(results);
+  const counted = countFiled(results);
+  // An item that stands for no card and was filed on its own is a wrongly filed card too.
+  const extraFiled = scans.reduce((n, s) => n + s.extraFiled, 0);
+  const filed = { ...counted, filed: counted.filed + extraFiled, filedWrong: counted.filedWrong + extraFiled };
   const bar = checkBar(summary, sure, filed);
   const lines: string[] = [`== ${name} (${results.length} cards)`];
   // Held back cards are the honest exam: only their totals are printed.
@@ -105,6 +126,9 @@ function section(name: string, results: CardResult[]) {
   const fullySure = results.filter((r) => (["player", "year", "brand", "cardNumber"] as const).every((f) => r.read[f] != null && r.certainty[f] === "sure")).length;
   lines.push("", `filed automatically: ${filed.filed} of ${filed.cards} cards, ${filed.filedWrong} of them with a wrong field`);
   lines.push(`player, year, brand and number all sure: ${fullySure} of ${results.length} cards`);
+  for (const sc of scans) {
+    lines.push(`many-cards scan ${showsCards(name) ? sc.id : "(held back)"}: ${sc.made} items made for ${sc.expected} cards, ${sc.missing} cards missing, ${sc.extra} items extra, ${sc.seconds.toFixed(1)} s`);
+  }
   lines.push(`BAR: ${bar.pass ? "PASS" : "FAIL"}`);
   for (const why of bar.reasons) lines.push(`  ${why}`);
   return { text: lines.join("\n"), summary, sure, filed, bar, fullySure };
@@ -125,7 +149,9 @@ async function main() {
 
   const dirs = [path.resolve("tests/fixtures/real-cards")];
   if (process.env.READING_BENCH_DIR) dirs.push(path.resolve(process.env.READING_BENCH_DIR));
-  const cards = (await Promise.all(dirs.map(loadDir))).flat().filter((c) => wanted(args, c));
+  const loaded = await Promise.all(dirs.map(loadDir));
+  const cards = loaded.flatMap((l) => l.cards).filter((c) => wanted(args, c));
+  const scans = loaded.flatMap((l) => l.scans).filter((s) => wanted(args, s));
   if (args.showText && cards.some((c) => !showsCards(c.split))) throw new Error("--show-text is not allowed on held back cards");
 
   // No catalog, and the player lookup is a stub: nothing leaves this machine.
@@ -175,10 +201,43 @@ async function main() {
       certainty: item?.evidence?.certainty ?? {}, confidence, filed: confidence >= REVIEW_THRESHOLD,
     });
   }
+  const scanResults: ScanResult[] = [];
+  for (const sc of scans) {
+    reads.length = 0;
+    cacheable = showsCards(sc.split);
+    const started = Date.now();
+    // As the scan queue sends them: the stored photos, unchanged.
+    const photos: RecognitionPhoto[] = [];
+    for (const f of sc.photos) {
+      const data = await readFile(path.join(sc.dir, f));
+      const meta = await sharp(data).metadata();
+      photos.push({ role: "source", data, width: meta.width ?? 0, height: meta.height ?? 0 });
+    }
+    const items = (await recognizer.recognize({ mode: "multi", photos })).filter((i) => i.kind === "card");
+    const seconds = (Date.now() - started) / 1000;
+    const values = items.map(readValues);
+    const match = matchItems(sc.answers, values);
+    sc.answers.forEach((answer, k) => {
+      const at = match[k];
+      const item = at == null ? undefined : items[at];
+      const read = at == null ? {} : values[at];
+      const confidence = item?.confidence ?? 0;
+      results.push({
+        id: `${sc.id}/${k + 1}`, split: sc.split, read, marks: markCard(read, answer),
+        certainty: item?.evidence?.certainty ?? {}, confidence, filed: confidence >= REVIEW_THRESHOLD,
+      });
+    });
+    const extras = items.filter((_, i) => !match.includes(i));
+    scanResults.push({
+      id: sc.id, split: sc.split, made: items.length, expected: sc.answers.length,
+      missing: match.filter((m) => m == null).length, extra: extras.length,
+      extraFiled: extras.filter((i) => i.confidence >= REVIEW_THRESHOLD).length, seconds,
+    });
+  }
   await closeTextReader();
 
-  const names = [...new Set(results.map((r) => r.split))];
-  const parts = names.map((n) => ({ name: n, ...section(n, results.filter((r) => r.split === n)) }));
+  const names = [...new Set([...results.map((r) => r.split), ...scanResults.map((s) => s.split)])];
+  const parts = names.map((n) => ({ name: n, ...section(n, results.filter((r) => r.split === n), scanResults.filter((s) => s.split === n)) }));
   console.log(parts.map((p) => p.text).join("\n\n"));
   console.log(`\nnetwork calls: ${networkCalls}`);
 
@@ -186,6 +245,7 @@ async function main() {
     const json = {
       networkCalls,
       cards: results.filter((r) => showsCards(r.split)),
+      scans: scanResults.filter((r) => showsCards(r.split)),
       splits: parts.map((p) => ({ name: p.name, summary: p.summary, sure: p.sure, filed: p.filed, bar: p.bar, fullySure: p.fullySure })),
     };
     await writeFile(outPath, JSON.stringify(json, null, 2) + "\n");

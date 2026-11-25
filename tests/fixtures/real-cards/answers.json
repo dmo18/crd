@@ -1,17 +1,199 @@
 {
-  "note": "The owner's real phone photos (1200 px archive copies). Answers checked by eye on 2026-11-16. A field listed in mayBeBlank may be empty but must never be wrong.",
+  "note": "The owner's real phone photos (1200 px archive copies). Answers checked by eye on 2026-11-16. A field listed in mayBeBlank may be empty but must never be wrong. The live entries are the owner's scans of 2026-11-25 exactly as the reader received them (photos as stored by the scan queue); live9 has the front in both photos.",
   "cards": [
-    { "id": "griffey", "front": "griffey-front.avif", "back": "griffey-back.avif",
-      "answer": { "sport": "baseball", "year": 1990, "brand": "Topps", "setName": "Topps", "cardNumber": "336", "player": "Ken Griffey Jr.", "team": "Seattle Mariners" },
-      "mayBeBlank": ["setName"] },
-    { "id": "hardaway", "front": "hardaway-front.avif", "back": "hardaway-back.avif",
-      "answer": { "sport": "basketball", "year": 1993, "brand": "Fleer", "setName": "Ultra", "cardNumber": "65", "player": "Tim Hardaway", "team": "Golden State Warriors" },
-      "mayBeBlank": ["setName"] },
-    { "id": "milacki", "front": "milacki-front.avif", "back": "milacki-back.avif",
-      "answer": { "sport": "baseball", "year": 1992, "brand": "Donruss", "setName": "Donruss", "cardNumber": "101", "player": "Bob Milacki", "team": "Baltimore Orioles" },
-      "mayBeBlank": ["setName"] },
-    { "id": "mills", "front": "mills-front.avif", "back": "mills-back.avif",
-      "answer": { "sport": "other", "year": 1991, "brand": "Impel", "setName": "U.S. Olympic Cards Hall of Fame", "cardNumber": "24", "player": "Billy Mills", "team": null },
-      "mayBeBlank": ["setName", "sport"] }
+    {
+      "id": "griffey",
+      "front": "griffey-front.avif",
+      "back": "griffey-back.avif",
+      "answer": {
+        "sport": "baseball",
+        "year": 1990,
+        "brand": "Topps",
+        "setName": "Topps",
+        "cardNumber": "336",
+        "player": "Ken Griffey Jr.",
+        "team": "Seattle Mariners"
+      },
+      "mayBeBlank": [
+        "setName"
+      ]
+    },
+    {
+      "id": "hardaway",
+      "front": "hardaway-front.avif",
+      "back": "hardaway-back.avif",
+      "answer": {
+        "sport": "basketball",
+        "year": 1993,
+        "brand": "Fleer",
+        "setName": "Ultra",
+        "cardNumber": "65",
+        "player": "Tim Hardaway",
+        "team": "Golden State Warriors"
+      },
+      "mayBeBlank": [
+        "setName"
+      ]
+    },
+    {
+      "id": "milacki",
+      "front": "milacki-front.avif",
+      "back": "milacki-back.avif",
+      "answer": {
+        "sport": "baseball",
+        "year": 1992,
+        "brand": "Donruss",
+        "setName": "Donruss",
+        "cardNumber": "101",
+        "player": "Bob Milacki",
+        "team": "Baltimore Orioles"
+      },
+      "mayBeBlank": [
+        "setName"
+      ]
+    },
+    {
+      "id": "mills",
+      "front": "mills-front.avif",
+      "back": "mills-back.avif",
+      "answer": {
+        "sport": "other",
+        "year": 1991,
+        "brand": "Impel",
+        "setName": "U.S. Olympic Cards Hall of Fame",
+        "cardNumber": "24",
+        "player": "Billy Mills",
+        "team": null
+      },
+      "mayBeBlank": [
+        "setName",
+        "sport"
+      ]
+    },
+    {
+      "id": "live9-front-twice",
+      "front": "live9-front.jpg",
+      "back": "live9-back.jpg",
+      "answer": {
+        "sport": "basketball",
+        "year": 1993,
+        "brand": "Fleer",
+        "setName": "Ultra",
+        "cardNumber": "65",
+        "player": "Tim Hardaway",
+        "team": "Golden State Warriors"
+      },
+      "mayBeBlank": [
+        "setName"
+      ]
+    },
+    {
+      "id": "live10-hardaway",
+      "front": "live10-front.jpg",
+      "back": "live10-back.jpg",
+      "answer": {
+        "sport": "basketball",
+        "year": 1993,
+        "brand": "Fleer",
+        "setName": "Ultra",
+        "cardNumber": "65",
+        "player": "Tim Hardaway",
+        "team": "Golden State Warriors"
+      },
+      "mayBeBlank": [
+        "setName"
+      ]
+    },
+    {
+      "id": "live11-milacki",
+      "front": "live11-front.jpg",
+      "back": "live11-back.jpg",
+      "answer": {
+        "sport": "baseball",
+        "year": 1992,
+        "brand": "Donruss",
+        "setName": "Donruss",
+        "cardNumber": "101",
+        "player": "Bob Milacki",
+        "team": "Baltimore Orioles"
+      },
+      "mayBeBlank": [
+        "setName"
+      ]
+    },
+    {
+      "id": "live12-mills",
+      "front": "live12-front.jpg",
+      "back": "live12-back.jpg",
+      "answer": {
+        "sport": "other",
+        "year": 1991,
+        "brand": "Impel",
+        "setName": "U.S. Olympic Cards Hall of Fame",
+        "cardNumber": "24",
+        "player": "Billy Mills",
+        "team": null
+      },
+      "mayBeBlank": [
+        "setName",
+        "sport"
+      ]
+    }
+  ],
+  "scans": [
+    {
+      "id": "live8-many",
+      "mode": "multi",
+      "photos": [
+        "live8-0.jpg",
+        "live8-1.jpg",
+        "live8-2.jpg"
+      ],
+      "cards": [
+        {
+          "answer": {
+            "sport": "baseball",
+            "year": 1992,
+            "brand": "Donruss",
+            "setName": "Donruss",
+            "cardNumber": "101",
+            "player": "Bob Milacki",
+            "team": "Baltimore Orioles"
+          },
+          "mayBeBlank": [
+            "setName"
+          ]
+        },
+        {
+          "answer": {
+            "sport": "other",
+            "year": 1991,
+            "brand": "Impel",
+            "setName": "U.S. Olympic Cards Hall of Fame",
+            "cardNumber": "24",
+            "player": "Billy Mills",
+            "team": null
+          },
+          "mayBeBlank": [
+            "setName",
+            "sport"
+          ]
+        },
+        {
+          "answer": {
+            "sport": "basketball",
+            "year": 1993,
+            "brand": "Fleer",
+            "setName": "Ultra",
+            "cardNumber": "65",
+            "player": "Tim Hardaway",
+            "team": "Golden State Warriors"
+          },
+          "mayBeBlank": [
+            "setName"
+          ]
+        }
+      ]
+    }
   ]
 }
