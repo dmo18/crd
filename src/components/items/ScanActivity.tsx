@@ -79,7 +79,7 @@ function ScanRow({ scan, photo, onChanged }: { scan: ScanView; photo: string | n
       {photo ? (
         // Photos come from our own /api/images route, already resized.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={`/api/images/${photo}`} alt={`Photo for scan ${scan.id}`} className="size-16 shrink-0 rounded-lg bg-surface-2 object-cover" />
+        <img src={`/api/images/${photo}`} alt={`Photo for scan ${scan.id}`} className="size-16 shrink-0 rounded-lg bg-surface-2 object-contain" />
       ) : (
         <div aria-hidden="true" className="size-16 shrink-0 rounded-lg bg-surface-2" />
       )}

@@ -113,7 +113,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
               <Link href={`/items/${item.id}/photo/${p.id}`} className="flex min-h-11 flex-col gap-1">
                 {/* Plain img: photos come from our own /api/images route. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={`/api/images/${p.thumbFile}`} alt={`${ROLE_NAMES[p.role]} photo of ${item.title}`} className="aspect-[3/4] w-full rounded-xl bg-surface-2 object-cover" />
+                <img src={`/api/images/${p.thumbFile}`} alt={`${ROLE_NAMES[p.role]} photo of ${item.title}`} className="aspect-[3/4] w-full rounded-xl bg-surface-2 object-contain" />
                 <span className="text-sm text-muted">{ROLE_NAMES[p.role]} (tap to zoom, turn or trim)</span>
               </Link>
             </li>

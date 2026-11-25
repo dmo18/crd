@@ -186,7 +186,7 @@ function Thumb({ file, title, small }: { file: string | null; title: string; sma
   return file ? (
     // Plain img: photos come from our own /api/images route, already resized.
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={`/api/images/${file}`} alt={`Photo of ${title}`} className={`${size} shrink-0 rounded-lg bg-surface-2 object-cover`} />
+    <img src={`/api/images/${file}`} alt={`Photo of ${title}`} className={`${size} shrink-0 rounded-lg bg-surface-2 object-contain`} />
   ) : (
     <div aria-hidden="true" className={`${size} shrink-0 rounded-lg bg-surface-2`} />
   );

@@ -63,7 +63,7 @@ export function DeletedList({ rows, total, page, pageCount, prev, next }: {
             <Link href={`/items/${r.id}`} className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-border bg-surface p-3">
               {r.thumb ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={`/api/images/${r.thumb}`} alt={`Photo of ${r.title}`} className="size-16 shrink-0 rounded-lg bg-surface-2 object-cover" />
+                <img src={`/api/images/${r.thumb}`} alt={`Photo of ${r.title}`} className="size-16 shrink-0 rounded-lg bg-surface-2 object-contain" />
               ) : <div aria-hidden="true" className="size-16 shrink-0 rounded-lg bg-surface-2" />}
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 <p className="font-semibold break-words">{r.title}</p>
