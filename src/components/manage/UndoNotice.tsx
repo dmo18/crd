@@ -5,6 +5,7 @@ import { useState } from "react";
 import { LocalTime } from "@/components/activity/LocalTime";
 import { Button, Notice } from "@/components/ui";
 import { undoBulkAction } from "@/lib/items/bulk-actions";
+import { undoLine } from "@/lib/items/undo-line";
 
 export type UndoOffer = { id: number; summary: string; madeAt: number };
 
@@ -24,7 +25,7 @@ export function UndoNotice({ offer, message }: { offer: UndoOffer | null; messag
     try {
       const r = await undoBulkAction(o.id);
       if ("error" in r) setResult({ text: r.error, bad: true });
-      else setResult({ text: `Put back ${r.restored} ${r.restored === 1 ? "item" : "items"}.${r.skipped > 0 ? ` Skipped ${r.skipped} (edited or removed since).` : ""}`, bad: false });
+      else setResult({ text: undoLine(r), bad: false });
     } catch {
       setResult({ text: "Could not reach the server. Nothing was undone.", bad: true });
     } finally {

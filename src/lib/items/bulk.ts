@@ -457,10 +457,29 @@ export type UndoableOp = { id: number; at: Date; summary: string; itemCount: num
 /** The latest bulk change that can still be undone, or null. */
 export function latestUndoable(db: Db = getDb(), now: Date = new Date()): UndoableOp | null {
   // Only the latest change not yet undone; once it is undone the one before it is next.
-  const op = db.select({ id: bulkOps.id, at: bulkOps.at, summary: bulkOps.summary, itemCount: bulkOps.itemCount, action: bulkOps.action })
+  const row = db.select({ id: bulkOps.id, at: bulkOps.at, summary: bulkOps.summary, itemCount: bulkOps.itemCount, action: bulkOps.action, undo: bulkOps.undo })
     .from(bulkOps).where(isNull(bulkOps.undoneAt)).orderBy(desc(bulkOps.id)).limit(1).get();
-  if (!op || op.at.getTime() < now.getTime() - BULK_KEEP_DAYS * DAY_MS) return null;
+  if (!row || row.at.getTime() < now.getTime() - BULK_KEEP_DAYS * DAY_MS) return null;
+  const { undo, ...op } = row;
+  // A delete whose items were all put back by hand from Recently deleted: its Undo would do nothing.
+  if (op.action === "delete" && !deleteStillInBin(db, op.at, undo)) return null;
   return op;
+}
+
+/** Some item of a delete change is still in Recently deleted from that very change. */
+function deleteStillInBin(db: Db, at: Date, undoJson: string): boolean {
+  let ids: number[];
+  try {
+    ids = undoSchema.parse(JSON.parse(undoJson)).items.map(([id]) => id);
+  } catch {
+    return true;
+  }
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    // Reads deleted rows on purpose: the bin is where they are.
+    const hit = db.select({ id: items.id }).from(items).where(and(inArray(items.id, ids.slice(i, i + CHUNK)), eq(items.deletedAt, at))).limit(1).get();
+    if (hit) return true;
+  }
+  return false;
 }
 
 /**
@@ -469,7 +488,19 @@ export function latestUndoable(db: Db = getDb(), now: Date = new Date()): Undoab
  * the items back from Recently deleted. Reports how many were put back and
  * how many were skipped.
  */
-export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date()): { restored: number; skipped: number; summary: string; ids: number[] } | Fail {
+export type UndoResult = {
+  /** Items whose old values (or place in the collection, for a delete) came back. */
+  restored: number;
+  /** Items an import had added, now moved to Recently deleted. */
+  removed: number;
+  skipped: number;
+  summary: string;
+  ids: number[];
+  /** What the change was: a delete, an import or another change. */
+  kind: "delete" | "import" | "change";
+};
+
+export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date()): UndoResult | Fail {
   return db.transaction((txRaw) => {
     const tx = txRaw as unknown as Tx;
     const op = tx.select().from(bulkOps).where(eq(bulkOps.id, opId)).get();
@@ -486,6 +517,7 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
     const at = op.at.getTime();
     const locationIds = new Set(tx.select({ id: locations.id }).from(locations).all().map((l) => l.id));
     let restored = 0;
+    let removed = 0;
     let skipped = 0;
     // The items put back, for their guide prices.
     const ids: number[] = [];
@@ -530,7 +562,7 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
       if (!row || row.deletedAt != null || row.updatedAt.getTime() > at) { skipped += 1; continue; }
       tx.update(items).set({ deletedAt: now }).where(and(eq(items.id, id), liveItem)).run();
       binned.add(id);
-      restored += 1;
+      removed += 1;
     }
     // Places the import made go too, when nothing else uses them and the owner did not change them.
     for (const place of parsed.locations ?? []) {
@@ -545,8 +577,11 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
       }
       tx.delete(locations).where(eq(locations.id, place.id)).run();
     }
+    const kind = op.action === "delete" ? "delete" : parsed.kind === "import" ? "import" : "change";
+    // Nothing left to put back (all put back by hand from Recently deleted): nothing is done, and the change stays as it was.
+    if (kind === "delete" && restored === 0) return { error: "Nothing to undo: these items were already put back from Recently deleted." };
     tx.update(bulkOps).set({ undoneAt: now }).where(eq(bulkOps.id, op.id)).run();
-    return { restored, skipped, summary: op.summary, ids };
+    return { restored, removed, skipped, summary: op.summary, ids, kind };
   }, { behavior: "immediate" });
 }
 

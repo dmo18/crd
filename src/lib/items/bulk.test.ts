@@ -11,6 +11,7 @@ import {
 } from "./bulk";
 import { inventoryFilterSchema, listItems, matchingIds } from "./query";
 import { updateItem } from "./update";
+import { undoLine } from "./undo-line";
 
 let db: Db;
 let box: number;
@@ -414,6 +415,27 @@ describe("safety", () => {
 });
 
 describe("undo", () => {
+  it("a delete whose items were all put back from Recently deleted is no longer offered, and its Undo does nothing (review fix 8)", () => {
+    const a = add({ player: "Billy Mills" });
+    const b = add({ player: "Billy Mills" });
+    const r = ok(applyBulk(ids(a, b), { type: "delete" }, db, later(MIN)));
+    expect(latestUndoable(db, later(2 * MIN))).toMatchObject({ id: r.opId });
+    restoreItems([a], db, later(2 * MIN));
+    // One is still in the bin from that change: still offered.
+    expect(latestUndoable(db, later(3 * MIN))).toMatchObject({ id: r.opId });
+    restoreItems([b], db, later(3 * MIN));
+    expect(latestUndoable(db, later(4 * MIN))).toBeNull();
+    expect(undoBulk(r.opId, db, later(4 * MIN))).toEqual({ error: "Nothing to undo: these items were already put back from Recently deleted." });
+    expect(get(a).deletedAt).toBeNull();
+  });
+
+  it("the undo line says what an import undo did (review fix 8)", () => {
+    expect(undoLine({ kind: "import", restored: 0, removed: 4, skipped: 0 })).toBe("Removed the 4 items the import added. They are in Recently deleted.");
+    expect(undoLine({ kind: "import", restored: 2, removed: 1, skipped: 0 })).toBe("Removed the 1 item the import added. It is in Recently deleted. Put back the old values of 2 items.");
+    expect(undoLine({ kind: "delete", restored: 2, removed: 0, skipped: 1 })).toBe("Put back 2 items from Recently deleted. Skipped 1 (edited or removed since).");
+    expect(undoLine({ kind: "change", restored: 1, removed: 0, skipped: 0 })).toBe("Put back the old values of 1 item.");
+  });
+
   it("puts back exactly the old values of the touched columns, and refuses a second undo", () => {
     const a = add({ player: "Ken Grifey", year: 1990, brand: "Topps", title: "1990 Topps Ken Grifey", team: "Mariners" });
     const before = get(a);
@@ -421,7 +443,7 @@ describe("undo", () => {
     expect(get(a).title).toBe("1990 Topps Ken Griffey Jr.");
     expect(latestUndoable(db, later(2 * MIN))).toMatchObject({ id: r.opId, summary: "Set player on 1 item", itemCount: 1 });
     expect(r.ids).toEqual([a]);
-    expect(ok(undoBulk(r.opId, db, later(2 * MIN)))).toEqual({ restored: 1, skipped: 0, summary: "Set player on 1 item", ids: [a] });
+    expect(ok(undoBulk(r.opId, db, later(2 * MIN)))).toEqual({ restored: 1, removed: 0, skipped: 0, summary: "Set player on 1 item", ids: [a], kind: "change" });
     expect(get(a)).toEqual(before);
     expect(undoBulk(r.opId, db)).toEqual({ error: "This change was already undone." });
     expect(latestUndoable(db)).toBeNull();
@@ -574,7 +596,7 @@ describe("server actions", () => {
     const del = await actions.applyBulkAction({ selection: { ids: [a, b] }, action: { type: "delete" } });
     expect(del).toMatchObject({ changed: 2 });
     expect(await actions.undoBulkAction("x")).toHaveProperty("error");
-    expect(await actions.undoBulkAction((del as { opId: number }).opId)).toEqual({ restored: 2, skipped: 0 });
+    expect(await actions.undoBulkAction((del as { opId: number }).opId)).toEqual({ restored: 2, removed: 0, skipped: 0, kind: "delete" });
     ok(applyBulk(ids(a, b), { type: "delete" }, db));
     expect(await actions.restoreItemsAction([a])).toEqual({ restored: 1 });
     expect(await actions.restoreItemsAction([])).toHaveProperty("error");
@@ -584,7 +606,7 @@ describe("server actions", () => {
     expect(auth.audit).toEqual([
       { event: "bulk_edit", detail: "Set notes on 2 items" },
       { event: "bulk_delete", detail: "Moved 2 items to Recently deleted" },
-      { event: "bulk_undo", detail: "Moved 2 items to Recently deleted. 2 items put back, 0 skipped" },
+      { event: "bulk_undo", detail: "Moved 2 items to Recently deleted. Put back 2 items from Recently deleted." },
       { event: "bulk_restore", detail: "1 item" },
       { event: "bulk_purge", detail: "emptied the bin, 1 item" },
     ]);

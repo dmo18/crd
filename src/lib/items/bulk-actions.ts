@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { undoLine, type UndoDone } from "./undo-line";
 import { z } from "zod";
 import { auditThisRequest } from "@/lib/audit/request";
 import { requireOwner } from "@/lib/auth/guard";
@@ -74,7 +75,7 @@ export async function applyBulkAction(input: unknown): Promise<{ changed: number
 }
 
 /** Undoes the latest bulk change, for items not edited since. */
-export async function undoBulkAction(opId: unknown): Promise<{ restored: number; skipped: number } | Fail> {
+export async function undoBulkAction(opId: unknown): Promise<UndoDone | Fail> {
   await requireOwner();
   const id = opIdSchema.safeParse(opId);
   if (!id.success) return { error: "This change can no longer be undone." };
@@ -86,9 +87,9 @@ export async function undoBulkAction(opId: unknown): Promise<{ restored: number;
     return FAILED;
   }
   if ("error" in result) return result;
-  await auditThisRequest("bulk_undo", "ok", `${result.summary}. ${items(result.restored)} put back, ${result.skipped} skipped`);
+  await auditThisRequest("bulk_undo", "ok", `${result.summary}. ${undoLine(result)}`);
   revalidateAll(result.ids);
-  return { restored: result.restored, skipped: result.skipped };
+  return { restored: result.restored, removed: result.removed, skipped: result.skipped, kind: result.kind };
 }
 
 /** Recently deleted: puts the chosen items back in the collection. */

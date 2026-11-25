@@ -236,7 +236,7 @@ describe("price guide after an import", () => {
     const upd = add({ ...CARD, team: "Mariners", updatedAt: T0 });
     const r = ok(run(`ID,Year,Brand,Card number,Player,Team\n,1989,Upper Deck,5,Ken Griffey Jr.,Cubs\n${upd},1989,Upper Deck,1,Ken Griffey Jr.,Rookies\n`));
     expect(get(upd).valueSource).toBe("price_guide");
-    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 2, skipped: 0 });
+    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 1, removed: 1, skipped: 0, kind: "import" });
     expect(get(upd)).toMatchObject({ team: "Mariners", updatedAt: T0 });
     expect(all().filter((i) => i.deletedAt != null)).toHaveLength(1);
   });
@@ -250,7 +250,7 @@ describe("undo", () => {
     expect(op).toMatchObject({ id: r.opId, summary: "Imported a spreadsheet: 1 added, 1 updated", itemCount: 2 });
     expect(get(id)).toMatchObject({ player: "Changed", team: null });
     const made = all().find((i) => i.player === "Brand New")!;
-    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 2, skipped: 0 });
+    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 1, removed: 1, skipped: 0, kind: "import" });
     expect(get(id)).toMatchObject({ player: "Old", team: "Reds", updatedAt: T0, deletedAt: null });
     expect(get(made.id).deletedAt).toEqual(LATER);
     expect(db.select().from(items).where(isNotNull(items.deletedAt)).all().map((i) => i.id)).toEqual([made.id]);
@@ -270,7 +270,7 @@ describe("undo", () => {
     // Box 10: the owner renamed nothing but wrote a note on it. Box 11: another item was moved in since.
     db.update(locations).set({ notes: "shelf" }).where(eq(locations.name, "Box 10")).run();
     const other = add({ player: "Mine", locationId: place("Box 11")!.id });
-    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 3, skipped: 0 });
+    expect(ok(undoBulk(r.opId, db, LATER))).toMatchObject({ restored: 0, removed: 3, skipped: 0, kind: "import" });
     expect(place("Box 9")).toBeUndefined();
     expect(place("Box 10")).toBeDefined();
     expect(place("Box 11")).toBeDefined();
