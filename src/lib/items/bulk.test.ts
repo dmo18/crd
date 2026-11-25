@@ -420,7 +420,8 @@ describe("undo", () => {
     const r = ok(applyBulk(ids(a), set("player", "Ken Griffey Jr."), db, later(MIN)));
     expect(get(a).title).toBe("1990 Topps Ken Griffey Jr.");
     expect(latestUndoable(db, later(2 * MIN))).toMatchObject({ id: r.opId, summary: "Set player on 1 item", itemCount: 1 });
-    expect(ok(undoBulk(r.opId, db, later(2 * MIN)))).toEqual({ restored: 1, skipped: 0, summary: "Set player on 1 item" });
+    expect(r.ids).toEqual([a]);
+    expect(ok(undoBulk(r.opId, db, later(2 * MIN)))).toEqual({ restored: 1, skipped: 0, summary: "Set player on 1 item", ids: [a] });
     expect(get(a)).toEqual(before);
     expect(undoBulk(r.opId, db)).toEqual({ error: "This change was already undone." });
     expect(latestUndoable(db)).toBeNull();

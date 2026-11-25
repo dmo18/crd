@@ -419,7 +419,7 @@ export function pruneOps(tx: Tx, now: Date): void {
  */
 export function applyBulk(
   sel: Selection, action: BulkAction, db: Db = getDb(), now: Date = new Date(),
-): { changed: number; opId: number; summary: string } | Fail {
+): { changed: number; opId: number; summary: string; ids: number[] } | Fail {
   return db.transaction((txRaw) => {
     const tx = txRaw as unknown as Tx;
     const w = work(tx, sel, action, true);
@@ -446,7 +446,7 @@ export function applyBulk(
       at: now, action: action.type as BulkOpAction, summary, itemCount: w.changes.length, undo: JSON.stringify(undo),
     }).returning({ id: bulkOps.id }).get();
     pruneOps(tx, now);
-    return { changed: w.changes.length, opId: op.id, summary };
+    return { changed: w.changes.length, opId: op.id, summary, ids: w.changes.map((c) => c.id) };
   }, { behavior: "immediate" });
 }
 
@@ -467,7 +467,7 @@ export function latestUndoable(db: Db = getDb(), now: Date = new Date()): Undoab
  * the items back from Recently deleted. Reports how many were put back and
  * how many were skipped.
  */
-export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date()): { restored: number; skipped: number; summary: string } | Fail {
+export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date()): { restored: number; skipped: number; summary: string; ids: number[] } | Fail {
   return db.transaction((txRaw) => {
     const tx = txRaw as unknown as Tx;
     const op = tx.select().from(bulkOps).where(eq(bulkOps.id, opId)).get();
@@ -485,6 +485,8 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
     const locationIds = new Set(tx.select({ id: locations.id }).from(locations).all().map((l) => l.id));
     let restored = 0;
     let skipped = 0;
+    // The items put back, for their guide prices.
+    const ids: number[] = [];
     // Reads deleted rows on purpose: undo of a delete brings them back.
     const rows = new Map<number, Item>();
     const created = parsed.created ?? [];
@@ -500,6 +502,7 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
         if (row.deletedAt?.getTime() !== at) { skipped += 1; continue; }
         tx.update(items).set({ deletedAt: null }).where(eq(items.id, id)).run();
         restored += 1;
+        ids.push(id);
         continue;
       }
       // Deleted since, or edited since: leave it as the owner left it.
@@ -516,6 +519,7 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
         }).run();
       }
       restored += 1;
+      ids.push(id);
     }
     // Items an import added go to Recently deleted, unless deleted or edited since.
     for (const id of created) {
@@ -525,7 +529,7 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
       restored += 1;
     }
     tx.update(bulkOps).set({ undoneAt: now }).where(eq(bulkOps.id, op.id)).run();
-    return { restored, skipped, summary: op.summary };
+    return { restored, skipped, summary: op.summary, ids };
   }, { behavior: "immediate" });
 }
 

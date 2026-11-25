@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, type Db } from "@/db";
 import { items, playerFacts, valuations, type Item } from "@/db/schema";
 import { collectionTotals, valueSplit } from "../snapshots";
-import { fillGuidePrices, GUIDE_MESSAGES, refreshGuidePrice } from "./apply";
+import { fillGuidePrices, GUIDE_CHUNK, GUIDE_MESSAGES, refreshGuidePrice, refreshGuideQuietly, saveGuide } from "./apply";
 
 let db: Db;
 beforeEach(() => { db = createDb(":memory:"); });
@@ -86,5 +86,60 @@ describe("saving guide prices", () => {
     const a = add({ year: 1990, brand: "Donruss", player: "Joe", cardNumber: "5", deletedAt: NOW });
     expect(fillGuidePrices(db, NOW)).toBe(0);
     expect(refreshGuidePrice(a.id, db, NOW)).toEqual({ ok: false, error: GUIDE_MESSAGES.missing });
+  });
+});
+
+describe("a value written meanwhile is never overwritten (review fix 6)", () => {
+  const facts = { year: 1990, brand: "Donruss", player: "Joe Nobody", cardNumber: "5" };
+
+  it("the owner's value or another estimate saved after the row was read stays, with no history row", () => {
+    const a = add(facts);
+    const b = add({ ...facts, cardNumber: "6" });
+    const staleA = get(a.id);
+    const staleB = get(b.id);
+    db.update(items).set({ manualValueCents: 500 }).where(eq(items.id, a.id)).run();
+    db.update(items).set({ estValueCents: 300, valueSource: "ai_estimate" }).where(eq(items.id, b.id)).run();
+    expect(saveGuide(db, staleA, NOW)).toMatchObject({ ok: true, changed: false });
+    expect(saveGuide(db, staleB, NOW)).toMatchObject({ ok: true, changed: false });
+    expect(get(a.id)).toMatchObject({ manualValueCents: 500, estValueCents: null, valueSource: null });
+    expect(get(b.id)).toMatchObject({ estValueCents: 300, valueSource: "ai_estimate" });
+    expect(history(a.id)).toHaveLength(0);
+    expect(history(b.id)).toHaveLength(0);
+  });
+
+  it("a guide value that no longer applies is not cleared over an owner value saved meanwhile", () => {
+    const a = add(facts);
+    refreshGuidePrice(a.id, db, NOW);
+    const stale = { ...get(a.id), year: null };
+    db.update(items).set({ manualValueCents: 700 }).where(eq(items.id, a.id)).run();
+    expect(saveGuide(db, stale, NOW)).toMatchObject({ ok: true, changed: false });
+    expect(get(a.id).valueSource).toBe("price_guide");
+  });
+
+  it("two refreshes from the same old row write one history row", () => {
+    const a = add(facts);
+    const stale = get(a.id);
+    expect(saveGuide(db, stale, NOW)).toMatchObject({ changed: true });
+    expect(saveGuide(db, stale, NOW)).toMatchObject({ changed: false });
+    expect(history(a.id)).toHaveLength(1);
+  });
+});
+
+describe("guide refresh after an import or a bulk change (review fix 8)", () => {
+  it("refreshes only the ids given, in one transaction per chunk", () => {
+    const ids: number[] = [];
+    db.transaction((tx) => {
+      for (let i = 0; i < GUIDE_CHUNK * 2 + 10; i++) {
+        ids.push(tx.insert(items).values({ kind: "card", title: "T", year: 1990, brand: "Donruss", player: "Joe Nobody", cardNumber: String(i) }).returning({ id: items.id }).get().id);
+      }
+    });
+    const other = add({ year: 1990, brand: "Donruss", player: "Joe Nobody", cardNumber: "x" });
+    const spy = vi.spyOn(db, "transaction");
+    refreshGuideQuietly(ids, db, NOW);
+    expect(spy).toHaveBeenCalledTimes(3);
+    spy.mockRestore();
+    expect(get(ids[0]).valueSource).toBe("price_guide");
+    expect(get(ids[ids.length - 1]).valueSource).toBe("price_guide");
+    expect(get(other.id).valueSource).toBeNull();
   });
 });

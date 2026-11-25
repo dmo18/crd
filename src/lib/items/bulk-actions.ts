@@ -6,7 +6,7 @@ import { auditThisRequest } from "@/lib/audit/request";
 import { requireOwner } from "@/lib/auth/guard";
 import { errorKind, log } from "@/lib/log";
 import { purgeItems, restoreItems } from "./bin";
-import { fillGuidePrices } from "@/lib/valuation/guide/apply";
+import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
 import {
   applyBulk, binIds, MAX_BULK_IDS, parseAction, parseSelection, previewBulk, undoBulk, type BulkPreview,
 } from "./bulk";
@@ -22,10 +22,10 @@ const idsSchema = z.array(z.number().int().positive().max(Number.MAX_SAFE_INTEGE
 
 const items = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "item" : "items"}`;
 
-function revalidateAll() {
+/** `changed`: the items the change touched; only their guide prices are brought up to date. */
+function revalidateAll(changed: number[] = []) {
   try {
-    // Bulk edits, undo and restore can change many items: bring their guide prices up to date.
-    fillGuidePrices();
+    refreshGuideQuietly(changed);
   } catch (err) {
     log.warn("guide_fill_failed", { error: errorKind(err) });
   }
@@ -69,8 +69,8 @@ export async function applyBulkAction(input: unknown): Promise<{ changed: number
   }
   if ("error" in result) return result;
   await auditThisRequest(req.action.type === "delete" ? "bulk_delete" : "bulk_edit", "ok", result.summary);
-  revalidateAll();
-  return result;
+  revalidateAll(result.ids);
+  return { changed: result.changed, opId: result.opId, summary: result.summary };
 }
 
 /** Undoes the latest bulk change, for items not edited since. */
@@ -87,7 +87,7 @@ export async function undoBulkAction(opId: unknown): Promise<{ restored: number;
   }
   if ("error" in result) return result;
   await auditThisRequest("bulk_undo", "ok", `${result.summary}. ${items(result.restored)} put back, ${result.skipped} skipped`);
-  revalidateAll();
+  revalidateAll(result.ids);
   return { restored: result.restored, skipped: result.skipped };
 }
 
@@ -104,7 +104,7 @@ export async function restoreItemsAction(ids: unknown): Promise<{ restored: numb
     return FAILED;
   }
   if (restored > 0) await auditThisRequest("bulk_restore", "ok", items(restored));
-  revalidateAll();
+  revalidateAll(r.data);
   return { restored };
 }
 
