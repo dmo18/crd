@@ -168,9 +168,18 @@ export function playerAgrees(readPlayer: string | null | undefined, catalogPlaye
 /** An unverified listing: not a clean id, or a "brand" that is the player's own name (a seller's title). */
 export function isUnverified(c: Pick<CatalogCard, "verified" | "brand" | "player">): boolean {
   if (!c.verified) return true;
-  const b = normalizeName(c.brand ?? "");
+  return nameIsProduct(c);
+}
+
+/**
+ * A listing that files the card under the player's own name as its maker
+ * or set ("Ken Griffey Jr" as the set of a Ken Griffey Jr. card): a seller's
+ * title, not a set. It says nothing about the card but the name.
+ */
+export function nameIsProduct(c: Pick<CatalogCard, "brand" | "player"> & { setName?: string | null }): boolean {
   const p = normalizeName(c.player ?? "");
-  return p.length > 0 && b.includes(p);
+  if (p.length === 0) return false;
+  return [c.brand, c.setName].some((v) => normalizeName(v ?? "").includes(p));
 }
 
 /**
@@ -198,6 +207,9 @@ export function offerCandidates(read: FindRead, cards: readonly CatalogCard[]): 
       // No player read: only a card of the read number can be offered.
       continue;
     }
+    // A listing under the player's own name is offered only when its number is the number read:
+    // with nothing but the name (and a year every card of that season has) in common it is noise.
+    if (nameIsProduct(c) && (!num || cardNum !== num)) continue;
     const yearDiff = read.year != null && c.year != null && c.year !== read.year;
     const numDiff = num != null && cardNum != null && cardNum !== num;
     if (yearDiff && !unsureOf(read, "year")) continue;

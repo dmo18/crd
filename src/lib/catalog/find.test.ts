@@ -186,6 +186,25 @@ describe("B: which candidates are offered", () => {
     expect(own.find((c) => c.sourceId === "ebay_f98a2e155bca")?.verified).toBe(false);
   });
 
+  it("a listing under the player's own name is left out when only the name agrees (walk-through, Griffey)", () => {
+    // Rows shaped like the three listings the walk-through got: "Ken Griffey Jr" as the maker, other numbers.
+    const listing = (id: string, num: string): CatalogCard => ({
+      ...GRIFFEY[0], source: "mycardfolio", sourceId: `ebay_${id}`, verified: false, year: 1990, brand: "Ken Griffey Jr", setName: null,
+      cardNumber: num, player: "Ken Griffey Jr.", variation: null, url: `https://mycardfolio.com/sports/baseball/1990/ken-griffey-jr-ebay_1/base-set-ebay_2/${num}-ken-griffey-jr-ebay_${id}`,
+    });
+    const rows = [listing("a1", "513"), listing("a2", "3"), listing("a3", "560")];
+    // No number read: nothing but the name and the season in common, so none is offered.
+    expect(offerCandidates(read({ year: 1990, player: "Ken Griffey Jr.", unsure: ["year"] }), rows)).toEqual([]);
+    // A read number that differs, even an unsure one: still none.
+    expect(offerCandidates(read({ year: 1990, cardNumber: "336", player: "Ken Griffey Jr.", unsure: ["cardNumber"] }), rows)).toEqual([]);
+    // The number read is the listing's number: offered, last and marked unverified.
+    const same = offerCandidates(read({ year: 1990, cardNumber: "513", player: "Ken Griffey Jr." }), rows);
+    expect(same.map((c) => c.sourceId)).toEqual(["ebay_a1"]);
+    expect(same[0].verified).toBe(false);
+    // The player's name as the set, not the maker, is the same kind of listing.
+    expect(offerCandidates(read({ year: 1990, player: "Ken Griffey Jr." }), [{ ...rows[0], brand: "Topps", setName: "Ken Griffey Jr." }])).toEqual([]);
+  });
+
   it("duplicates are offered once: same id, or same year, product, number and player", () => {
     const r = read({ year: 1992, brand: "Donruss", cardNumber: "101", player: "Bob Milacki" });
     const twin = { ...MILACKI[0], sourceId: "ebay_x1", verified: false };
