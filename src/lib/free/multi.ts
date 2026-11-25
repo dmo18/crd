@@ -246,6 +246,9 @@ function sideWords(read: OcrResult | null): Set<string> {
 /** Share of the smaller side's words that the other side has too: a front at least this much, a back (more words, more misreads) this much. */
 const SAME_FRONT = 0.8;
 const SAME_BACK = 0.5;
+/** Backs sharing this many stat numbers need only this share of words. */
+const SAME_STATS = 6;
+const SAME_BACK_WITH_STATS = 0.4;
 /** And at least this many words in common. */
 const SAME_FRONT_WORDS = 2;
 const SAME_BACK_WORDS = 4;
@@ -277,9 +280,17 @@ export function sameSide(a: SideRead, b: SideRead, pa?: ParsedCard, pb?: ParsedC
   const wb = sideWords(b.text);
   const [small, large] = wa.size <= wb.size ? [wa, wb] : [wb, wa];
   let common = 0;
-  for (const w of small) if (large.has(w)) common++;
+  let numbers = 0;
+  for (const w of small) {
+    if (!large.has(w)) continue;
+    common++;
+    if (/\d/.test(w)) numbers++;
+  }
   if (common < (a.back ? SAME_BACK_WORDS : SAME_FRONT_WORDS)) return false;
-  return common / small.size >= (a.back ? SAME_BACK : SAME_FRONT);
+  // Backs: many stat numbers in common are the strongest sign (a misread word
+  // counts against the share, a stat line read twice does not differ).
+  const share = a.back && numbers >= SAME_STATS ? SAME_BACK_WITH_STATS : a.back ? SAME_BACK : SAME_FRONT;
+  return common / small.size >= share;
 }
 
 /**

@@ -1973,8 +1973,18 @@ function looksLikeName(core: NameWord[]): boolean {
   if (!words.every((w) => /[AEIOUY]/.test(w))) return false;
   if (!words.some((w) => w.length >= 4)) return false;
   // Two consonants and nothing else, or a doubled junk tail, are OCR noise.
-  return words.every((w) => !/^[^AEIOUY]{3,}$/.test(w) && !/(.)\1\1/.test(w));
+  if (!words.every((w) => !/^[^AEIOUY]{3,}$/.test(w) && !/(.)\1\1/.test(w))) return false;
+  // A card word inside a joined word ("1ST RD-PICK" read as ISI RD-PICK): a draft line, not a name.
+  if (core.some((w) => w.word.includes("-") && w.word.toUpperCase().split("-").some((part) => STOP_WORDS.has(part)))) return false;
+  // A team's city word with its nickname read one letter wrong ("GOLDEN WARRORS"): a team, not a name.
+  const nick = (w: string) => w.length >= NICK_FUZZY && NICK_KEYS.some((n) => n.length >= NICK_FUZZY && editDistance(w, n) <= 1);
+  return !words.some((w, i) => nick(w) && words.some((o, j) => j !== i && CITY_WORDS.has(o)));
 }
+
+/** Nicknames this long or longer are compared with one letter wrong. */
+const NICK_FUZZY = 6;
+const NICK_KEYS = [...new Set(NICK_GROUPS.flatMap((g) => g.key.split(/\s+/)))].map((k) => k.replace(/[^A-Z]/g, ""));
+const CITY_WORDS = new Set(TEAMS.flatMap((t) => upper(t.city).split(/\s+/)).map((k) => k.replace(/[^A-Z]/g, "")).filter((k) => k.length >= 3));
 
 /**
  * One word of a name. Accents never block a read: the word is checked

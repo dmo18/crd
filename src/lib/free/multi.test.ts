@@ -368,6 +368,14 @@ describe("owner scan 8 rules: the same side twice, part of a name, the front twi
     expect(sameSide(a, b)).toBe(true);
     const later = side(2, statBack("TIM HARDAWAY", ["93-94 Golden State 0 0 0 0 0 0 0 0", "Pro Totals 390 520 801 1303 3601 731 7901 19.8"], "© 1994 FLEER CORP."), true);
     expect(sameSide(a, later)).toBe(false);
+    // Read with more words wrong, the stat numbers they share still tell it.
+    const misread = side(2, statBack("TIM HARDAWAY", ["92-93 Guidem Sturtle 66 407 744263 609 116 1419 215", "Pra Tatuls 308 464 770 1215 2988 659 49 6355 20.6"]), true);
+    const clean = side(0, ocr([
+      ["IEAS-IL ISI RD-PICK 14", 0.05], ["BORR 9/1/66 LPASO", 0.1], ["TIM HARDAWAY", 0.2, 0.06], ["Year Club G FG% FT% REB AST STL BLK PTS AVG", 0.6],
+      ["92-93 Galdm State 66 447 744 263 699 116 12 1419 21 5", 0.64], ["Pro Totuls 464 770 1215 2988 659 49 6355 20.6", 0.68],
+      ["1993 FLEER CORP. PRINTED IN U.S.A. COPR 1993 NBA PROPERTIES", 0.92],
+    ]), true);
+    expect(sameSide(clean, misread)).toBe(true);
     // Never within one photo: two copies side by side are two cards.
     expect(sameSide(a, side(0, statBack("TIM HARDAWAY", rows), true))).toBe(false);
   });

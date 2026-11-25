@@ -858,4 +858,17 @@ describe("owner scan 8 rules", () => {
     // A word that ends no name on the back gives none.
     expect(parseCardText(ocr([["WARRIORS", 0.1, 0.3, 0.2, 0.04]]), back).player).toBeNull();
   });
+
+  it("a draft line or a team's nickname read with a letter wrong is no name on a back", () => {
+    const back = (heading: string) => ocr([
+      [heading, 0.05, 0.1, 0.4, 0.06],
+      ["BORN: 9/1/66 CHICAGO", 0.2, 0.1, 0.4, 0.03],
+      ["Year Club G FG% FT% REB AST", 0.6, 0.1, 0.8, 0.03],
+      ["92-93 Golden State 66 447 744 263 699", 0.65, 0.1, 0.8, 0.03],
+    ]);
+    expect(parseCardText(null, back("ISI RD-PICK 14")).player).toBeNull();
+    expect(parseCardText(null, back("GOLDEN WARRORS")).player).toBeNull();
+    // A real name with a hyphen still is one.
+    expect(parseCardText(null, back("JOHN SMITH-JONES")).player).toBe("John Smith-Jones");
+  });
 });
