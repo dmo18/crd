@@ -5,7 +5,8 @@ import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "@/db";
 import { images, scans } from "@/db/schema";
-import { readPhoto, uploadsDir, workDir } from "@/lib/images/store";
+import { removeOrphanPhotos } from "@/lib/images/cleanup";
+import { ARCHIVE_EDGE, readPhoto, sameFamily, uploadsDir, workDir } from "@/lib/images/store";
 import { restorePhoto } from "@/lib/items/photos";
 import { recognizedItemSchema, type PhotoFix, type ReadFix, type Recognizer } from "@/lib/recognition/types";
 import { createScan } from "./create";
@@ -126,14 +127,26 @@ describe("the fix after a one card scan", () => {
     expect(thumb.height).toBeGreaterThan(thumb.width!);
     expect(Math.max(thumb.width!, thumb.height!)).toBe(320);
 
-    // The untouched photo is kept byte for byte.
-    expect(fs.readFileSync(path.join(uploadsDir(), after.originalFile!)).equals(workBytes)).toBe(true);
-    // Back to original, through the same code as the photo tools.
+    // The untouched photo is kept the way every photo is archived (review fix 7): AVIF at the archive
+    // edge and quality, not the full size working JPEG, and under a name of its own.
+    expect(after.originalFile).toMatch(/\.avif$/);
+    expect(sameFamily(after.originalFile!, before.file)).toBe(false);
+    const kept = fs.readFileSync(path.join(uploadsDir(), after.originalFile!));
+    const keptMeta = await sharp(kept).metadata();
+    expect(keptMeta.format).toBe("heif");
+    expect(Math.max(keptMeta.width!, keptMeta.height!)).toBeLessThanOrEqual(ARCHIVE_EDGE);
+    expect(kept.length).toBeLessThan(workBytes.length);
+    // Untouched: still sideways, with the whole table.
+    expect({ width: keptMeta.width, height: keptMeta.height }).toEqual({ width: 1200, height: 900 });
+    // Back to original, through the same code as the photo tools: the archive copy of the untouched photo.
     const restored = await restorePhoto({ itemId: after.itemId!, imageId: after.id }, db);
     expect(restored.ok).toBe(true);
     const back = backRow();
-    expect(back).toMatchObject({ file: after.originalFile, originalFile: null, width: 1200, height: 900 });
-    expect((await readPhoto(back.file)).data.equals(workBytes)).toBe(true);
+    expect(back).toMatchObject({ file: after.originalFile, originalFile: null, workFile: null, width: 1200, height: 900 });
+    expect((await readPhoto(back.file)).data.equals(kept)).toBe(true);
+    // Nothing is waiting for the archiver, and the cleanup keeps what the row uses.
+    expect(await removeOrphanPhotos(db, uploadsDir(), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000))).toBe(0);
+    expect(fs.existsSync(path.join(uploadsDir(), back.file))).toBe(true);
   });
 
   it("stands an upside down front up", async () => {

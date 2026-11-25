@@ -58,10 +58,13 @@ export async function editPhoto(input: { itemId: number; imageId: number; edit: 
  * belongs to an item.
  */
 export async function fixPhoto(row: ImageRow, fix: { turn: Turn; box: Box | null }, db: Db = getDb()): Promise<PhotoResult> {
-  return changePhoto(row, db, (edge) => writeFixed(row, fix, edge));
+  // The untouched photo is kept in the archive form, not as a full size JPEG (review fix 7).
+  return changePhoto(row, db, (edge) => writeFixed(row, fix, edge), { archiveOriginal: true });
 }
 
-async function changePhoto(row: ImageRow, db: Db, write: (edge: number) => Promise<StoredImage>): Promise<PhotoResult> {
+async function changePhoto(
+  row: ImageRow, db: Db, write: (edge: number) => Promise<StoredImage>, opts: { archiveOriginal?: boolean } = {},
+): Promise<PhotoResult> {
   const release = lockPhoto(row.id);
   if (!release) return fail(BUSY);
   try {
@@ -73,7 +76,7 @@ async function changePhoto(row: ImageRow, db: Db, write: (edge: number) => Promi
         written = await write(edge);
         if (ctl.expired()) throw new EditError(JOB_TIMEOUT_MESSAGE);
         const firstEdit = row.originalFile == null;
-        const original = firstEdit ? await keepAsOriginal(row) : row.originalFile!;
+        const original = firstEdit ? await keepAsOriginal(row, opts.archiveOriginal ? { archiveEdge: edge } : {}) : row.originalFile!;
         if (firstEdit && row.workFile) madeCopy = original;
         const stale = db.transaction((tx) => {
           const current = tx.select().from(images).where(eq(images.id, row.id)).get();

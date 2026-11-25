@@ -417,12 +417,29 @@ export async function writeFixed(photo: PhotoRef, fix: { turn: Turn; box: Box | 
  * Keeps the photo as it is now as the original. A photo that still has a
  * working copy has it copied (same bytes, no encoding) to the uploads folder
  * as a JPEG, since the working area is not kept. Returns the original's name.
+ * `archiveEdge`: the original is kept for the app's own automatic fix, not
+ * for an owner's edit, so it is kept the way every photo is archived (AVIF,
+ * this long edge, the archive quality) under a new name, instead of a full
+ * size JPEG; "Back to original" then brings back that archive copy.
  */
-export async function keepAsOriginal(photo: PhotoRef): Promise<string> {
+export async function keepAsOriginal(photo: PhotoRef, opts: { archiveEdge?: number } = {}): Promise<string> {
   if (!photo.workFile) {
     // Already a file in the uploads folder (archive or older JPEG): it simply stays.
     await fs.access(resolveInside(photo.file)).catch(() => { throw new ImageError("Photo not found."); });
     return photo.file;
+  }
+  if (opts.archiveEdge) {
+    // A new name, never the photo's own archive name: the archiver may be writing that one meanwhile.
+    const name = archiveName(crypto.randomUUID());
+    try {
+      const input = await fs.readFile(resolveWork(photo.workFile));
+      const out = await avif(sharp(input, DECODE_OPTIONS), opts.archiveEdge).toBuffer();
+      await writeAtomic(path.join(uploadsDir(), name), out);
+    } catch {
+      await removeNamed(name);
+      throw new ImageError("Photo not found.");
+    }
+    return name;
   }
   const name = `${idOf(photo.file)}.jpg`;
   try {
