@@ -28,10 +28,11 @@ describe("findDuplicates", () => {
     expect(kinds(blank)).toEqual([[full, "maybe"]]);
     expect(duplicateIds(db)).toEqual([blank]);
     // A year read on one and another year on the other contradict; so do two brands.
+    // (Only the other copies still in Review, with blanks where these differ, are asked about as a maybe.)
     const year92 = add({ ...mills, status: "needs_review", year: 1992, brand: null });
-    expect(kinds(year92)).toEqual([]);
+    expect(kinds(year92)).toEqual([[blank, "maybe"]]);
     const topps = add({ ...mills, status: "needs_review", year: null, brand: "Topps" });
-    expect(kinds(topps)).toEqual([]);
+    expect(kinds(topps)).toEqual([[blank, "maybe"], [year92, "maybe"]]);
     // Never combined by itself: a maybe is a question.
     expect(mergeInto(blank, full, db)).toMatchObject({ ok: false, problem: "maybe" });
   });
@@ -56,10 +57,23 @@ describe("findDuplicates", () => {
     expect(ids(a)).toEqual([b]);
   });
 
-  it("does not offer needs_review items as targets", () => {
+  it("two items both still in Review are asked as a maybe (the same card scanned twice), never combined", () => {
     const a = add({ status: "needs_review" });
-    add({ status: "needs_review" });
-    expect(ids(a)).toEqual([]);
+    const b = add({ status: "needs_review" });
+    expect(kinds(a)).toEqual([[b, "maybe"]]);
+    expect(kinds(b)).toEqual([[a, "maybe"]]);
+    expect(duplicateIds(db)).toEqual([a, b]);
+    expect(mergeInto(b, a, db)).toMatchObject({ ok: false, problem: "maybe" });
+    expect(db.select().from(items).all()).toHaveLength(2);
+  });
+
+  it("a confirmed item is not compared with one in Review; the one in Review sees the confirmed one first", () => {
+    const owned = add();
+    const first = add({ status: "needs_review" });
+    const second = add({ status: "needs_review" });
+    expect(ids(owned)).toEqual([]);
+    expect(kinds(first)).toEqual([[owned, "same"], [second, "maybe"]]);
+    expect(kinds(second)).toEqual([[owned, "same"], [first, "maybe"]]);
   });
 
   it("never matches blank unidentified items", () => {
@@ -256,7 +270,8 @@ describe("duplicate kinds (Milestone 11)", () => {
     expect(JSON.parse(row(a).keptApartFrom!)).toEqual([b]);
     // A third copy is still asked about.
     const c = add({ status: "needs_review" });
-    expect(kinds(c).map((k) => k[0])).toEqual([a]);
+    // The confirmed one first, then the other copy still in Review.
+    expect(kinds(c)).toEqual([[a, "same"], [b, "maybe"]]);
   });
 
   it("keep apart refuses a pair that is not a question, and keeps at most the newest ids", () => {

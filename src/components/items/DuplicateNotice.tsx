@@ -19,6 +19,8 @@ export function DuplicateNotice({ itemId, title, quantity, db, match }: { itemId
   const goneId = Math.max(itemId, old.id);
   const oldLink = <Link href={`/items/${old.id}`} className="font-semibold underline">{old.title}</Link>;
   const serial = found.kind === "same_numbered" ? serialText(old) : null;
+  // The other one is still in Review too: only a question (it is never combined by itself).
+  const waiting = old.status === "needs_review";
 
   return (
     <Notice tone={found.kind === "maybe" ? "warn" : "accent"}>
@@ -27,6 +29,8 @@ export function DuplicateNotice({ itemId, title, quantity, db, match }: { itemId
           thisIsOlder
             ? <p>This card was entered again later: {oldLink} (quantity {old.quantity}).</p>
             : <p>You already have this card: {oldLink} (quantity {old.quantity}).</p>
+        ) : waiting ? (
+          <p>This may be the same card as another one still waiting in Review: {oldLink}. If you scanned it twice, delete one of them. If you have two copies, keep both.</p>
         ) : found.kind === "maybe" ? (
           <p>This may be a card you already have: {oldLink}. The version differs or is open, or only one of them has a grade.</p>
         ) : (
@@ -67,7 +71,7 @@ export function DuplicateNotice({ itemId, title, quantity, db, match }: { itemId
         </form>
 
         <LinkButton href={`/items/${old.id}#edit`} variant="secondary" className="w-full" aria-label={`Open ${old.title} to fix it`}>
-          Open the old one to fix it
+          {waiting ? "Open the other one" : "Open the old one to fix it"}
         </LinkButton>
       </div>
     </Notice>

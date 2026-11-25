@@ -200,7 +200,14 @@ function classify(a: Side, b: Side, opts: { ignoreApart?: boolean } = {}): Dupli
   return open ? "maybe" : "same";
 }
 
-/** Live confirmed items that may be the same card (or sealed product) as this one, lowest id first. */
+/**
+ * Live items that may be the same card (or sealed product) as this one:
+ * confirmed ones first. For an item still in Review, then also the other
+ * items still in Review (the same card scanned twice before either was
+ * confirmed): always only a `maybe`, so never combined by itself. A
+ * confirmed item is only compared with confirmed ones, as before. Lowest id
+ * first within each.
+ */
 export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { ignoreApart?: boolean } = {}): DuplicateMatch[] {
   const item = db.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
   if (!item || (item.kind !== "card" && item.kind !== "sealed")) return [];
@@ -210,7 +217,7 @@ export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { i
     .where(and(
       liveItem,
       eq(items.kind, item.kind),
-      eq(items.status, "confirmed"),
+      item.status === "confirmed" ? eq(items.status, "confirmed") : undefined,
       ne(items.id, item.id),
       or(
         sameYear,
@@ -220,12 +227,15 @@ export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { i
       ),
     ))
     .orderBy(asc(items.id)).all();
-  const out: DuplicateMatch[] = [];
+  const confirmed: DuplicateMatch[] = [];
+  const waiting: DuplicateMatch[] = [];
   for (const c of candidates) {
     const kind = classify(me, sideOf(c), opts);
-    if (kind) out.push({ item: c, kind });
+    if (!kind) continue;
+    if (c.status === "confirmed") confirmed.push({ item: c, kind });
+    else waiting.push({ item: c, kind: "maybe" });
   }
-  return out;
+  return [...confirmed, ...waiting];
 }
 
 /** The items only, for callers that do not need the kind. */
@@ -242,8 +252,9 @@ export function serialText(item: Item): string | null {
 
 /**
  * Ids of live items that have at least one possible duplicate (any of the
- * three kinds), by the same rule as findDuplicateMatches: the other one
- * must be confirmed, and kept apart pairs are left out. For the "Possible
+ * three kinds), by the same rule as findDuplicateMatches: an item in
+ * Review meets confirmed ones and other ones in Review, a confirmed item
+ * only confirmed ones; kept apart pairs are left out. For the "Possible
  * duplicates" filter. Lowest id first.
  */
 export function duplicateIds(db: Db = getDb()): number[] {
@@ -271,12 +282,12 @@ export function duplicateIds(db: Db = getDb()): number[] {
       for (let j = i + 1; j < list.length; j++) {
         const a = list[i]!;
         const b = list[j]!;
+        if (!classify(a, b)) continue;
         const aConfirmed = a.item.status === "confirmed";
         const bConfirmed = b.item.status === "confirmed";
-        if (!aConfirmed && !bConfirmed) continue;
-        if (!classify(a, b)) continue;
-        if (bConfirmed) out.add(a.item.id);
-        if (aConfirmed) out.add(b.item.id);
+        // Each side counts when the other is one it is compared with.
+        if (bConfirmed || !aConfirmed) out.add(a.item.id);
+        if (aConfirmed || !bConfirmed) out.add(b.item.id);
       }
     }
   }

@@ -143,8 +143,9 @@ describe("processScan", () => {
     const fromMany = db.select().from(items).where(eq(items.scanId, many.scanId)).get()!;
     const fromOne = db.select().from(items).where(eq(items.scanId, one.scanId)).get()!;
     expect(fromMany.status).toBe("needs_review");
-    for (const scanned of [fromMany, fromOne]) {
-      expect(findDuplicateMatches(scanned.id, db).map((m) => [m.item.id, m.kind])).toEqual([[owned, "same"]]);
+    for (const [scanned, twin] of [[fromMany, fromOne], [fromOne, fromMany]] as const) {
+      // The other copy, also still in Review, is asked about too (only as a maybe).
+      expect(findDuplicateMatches(scanned.id, db).map((m) => [m.item.id, m.kind])).toEqual([[owned, "same"], [twin.id, "maybe"]]);
       expect(duplicateIds(db)).toContain(scanned.id);
     }
   });
