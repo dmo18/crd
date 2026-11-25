@@ -1,5 +1,13 @@
 # Status
 
+## Product run: more sure marks and walk-through fixes (2026-11-25, branch work/product, not deployed)
+- Reading: new rules for an honest second sign: a copyright mark read as a letter ("D1990 THETOPPS"); a short maker logo with one letter wrong ("tepps") only confirms a brand read elsewhere, never picks one; logo letters spaced by dots (UPPER over D.E.C.K); the back's set line year equal to the copyright year; a lone season row with its totals word misread; a "No." mark alone in a top corner of the back, read clearly; the whole name on the back without its space; the back's known first name over a misread front one; GUARD next to a football team is no basketball sign. Zero wrong fields and zero wrong sure fields on every bench set, tune and holdout.
+- Not readable, so still blank: Griffey #336 (cut off at the top of the photo); jones91 phone copy year and brand (copyright line about 3 px tall and blurred, the '91 logo not read).
+- Catalog: a listing that files the card under the player's own name is offered only when its number is the number read.
+- Many cards: photos are kept up to 4000 px (browser and server), so each card is cut from the photo as taken. The owner's two-card photo is itself only 924 by 2000 px (each card about 600 by 800), so Mills stays without year and brand there. A cut-out front shows as Front; a card read from its back alone keeps its cut-out as Back.
+- Duplicates: both scan modes already meet the same check (test added). The walk-through pair was missed because both items were still in Review: only confirmed items are compared. Open question for the owner.
+- An unknown address shows the app's own Not found page (signed out: sign in first, as before). Trim the photo shows for every photo the app did not cut, also on the smaller archive copy.
+
 ## Walk-through fixes (2026-11-25, branch work/product, not deployed)
 - Catalog: an unverified listing never replaces the card's details ("Use the catalog's values" is not offered for it; its facts sit under "From an unverified listing. Not checked."). A catalog product word ("Prizm", "Stadium Club") maps to maker as brand and product as set. Accents, case, punctuation and suffix forms are no difference; the more complete spelling stays.
 - Broken "Catalog not checked" sentence fixed; text slips (double period after Jr., see above, It is or They are, MyCardfolio named once, Normal size zoom); Look up again no longer repeats Not found.
