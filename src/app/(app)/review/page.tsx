@@ -2,7 +2,12 @@ import { count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { DeleteFailedScans } from "@/components/items/DeleteFailedScans";
 import { CatalogCandidates } from "@/components/items/CatalogCandidates";
-import { ItemRow } from "@/components/items/ItemRow";
+import { valueText } from "@/components/items/ItemRow";
+import { ReviewGroups, type ReviewGroupView } from "@/components/items/ReviewGroups";
+import { UndoNotice } from "@/components/manage/UndoNotice";
+import { latestUndoable } from "@/lib/items/bulk";
+import { REVIEW_GROUP_TITLES, REVIEW_GROUPS, reviewGroupOf } from "@/lib/items/review-groups";
+import type { ReactNode } from "react";
 import { ReviewRowActions } from "@/components/items/ReviewRowActions";
 import { Card, EmptyState, LinkButton, Notice, PageHeader } from "@/components/ui";
 import { getDb } from "@/db";
@@ -17,8 +22,6 @@ import { SerialAsk } from "@/components/items/SerialAsk";
 import { RookieAsk } from "@/components/items/RookieAsk";
 import { rookieAsk } from "@/lib/items/rookie";
 import { parseSuggestion } from "@/lib/items/serial";
-import { checkLine } from "@/lib/items/labels";
-import { fieldsToCheck } from "@/lib/catalog/sources";
 
 export const metadata = { title: "Review" };
 
@@ -44,6 +47,34 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
   const now = new Date();
   const rowById = new Map(rows.map((r) => [r.id, r]));
   const catalogViews = new Map(rows.map((r) => [r.id, reviewCatalogView(r, db, now)]));
+  const op = latestUndoable(db);
+  const undo = op ? { id: op.id, summary: op.summary, madeAt: op.at.getTime() } : null;
+
+  // Each item's group, its row and, folded away under "More for this card", the questions and tools it had before.
+  const groups: ReviewGroupView[] = REVIEW_GROUPS.map((id) => ({ id, ...REVIEW_GROUP_TITLES[id], rows: [] }));
+  const details: Record<number, ReactNode> = {};
+  for (const item of summaries) {
+    const full = rowById.get(item.id)!;
+    const dup = findDuplicateMatches(item.id, db)[0] ?? null;
+    const cat = catalogViews.get(item.id) ?? null;
+    const grouping = reviewGroupOf(full, { duplicate: dup, catalogDifferences: cat?.linked?.differences.map((d) => d.label) ?? [] });
+    groups.find((g) => g.id === grouping.group)!.rows.push({
+      id: item.id, title: item.title, thumb: item.thumb, value: valueText(item), check: grouping.check, reasons: grouping.reasons,
+    });
+    const serial = parseSuggestion(full.serialSuggested);
+    const rookie = rookieAsk(full);
+    details[item.id] = (
+      <>
+        {dup ? <DuplicateNotice itemId={item.id} title={item.title} quantity={item.quantity} match={dup} /> : null}
+        {cat ? (
+          <CatalogCandidates id={item.id} title={item.title} view={cat} notCheckedLine={cat.reason ? NOT_CHECKED_LINES[cat.reason] : null} />
+        ) : null}
+        {serial ? <SerialAsk itemId={item.id} title={item.title} view={serial} /> : null}
+        {rookie ? <RookieAsk itemId={item.id} title={item.title} view={rookie} /> : null}
+        <ReviewRowActions id={item.id} title={item.title} />
+      </>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -57,46 +88,16 @@ export default async function ReviewPage({ searchParams }: { searchParams: Promi
       ) : null}
       {failedScans > 0 ? <Card className="p-3"><DeleteFailedScans count={failedScans} /></Card> : null}
       {total === 0 ? (
-        <EmptyState
-          title="All caught up"
-          body="Scans the reader is unsure about will wait here for you."
-          action={<LinkButton href="/scan">Scan a card</LinkButton>}
-        />
+        <>
+          <UndoNotice offer={undo} message={null} />
+          <EmptyState
+            title="All caught up"
+            body="Scans the reader is unsure about will wait here for you."
+            action={<LinkButton href="/scan">Scan a card</LinkButton>}
+          />
+        </>
       ) : (
-        <ul className="flex flex-col gap-4">
-          {summaries.map((item) => {
-            const dup = findDuplicateMatches(item.id, db)[0] ?? null;
-            const cat = catalogViews.get(item.id) ?? null;
-            return (
-              <li key={item.id}>
-                <Card className="flex flex-col gap-3 p-3">
-                  <ItemRow item={item} />
-                  {dup ? <DuplicateNotice itemId={item.id} title={item.title} quantity={item.quantity} match={dup} /> : null}
-                  {cat ? (
-                    <CatalogCandidates
-                      id={item.id} title={item.title} view={cat}
-                      notCheckedLine={cat.reason ? NOT_CHECKED_LINES[cat.reason] : null}
-                    />
-                  ) : null}
-                  {(() => {
-                    const full = rowById.get(item.id);
-                    const serial = full ? parseSuggestion(full.serialSuggested) : null;
-                    const rookie = full ? rookieAsk(full) : null;
-                    const check = full ? checkLine(fieldsToCheck(full)) : null;
-                    return (
-                      <>
-                        {check ? <Notice tone="warn">{check}</Notice> : null}
-                        {serial ? <SerialAsk itemId={item.id} title={item.title} view={serial} /> : null}
-                        {rookie ? <RookieAsk itemId={item.id} title={item.title} view={rookie} /> : null}
-                      </>
-                    );
-                  })()}
-                  <ReviewRowActions id={item.id} title={item.title} />
-                </Card>
-              </li>
-            );
-          })}
-        </ul>
+        <ReviewGroups groups={groups} details={details} undo={undo} />
       )}
       {total > LIMIT ? <p className="text-sm text-muted">Showing the oldest {LIMIT}. The rest will show up as you clear these.</p> : null}
     </div>

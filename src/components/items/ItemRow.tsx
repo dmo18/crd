@@ -24,7 +24,7 @@ export function ItemBadges({ item }: { item: BadgeInfo }) {
   );
 }
 
-function valueText(item: ItemSummary): string {
+export function valueText(item: ItemSummary): string {
   if (item.waitingForVersion) return CHOOSE_VERSION_LINE;
   if (item.ownersValue && item.valueCents != null) return `Your value ${formatCents(item.valueCents)}`;
   if (item.lowCents != null && item.highCents != null && item.lowCents !== item.highCents) {

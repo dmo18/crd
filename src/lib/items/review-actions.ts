@@ -13,6 +13,9 @@ import { keepApart, mergeInto } from "./duplicates";
 import { deleteFailedScans } from "./remove";
 import { confirmItem, deleteItem } from "./update";
 import { refreshGuideQuietly } from "@/lib/valuation/guide/apply";
+import { errorKind, log } from "@/lib/log";
+import { MAX_BULK_IDS } from "./bulk";
+import { confirmFromReview } from "./review-confirm";
 
 const idSchema = z.coerce.number().int().positive().max(2_000_000_000);
 /** The candidate is chosen by its place in the list the server stored, never by its fields. */
@@ -144,4 +147,32 @@ export async function lookUpAgainAction(_prev: CatalogActionState, formData: For
   revalidatePath(`/items/${id.data}`);
   if (r.matched) await auditThisRequest("catalog_card_linked", "ok", `${itemLabel(id.data)} is ${r.matched}, matched by the app`);
   return { message: lookUpAgainLine(r) };
+}
+
+const reviewIdsSchema = z.array(z.number().int().positive().max(2_000_000_000))
+  .min(1, "Select at least one item first.")
+  .max(MAX_BULK_IDS, `Pick up to ${MAX_BULK_IDS} items at a time.`);
+
+/**
+ * "Confirm selected" on Review: confirms the chosen items as read and clears
+ * their "Check this" marks, as one change the Undo button can take back.
+ */
+export async function confirmReviewItemsAction(ids: unknown): Promise<{ changed: number; opId: number; summary: string } | { error: string }> {
+  await requireOwner();
+  const parsed = reviewIdsSchema.safeParse(ids);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Select the items again." };
+  let r: ReturnType<typeof confirmFromReview>;
+  try {
+    r = confirmFromReview(parsed.data);
+  } catch (err) {
+    log.error("review_confirm_failed", { error: errorKind(err) });
+    return { error: "Something went wrong. Nothing was changed. Try again." };
+  }
+  if ("error" in r) return r;
+  await auditThisRequest("bulk_edit", "ok", r.summary);
+  refreshGuideQuietly(r.ids);
+  refresh();
+  revalidatePath("/manage");
+  revalidatePath("/");
+  return { changed: r.changed, opId: r.opId, summary: r.summary };
 }
