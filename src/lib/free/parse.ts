@@ -2592,6 +2592,16 @@ function nameEcho(name: NameRead, back: Line[], nameLines: ReadonlySet<Line>): b
 const GRADE_RE =
   /\b(GEM\s*-?\s*MI?N?T|PRISTINE|NM\s*-?\s*MT\+?|EX\s*-?\s*MT|VG\s*-?\s*EX|MINT|NM|EX|VG|GOOD|FAIR|POOR)\s*\+?\s*(10|[1-9](?:\.5)?)(?![\d.])/;
 
+/**
+ * The number first, then the grade word, on one label line: how Beckett
+ * (BGS) prints it ("8 NM-MT", "8.5 NM-MT+", "9.5 GEM MINT") and newer SGC
+ * and CGC labels too. Only with a grader read; the word must follow the
+ * number directly, so a subgrade ("CENTERING 8.5") never counts.
+ */
+const GRADE_FIRST_RE =
+  /(?:^|[^\d.])(10|[1-9](?:\.5)?)\s*(GEM\s*-?\s*MI?N?T|PRISTINE|NM\s*-?\s*MT\+?|NM\s*\/\s*MINT\+?|EX\s*-?\s*MT|VG\s*-?\s*EX|MINT\+?|NM\+?|EX\+?|VG\+?|GOOD|FAIR|POOR)\b/;
+const SUBGRADE_WORD = /\b(CENTERING|CORNERS|EDGES|SURFACE|AUTO(?:GRAPH)?)\b/;
+
 type SlabFind = { grader: string | null; grade: string | null; certNumber: string | null };
 
 function findSlab(lines: Line[]): SlabFind | null {
@@ -2609,6 +2619,15 @@ function findSlab(lines: Line[]): SlabFind | null {
   else if (grader) {
     const m = new RegExp(`\\b${grader}\\s*(10|[1-9](?:\\.5)?)(?![\\d.])`).exec(all);
     if (m) grade = m[1];
+    else {
+      // Number then word, one clear line, no subgrade word on it; two lines saying different grades say nothing.
+      const found = new Set(lines.flatMap((l) => {
+        if (SUBGRADE_WORD.test(l.up)) return [];
+        const f = GRADE_FIRST_RE.exec(l.up);
+        return f ? [f[1]!] : [];
+      }));
+      if (found.size === 1) grade = [...found][0]!;
+    }
   }
   if (!grader && !grade) return null;
   let certNumber: string | null = null;

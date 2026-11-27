@@ -214,6 +214,22 @@ describe("parseCardText", () => {
     noDashes(p);
   });
 
+  it("reads the grade printed number first, as on Beckett, SGC and CGC labels (review 7)", () => {
+    const at = (rows: Row[]) => parseCardText(ocr(rows), null);
+    expect(at([["BECKETT GRADING SERVICES"], ["2003-04 TOPPS FINEST #133 LEBRON JAMES"], ["8 NM-MT"], ["0014087915"]]))
+      .toMatchObject({ grader: "BGS", grade: "8", certNumber: "0014087915" });
+    expect(at([["BGS"], ["8.5 NM-MT+"], ["0012345678"]]).grade).toBe("8.5");
+    expect(at([["BGS"], ["9.5 GEM MINT"], ["0012345678"]]).grade).toBe("9.5");
+    expect(at([["SGC"], ["1990 TOPPS #336 GRIFFEY"], ["10 PRISTINE"], ["1234567"]]).grade).toBe("10");
+    expect(at([["CGC"], ["9 MINT"], ["1234567890"]]).grade).toBe("9");
+    // Subgrades alone are no grade.
+    expect(at([["BGS"], ["CENTERING 9.5 CORNERS 8.5"], ["EDGES 9 NM"], ["0012345678"]]).grade).toBeNull();
+    // A number glued to another number is not a grade ("18 NM" is not 8).
+    expect(at([["BGS"], ["18 NM"], ["0012345678"]]).grade).toBeNull();
+    // Without a grader the number-first form is not read.
+    expect(at([["2003-04 TOPPS FINEST #133"], ["8 NM-MT"]]).grade).toBeNull();
+  });
+
   it("reads half grades and a slab label with no grader name", () => {
     const bgs = parseCardText(ocr([["BGS NM-MT 8.5 0012345678"], ["1986 FLEER #57 MICHAEL JORDAN"]]), null);
     expect(bgs.grader).toBe("BGS");
