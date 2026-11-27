@@ -26,6 +26,8 @@ export type ItemSummary = {
   thumb: string | null;
   /** A plain line the owner should see with the result ("Both photos show the front..."), or null. */
   notice: string | null;
+  /** What it was sold for, for a sold item (null when not written down or not sold). */
+  soldPriceCents: number | null;
 };
 
 export type ScanView = {
@@ -100,6 +102,7 @@ export function summarize(rows: Item[], db: Db = getDb()): ItemSummary[] {
     ...summaryValue(r),
     isRookie: r.isRookie, rarityTier: r.rarityTier, thumb: thumbs.get(r.id) ?? null,
     notice: parseFirstSuggestion(r.firstSuggestion)?.hold?.includes("front_twice") ? FRONT_TWICE : null,
+    soldPriceCents: r.status === "sold" ? r.soldPriceCents : null,
   }));
 }
 

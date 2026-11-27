@@ -27,6 +27,8 @@ export function ItemBadges({ item }: { item: BadgeInfo }) {
 }
 
 export function valueText(item: ItemSummary): string {
+  // A sold card shows what it sold for, not what it was worth (review 7).
+  if (item.status === "sold") return item.soldPriceCents != null ? `Sold for ${formatCents(item.soldPriceCents)}` : "Sold, no price written down";
   if (item.waitingForVersion) return CHOOSE_VERSION_LINE;
   if (item.ownersValue && item.valueCents != null) return `Your value ${formatCents(item.valueCents)}`;
   if (item.lowCents != null && item.highCents != null && item.lowCents !== item.highCents) {
