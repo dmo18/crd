@@ -510,7 +510,71 @@ export const connectionKeys = sqliteTable("connection_keys", {
   lastTestResult: text("last_test_result"),
 });
 
+/**
+ * A set the owner opened on the Sets screen (Milestone 15). Made only when the
+ * owner asks for its checklist or marks a card as wanted; the Sets list itself
+ * is built from the items. `key` is built only by setKeyOf() in
+ * src/lib/sets/identity.ts: year, brand, set name and sport as read on the
+ * items, case and accents ignored.
+ */
+export const cardSets = sqliteTable("card_sets", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  key: text("key").notNull().unique(),
+  sport: text("sport", { enum: SPORTS }),
+  year: integer("year").notNull(),
+  /** As the owner's items spell them, for the screen. */
+  brand: text("brand"),
+  setName: text("set_name"),
+  /** The catalog's set id, stored once found (S1a rule D finds it the same way). */
+  sourceSetId: text("source_set_id"),
+  /** When the checklist was last stored. Entries older than 30 days are cleared (storage policy). */
+  checklistAt: ts("checklist_at"),
+  /** False when the catalog said the list is cut short, or numbers are missing from it. */
+  checklistComplete: integer("checklist_complete", { mode: "boolean" }),
+  /** How many cards the catalog says the set has, when it says so. */
+  checklistTotal: integer("checklist_total"),
+  /** When the catalog was last asked and did not have this set. */
+  notInCatalogAt: ts("not_in_catalog_at"),
+  /** Why the last "Get the checklist" stopped (a catalog failure word), null after a full load. */
+  lastStop: text("last_stop"),
+  lastTryAt: ts("last_try_at"),
+  createdAt: ts("created_at").notNull().default(now),
+  updatedAt: ts("updated_at").notNull().default(now),
+});
+
+/** One card of a set's checklist as the catalog lists it. Replaced as a whole by "Get it again". */
+export const checklistEntries = sqliteTable("checklist_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  setId: integer("set_id").notNull().references(() => cardSets.id, { onDelete: "cascade" }),
+  /** Order in the catalog's list. */
+  position: integer("position").notNull(),
+  /** As the catalog prints it, e.g. "336". */
+  cardNumber: text("card_number"),
+  /** cleanCardNumber() of the number, used to match the owner's cards. Null when the entry has none. */
+  numberKey: text("number_key"),
+  player: text("player"),
+  team: text("team"),
+  sourceId: text("source_id"),
+  url: text("url"),
+}, (t) => [index("checklist_entries_set_idx").on(t.setId, t.numberKey)]);
+
+/**
+ * A card of a set the owner wants. Kept by number, not by checklist row, so it
+ * survives "Get it again". Dropped once the owner has the card.
+ */
+export const wantedCards = sqliteTable("wanted_cards", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  setId: integer("set_id").notNull().references(() => cardSets.id, { onDelete: "cascade" }),
+  numberKey: text("number_key").notNull(),
+  cardNumber: text("card_number"),
+  player: text("player"),
+  createdAt: ts("created_at").notNull().default(now),
+}, (t) => [uniqueIndex("wanted_cards_set_number_uq").on(t.setId, t.numberKey)]);
+
 export type Item = typeof items.$inferSelect;
+export type CardSetRow = typeof cardSets.$inferSelect;
+export type ChecklistEntryRow = typeof checklistEntries.$inferSelect;
+export type WantedCardRow = typeof wantedCards.$inferSelect;
 export type CatalogCardRow = typeof catalogCards.$inferSelect;
 export type NewCatalogCardRow = typeof catalogCards.$inferInsert;
 export type CatalogSourceRow = typeof catalogSources.$inferSelect;
