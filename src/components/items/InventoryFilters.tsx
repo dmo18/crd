@@ -1,5 +1,6 @@
 import { FilterSheet } from "@/components/items/FilterSheet";
 import { SmartChips } from "@/components/items/SmartChips";
+import { SubmitOnChange } from "@/components/items/SubmitOnChange";
 import { Button, Field, INPUT_CLASS, LinkButton } from "@/components/ui";
 import { ITEM_KINDS, ITEM_STATUSES, RARITY_TIERS, SPORTS, type Location } from "@/db/schema";
 import { KIND_LABELS, RARITY_LABELS, SPORT_LABELS } from "@/lib/items/labels";
@@ -81,9 +82,9 @@ export function InventoryFilters({ filters, locations, action = "/items" }: {
           placeholder="Player, set, team, number" className={INPUT_CLASS} />
       </Field>
       <Field label="Sort by" htmlFor="inv-sort">
-        <select id="inv-sort" name="sort" defaultValue={filters.sort} className={INPUT_CLASS}>
+        <SubmitOnChange id="inv-sort" name="sort" defaultValue={filters.sort} className={INPUT_CLASS}>
           {SORT_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
+        </SubmitOnChange>
       </Field>
       <FilterSheet count={count} clearHref={action}>
         <Field label="Kind" htmlFor="inv-kind">
