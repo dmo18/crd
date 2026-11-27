@@ -214,6 +214,41 @@ describe("parseCardText", () => {
     noDashes(p);
   });
 
+  it("a front that prints only the surname, read whole, keeps the back's name as read; a logo with one letter lost confirms the copyright maker (review 7)", () => {
+    // [text, y, x, w, h]
+    const front: Row[] = [["TPPS", 0.14, 0.13, 0.1, 0.03], ["HASLETT", 0.14, 0.64, 0.28, 0.71], ["55", 0.45, 0.19, 0.18, 0.18]];
+    const back: Row[] = [
+      ["JIM HASLETT", 0.07, 0.33, 0.49, 0.08], ["204", 0.09, 0.17, 0.1, 0.05], ["BUFFALO", 0.12, 0.33, 0.17, 0.04], ["BILLS", 0.14, 0.33, 0.11, 0.04],
+      ["INSIDE LINEBACKER", 0.17, 0.56, 0.28, 0.04], ["Jim's most productive game of 1984", 0.22, 0.18, 0.68, 0.04],
+      ["saw him make 16 tackles vs. Patriots, November 11th. He was", 0.26, 0.17, 0.68, 0.04],
+      ["\u00a9 1985 TOPPS CHEWING GUM, INC. PRTD. IN U.S.A.", 0.9, 0.17, 0.68, 0.03],
+    ];
+    const p = parseCardText(ocr(front), ocr(back));
+    expect(p).toMatchObject({ player: "Jim Haslett", brand: "Topps", year: 1985 });
+    expect(p.certainty).toMatchObject({ player: "sure", brand: "sure" });
+    // Without the logo the copyright alone is one sign.
+    expect(parseCardText(ocr(front.slice(1)), ocr(back)).certainty.brand).toBe("unsure");
+    // "TOPS" is a word too, but on a short line it only confirms what the copyright says; it never names a maker.
+    expect(parseCardText(ocr([["TPPS", 0.14, 0.13, 0.1, 0.03], ["HASLETT", 0.14, 0.64, 0.28, 0.71]]), null).brand).toBeNull();
+  });
+
+  it("a city alone under the name is the one team of that city in the sport, never sure (review 7)", () => {
+    // [text, y, x, w, h]
+    const front: Row[] = [["RONALD ACUNA JR.", 0.83, 0.29, 0.5, 0.06], ["ATLANTA", 0.88, 0.48, 0.13, 0.02]];
+    const back: Row[] = [["No. SG-4", 0.08, 0.1, 0.15, 0.04], ["RONALD ACUNA JR.", 0.46, 0.25, 0.49, 0.05], ["ATLANTA", 0.51, 0.43, 0.14, 0.03],
+      ["2021 PANINI - PRIZM BASEBALL", 0.69, 0.4, 0.23, 0.03], ["Officialy Licensed Product of MLB Players, Inc.", 0.72, 0.35, 0.33, 0.03]];
+    const p = parseCardText(ocr(front), ocr(back));
+    expect(p.sport).toBe("baseball");
+    expect(p.team).toBe("Atlanta Braves");
+    expect(p.certainty.team).toBe("unsure");
+    // Two baseball teams in the city: nothing.
+    const chicago = parseCardText(ocr([["FRANK THOMAS", 0.83, 0.29, 0.5, 0.06], ["CHICAGO", 0.88, 0.48, 0.13, 0.02]]), ocr(back.slice(3)));
+    expect(chicago.team).toBeNull();
+    // A city far from the name (a birthplace in the bio) is not read as the team.
+    const far = parseCardText(ocr([["RONALD ACUNA JR.", 0.2, 0.29, 0.5, 0.06], ["ATLANTA", 0.7, 0.48, 0.13, 0.02]]), ocr(back.slice(3)));
+    expect(far.team).toBeNull();
+  });
+
   it("reads the grade printed number first, as on Beckett, SGC and CGC labels (review 7)", () => {
     const at = (rows: Row[]) => parseCardText(ocr(rows), null);
     expect(at([["BECKETT GRADING SERVICES"], ["2003-04 TOPPS FINEST #133 LEBRON JAMES"], ["8 NM-MT"], ["0014087915"]]))

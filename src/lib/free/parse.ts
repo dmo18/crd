@@ -951,7 +951,8 @@ function brandHits(lines: Line[]): BrandHit[] {
     // only a second place that agrees with a brand read elsewhere.
     if (l.tokens.length <= 2 && !copyright && !isSentence(l) && !hits.some((h) => h.line === l)) {
       for (const word of l.lz.split(/[^A-Z]+/)) {
-        const def = CONFIRM_LOGOS.find((d) => d.word.length === word.length && editDistance(d.word, word) === 1);
+        // One letter wrong, or one letter lost ("TPPS": the logo read from a smaller cut-out).
+        const def = CONFIRM_LOGOS.find((d) => (d.word.length === word.length || (word.length >= 4 && d.word.length === word.length + 1)) && editDistance(d.word, word) === 1);
         const brand = def && BRANDS.find((b) => b.key === def.key);
         if (brand) hits.push({ def: brand, line: l, score: 0, logo: false, confirmOnly: true });
       }
@@ -965,7 +966,7 @@ function makerLines(hits: BrandHit[]): Set<Line> {
   return new Set(hits.filter((h) => !h.confirmOnly).map((h) => h.line));
 }
 
-/** Short maker logos that, read with one letter wrong, only confirm a brand read elsewhere. */
+/** Short maker logos that, read with one letter wrong or lost, only confirm a brand read elsewhere. */
 const CONFIRM_LOGOS: { word: string; key: string }[] = [
   { word: "TOPPS", key: "topps" }, { word: "FLEER", key: "fleer" }, { word: "SCORE", key: "score" }, { word: "PANINI", key: "panini" },
 ];
@@ -1632,6 +1633,30 @@ function resolveTeam(group: NickGroup, line: Line, lines: Line[], year: number |
   let pick = entries[entries.length - 1];
   if (year != null) pick = entries.find((t) => year >= t.from && year <= t.to) ?? pick;
   return { team: `${pick.city} ${pick.nick}`, sport: pick.sport, ambiguous: false, line, fuzzy, city: withCity.length > 0 };
+}
+
+/**
+ * The team of a city printed alone right under the player's name: a line
+ * that is only a city (one or two words, no sentence), starting just below
+ * a name line and overlapping it sideways. Only when exactly one team of
+ * that sport played in that city in the card's year (Chicago and New York
+ * have two baseball teams: nothing). Null otherwise.
+ */
+function teamFromCityUnderName(lines: Line[], nameLines: ReadonlySet<Line>, sport: Sport, year: number | null): string | null {
+  const found = new Set<string>();
+  for (const l of lines) {
+    if (nameLines.has(l) || l.tokens.length > 3 || isSentence(l)) continue;
+    const words = l.up.replace(/[^A-Z ]/g, " ").replace(/\s+/g, " ").trim();
+    if (!words) continue;
+    const below = [...nameLines].some((n) => n.side === l.side && l.box.y >= n.box.y + n.box.h * 0.5
+      && l.box.y <= n.box.y + n.box.h * 2.5 && l.box.x < n.box.x + n.box.w && n.box.x < l.box.x + l.box.w);
+    if (!below) continue;
+    const here = TEAMS.filter((t) => t.sport === sport && t.city.toUpperCase() === words
+      && (year == null || (year >= t.from && year <= t.to)));
+    if (here.length === 1) found.add(`${here[0]!.city} ${here[0]!.nick}`);
+    else if (here.length > 1) return null;
+  }
+  return found.size === 1 ? [...found][0]! : null;
 }
 
 /**
@@ -2450,9 +2475,16 @@ function choosePlayer(front: Line[], back: Line[]): PlayerPick {
       });
       if (hit) {
         chosen = hit;
-        agree = true;
         suffix = hit.suffix;
-        fromBanner = true;
+        // The front shows the whole surname and nothing more (cards that
+        // print only the surname, 1985 Topps football "HASLETT"): nothing was
+        // lost or misread, so the back's name is taken as read, and is sure
+        // only with a second sign of it on the back (as for a back heading).
+        const sur = hit.words[hit.words.length - 1].toUpperCase().replace(/[^A-Z]/g, "");
+        if (word !== sur) {
+          agree = true;
+          fromBanner = true;
+        }
         nameLines.add(g);
         nameLines.add(hit.line);
         break;
@@ -2965,6 +2997,17 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
     ev.push(`Read signs of more than one sport: ${[top, ...others.map(([sp]) => sp)].join(", ")}`);
   } else if (top && (kinds.get(top) || out.teamHintSport === top)) out.sport = top;
   if (olympic) ev.push("Olympic card: sport other, no team");
+  // A card that prints only the city under the player's name (cards made
+  // without the league's team names, "RONALD ACUNA JR." over "ATLANTA"): the
+  // one team of that city in the card's sport and year, never sure.
+  let cityTeam: string | null = null;
+  if (!olympic && out.team == null && out.teamHint == null && out.sport) {
+    cityTeam = teamFromCityUnderName([...front, ...back], players.nameLines, out.sport, out.year);
+    if (cityTeam) {
+      out.team = cityTeam;
+      ev.push(`Read the city under the name: maybe team ${cityTeam} (not sure, check it)`);
+    }
+  }
 
   // A season sport card (basketball, hockey, soccer) with only a copyright
   // year: the copyright may show either year of the season (\u00a91993 on a
@@ -2985,7 +3028,7 @@ function parseCardInner(front: Line[], back: Line[]): ParsedCard {
     cardNumber: numberFind?.sure === true,
     setName: setSure(pick, out.setName),
     sport: !olympic && out.sport != null && [...(kinds.get(out.sport) ?? [])].length >= 2 && others.length === 0,
-    team: out.team != null && team != null && (team.city || team.twoPlaces === true),
+    team: cityTeam == null && out.team != null && team != null && (team.city || team.twoPlaces === true),
   };
   for (const f of CERTAIN_FIELDS) {
     if (out[f] != null) out.certainty[f] = sure[f] ? "sure" : "unsure";

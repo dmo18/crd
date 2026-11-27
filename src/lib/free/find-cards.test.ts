@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Box } from "@/lib/recognition/types";
 import fs from "node:fs";
 import { LIVE_MANY_PHOTOS } from "../../../tests/helpers/ocr-fixture";
-import { cardTilt, findCardBoxes } from "./find-cards";
+import { cardTilt, findCardBoxes, findSingleCard } from "./find-cards";
 
 const COLORS = ["#c0392b", "#2471a3", "#d4ac0d", "#7d3c98", "#1e8449", "#ca6f1e", "#566573", "#a93226", "#17a589"];
 
@@ -251,5 +251,19 @@ describe("cards on a dark desk with glare and clutter (owner scan 8)", () => {
       const hit = boxes.find((b) => Math.abs(b.x - d.x / W) < 0.05 && Math.abs(b.y - d.y / H) < 0.05);
       expect(hit, `card at ${d.x},${d.y}`).toBeDefined();
     }
+  });
+});
+
+describe("findSingleCard (review 7: the one card crop)", () => {
+  it("finds one landscape card with a black border on a dark desk; nothing for two cards", async () => {
+    const W = 920;
+    const H = 2000;
+    const drawn = { x: 20, y: 780, w: 880, h: 640 };
+    const one = await render(W, H, "#1c1c22", card(drawn, "#7d3c98", "#050505"));
+    const found = await findSingleCard(one);
+    expect(found).not.toBeNull();
+    expectNear(found!, drawn, W, H);
+    const two = await render(W, H, "#1c1c22", card({ x: 40, y: 300, w: 400, h: 560 }, "#c0392b", "#f2efe6") + card({ x: 480, y: 300, w: 400, h: 560 }, "#2471a3", "#f2efe6"));
+    expect(await findSingleCard(two)).toBeNull();
   });
 });

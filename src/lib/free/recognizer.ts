@@ -343,8 +343,8 @@ export class FreeRecognizer implements Recognizer {
   private async single(photos: RecognitionPhoto[]): Promise<ReadCard> {
     const front = photos.find((p) => p.role === "front") ?? photos[0];
     const back = photos.find((p) => p.role === "back");
-    const frontText = await this.read(front.data);
-    const backText = back ? await this.read(back.data, { back: true }) : null;
+    const frontText = await this.read(front.data, { oneCard: true });
+    const backText = back ? await this.read(back.data, { back: true, oneCard: true }) : null;
     // The second photo shows the front again: it is no second sign of
     // anything, so the card is read from the front alone, and the owner is
     // told to add the back.

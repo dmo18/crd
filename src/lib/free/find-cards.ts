@@ -820,6 +820,21 @@ export async function findCardShapes(image: Buffer): Promise<CardShape[]> {
   return order.map((b) => out.find((s) => s.box === b)!).slice(0, MAX_BOXES);
 }
 
+/**
+ * The one card of a one card photo, as the many-cards finder sees it (its
+ * masks cope with a dark desk and glare): a box, or null when it finds no
+ * card or more than one. The caller still checks that the box is card
+ * shaped and holds every text line.
+ */
+export async function findSingleCard(image: Buffer): Promise<Box | null> {
+  const work = await workImage(image);
+  if (!work) return null;
+  const found = await findCards(work);
+  if (found.length !== 1) return null;
+  const b = found[0]!.box;
+  return { x: b.x0 / work.width, y: b.y0 / work.height, w: (b.x1 - b.x0 + 1) / work.width, h: (b.y1 - b.y0 + 1) / work.height };
+}
+
 export async function findCardBoxes(image: Buffer): Promise<Box[]> {
   return (await findCardShapes(image)).map((s) => s.box);
 }

@@ -344,6 +344,43 @@ describe("turnWithTrust (S1b)", () => {
   });
 });
 
+describe("a quarter turn the text did not settle (review 7: a small sideways back)", () => {
+  const tall = (x: number, turned: boolean, text: string) => ({ text, score: 0.9, turned, box: [[x, 50], [x + 30, 50], [x + 30, 450], [x, 450]] as [number, number][] });
+  const wide = (y: number, text: string) => ({ text, score: 0.95, turned: false, box: [[50, y], [450, y], [450, y + 30], [50, y + 30]] as [number, number][] });
+  // Lines leaning both ways: turn 90, not trusted.
+  const sideways = { width: 500, height: 700, lines: [tall(10, true, "TIM HARDAWAY"), tall(60, true, "PRO TOTALS 308"), tall(110, false, "GOLDEN STATE"), tall(160, false, "BORN 9/1/66")] };
+  const upright = { width: 700, height: 500, lines: ["TIM HARDAWAY", "GOLDEN STATE WARRIORS", "BORN 9/1/66 CHICAGO", "PRO TOTALS 308 464 770", "1993 FLEER CORP"].map((t, i) => wide(30 + i * 60, t)) };
+  const garbled = { width: 700, height: 500, lines: [wide(30, "99"), wide(90, "or")] };
+  function engineOf(reads: WorkerRead[]): OcrEngine & { calls: number } {
+    return { calls: 0, async read() { return reads[Math.min(this.calls++, reads.length - 1)]!; }, status: () => "ready", close: async () => undefined } as OcrEngine & { calls: number };
+  }
+
+  it("the other quarter turn is read once and settles the picture's turn when it reads clearly more than the first turn", async () => {
+    const engine = engineOf([sideways, garbled, upright]);
+    const result = await createTextReader(engine).read(await photo(500, 700));
+    expect(result.fix).toMatchObject({ turn: 270, turnTrusted: true });
+    // The text stays the photo's own read (a line printed the other way is not lost).
+    expect(result.text).toContain("PRO TOTALS 308");
+    expect(result.text).not.toContain("GOLDEN STATE WARRIORS");
+    expect(engine.calls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("when the other turn reads no better, nothing is turned and the photo's own read stays", async () => {
+    const engine = engineOf([sideways, garbled, garbled]);
+    const result = await createTextReader(engine).read(await photo(500, 700));
+    expect(result.fix).toMatchObject({ turn: 90, turnTrusted: false });
+    expect(result.text).toContain("TIM HARDAWAY");
+  });
+
+  it("a trusted turn that the re-read confirms makes no extra read", async () => {
+    const agree = { width: 500, height: 700, lines: [tall(10, true, "TIM HARDAWAY"), tall(60, true, "PRO TOTALS"), tall(110, true, "GOLDEN STATE")] };
+    const engine = engineOf([agree, upright, upright]);
+    const result = await createTextReader(engine).read(await photo(500, 700));
+    expect(result.fix).toMatchObject({ turn: 90, turnTrusted: true });
+    expect(result.passes).toBe(2);
+  });
+});
+
 describe("boxOf", () => {
   it("is the upright box around four corners, inside the picture", () => {
     const b = boxOf([[10, 20], [110, 25], [108, 60], [8, 55]], 200, 100)!;

@@ -3,6 +3,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import type { Box, ReadFix } from "@/lib/recognition/types";
 import { cornerBoxes, cropBox, findCard, joinSpacedLetters, keepCornerLine, mapBox, overlapShare, spacedBands, toView } from "./card-picture";
+import { findSingleCard } from "./find-cards";
 import { ReaderDownError, WorkerClient, type OcrEngine, type ReaderStatus, type WorkerLine, type WorkerRead } from "./ocr-worker";
 
 /**
@@ -55,6 +56,8 @@ export type ReadOptions = {
    * says yes the corners are read again as for `back`.
    */
   backIf?: (read: OcrResult) => boolean;
+  /** A photo of one card (a one card scan): its card may also be found by the many-cards finder. */
+  oneCard?: boolean;
 };
 export interface TextReader {
   read(image: Buffer, options?: ReadOptions): Promise<OcrResult>;
@@ -72,6 +75,8 @@ const TALL = 1.5;
 const UPSIDE_DOWN_SHARE = 0.7;
 /** The upright re-read of a sideways photo wins unless it scores below this share of the first read. */
 const UPRIGHT_SHARE = 0.8;
+/** The other quarter turn wins only when it reads this many times what the first one did. */
+const OTHER_TURN_WINS = 1.5;
 /** The photo is kept at most this large for the crops (corners need the detail). */
 const BASE_EDGE = 2400;
 /** The card is cut out of the photo when it covers less than this share of it. */
@@ -392,7 +397,24 @@ async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions,
     card = null;
   }
   let sure = best.filter((l) => l.confidence >= 0.6);
-  const cardSure = found != null && sure.length > 0 && sure.filter((l) => overlapShare(l.box, found!) >= 0.9).length >= CARD_HOLDS_TEXT * sure.length;
+  const holdsText = (b: Box | null) => b != null && sure.length > 0 && sure.filter((l) => overlapShare(l.box, b) >= 0.9).length >= CARD_HOLDS_TEXT * sure.length;
+  let cardSure = holdsText(found);
+  // A one card photo whose card the plain finder missed (a small card on a
+  // dark desk, glare): the many-cards finder, whose masks cope with those,
+  // is asked when it sees exactly one card. Its box is then held to the same
+  // test (it must hold the text); cutting the photo has its own conditions.
+  if (options.oneCard && !options.quick && !cardSure) {
+    try {
+      const one = await findSingleCard(base);
+      if (one && holdsText(one)) {
+        found = one;
+        cardSure = true;
+        card = cropBox(found, sure.map((l) => l.box));
+      }
+    } catch {
+      // The plain finder's answer stands.
+    }
+  }
   // A piece of another card at the edge of the photo (owner scan 11: part of
   // a Mills back over the top of a Milacki back): when the card found fills
   // much of the photo and holds most of the text, lines well clear of it are
@@ -455,6 +477,24 @@ async function readInner(engine: OcrEngine, image: Buffer, options: ReadOptions,
     } else if (turn) {
       // The upright re-read did not confirm the turn.
       fix.turnTrusted = false;
+      // A quarter turn the text did not settle (its lines lean both ways, as on
+      // a small sideways back cut from a photo of several cards) may be the
+      // other quarter turn: read that way once. It settles the turn of the
+      // stored picture when it reads as much as a turn must (UPRIGHT_SHARE of
+      // the photo as it lies) and clearly more than the first quarter turn
+      // (OTHER_TURN_WINS times). The text read stays the photo's own: a line
+      // printed across the other way (a copyright line along the long edge)
+      // would be lost in the turned read.
+      if (!turnSure && (turn === 90 || turn === 270)) {
+        const other = turn === 90 ? 270 : 90;
+        const otherRead = await reread((await part(base, { region, turn: other, edge: LONG_EDGE, maxUp: region ? MAX_UP : 1 })).png);
+        if (otherRead) passes++;
+        const s3 = otherRead ? score(linesFrom(otherRead)) : 0;
+        if (otherRead && s3 >= UPRIGHT_SHARE * score(best) && s3 >= OTHER_TURN_WINS * score(second)) {
+          fix.turn = other;
+          fix.turnTrusted = true;
+        }
+      }
     }
   }
   if (options.quick) return summarize(best, passes, crops);
