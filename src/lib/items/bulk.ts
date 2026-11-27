@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, inArray, isNotNull, isNull, lt, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lt, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, type Db } from "@/db";
 import {
@@ -538,10 +538,9 @@ export function latestUndoable(db: Db = getDb(), now: Date = new Date()): Undoab
   const row = db.select({ id: bulkOps.id, at: bulkOps.at, summary: bulkOps.summary, itemCount: bulkOps.itemCount, action: bulkOps.action, undo: bulkOps.undo, undoneAt: bulkOps.undoneAt })
     .from(bulkOps).orderBy(desc(bulkOps.id)).limit(1).get();
   if (!row || row.undoneAt || row.at.getTime() < now.getTime() - BULK_KEEP_DAYS * DAY_MS) return null;
-  const { undo, undoneAt: _undone, ...rest } = row;
-  const op: UndoableOp = { ...rest, from: undoOrigin(undo) };
+  const op: UndoableOp = { id: row.id, at: row.at, summary: row.summary, itemCount: row.itemCount, action: row.action, from: undoOrigin(row.undo) };
   // A delete whose items were all put back by hand from Recently deleted: its Undo would do nothing.
-  if (op.action === "delete" && !deleteStillInBin(db, op.at, undo)) return null;
+  if (op.action === "delete" && !deleteStillInBin(db, op.at, row.undo)) return null;
   return op;
 }
 
