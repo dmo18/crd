@@ -37,6 +37,21 @@ describe("findDuplicates", () => {
     expect(mergeInto(blank, full, db)).toMatchObject({ ok: false, problem: "maybe" });
   });
 
+  it("the number blank on one side: the same player, year and brand is a maybe; any of them different, or two numbers, is not (review 7)", () => {
+    const mills = { sport: "other", year: 1991, brand: "Impel", setName: null, cardNumber: "24", player: "Billy Mills" } as const;
+    const full = add(mills);
+    const blank = add({ ...mills, status: "needs_review", cardNumber: null });
+    add({ ...mills, cardNumber: null, year: 1992 });
+    add({ ...mills, cardNumber: null, brand: "Topps" });
+    add({ ...mills, cardNumber: null, player: "Bob Mills" });
+    // Both numbered, different numbers: two cards. A blank number may be either of them.
+    const other = add({ ...mills, cardNumber: "25" });
+    expect(kinds(full)).toEqual([]);
+    expect(kinds(blank)).toEqual([[full, "maybe"], [other, "maybe"]]);
+    expect(duplicateIds(db)).toEqual([blank]);
+    expect(mergeInto(blank, full, db)).toMatchObject({ ok: false, problem: "maybe" });
+  });
+
   it("matches ignoring case and whitespace", () => {
     const a = add({ status: "needs_review", player: " ken GRIFFEY jr. ", brand: "upper deck " });
     const b = add();

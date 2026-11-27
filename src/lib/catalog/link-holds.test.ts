@@ -69,6 +69,34 @@ describe("fix 1: the reader's hold backs survive an automatic link", () => {
   });
 });
 
+describe("review 7: the automatic link never files a possible copy of a card already in the collection", () => {
+  it("a scanned card with a verified match and a confirmed twin is linked but waits; Look up again does the same", async () => {
+    const owned = scanned({});
+    db.update(items).set({ status: "confirmed" }).where(eq(items.id, owned)).run();
+    const id = scanned({});
+    expect(autoLinkIn(db, id, T0)).toBe(true);
+    expect(get(id)).toMatchObject({ status: "needs_review" });
+    expect(get(id).catalogCardId).not.toBeNull();
+
+    const later = scanned({});
+    db.update(items).set({ catalogCandidates: null }).where(eq(items.id, later)).run();
+    const catalog = new FakeCatalog({ searches: { "1992 donruss 101 milacki": MILACKI } });
+    const r = await lookUpAgain(later, { db, catalog, now: () => T0 });
+    expect(r.ok && r.matched).toBe("1992 Donruss #101 Bob Milacki");
+    expect(get(later).status).toBe("needs_review");
+  });
+
+  it("a card the owner already confirmed is never sent back to Review by Look up again", async () => {
+    const first = scanned({});
+    const mine = scanned({});
+    db.update(items).set({ status: "confirmed", catalogCandidates: null }).where(eq(items.id, mine)).run();
+    db.update(items).set({ status: "confirmed" }).where(eq(items.id, first)).run();
+    const catalog = new FakeCatalog({ searches: { "1992 donruss 101 milacki": MILACKI } });
+    await lookUpAgain(mine, { db, catalog, now: () => T0 });
+    expect(get(mine).status).toBe("confirmed");
+  });
+});
+
 describe("fix 2: a value from the catalog's set list never confirms itself", () => {
   it("a blank filled from the set list is marked checklist, kept out of the first reading, and asked about", () => {
     const id = scanned({ checklist: ["player"], certainty: { year: "sure", brand: "sure", cardNumber: "sure", player: "sure" } });

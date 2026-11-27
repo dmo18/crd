@@ -77,6 +77,13 @@ describe("a scan with the catalog (fake, recorded answers, no network)", () => {
     expect(again.items[0]).toMatchObject({ sourceId: "551033" });
   });
 
+  it("the automatic link does not file a card that may already be in the collection: linked, but waiting in Review (review 7)", async () => {
+    db.insert(items).values({ kind: "card", title: "1990 Topps #336 Ken Griffey Jr.", status: "confirmed", sport: "baseball", year: 1990, brand: "Topps", cardNumber: "336", player: "Ken Griffey Jr." }).run();
+    const item = await scanWith(WITH_NUMBER, new FakeCatalog());
+    expect(item.catalogCardId).not.toBeNull();
+    expect(item.status).toBe("needs_review");
+  });
+
   it("base and Tiffany both agree: the base is linked, the version stays an open question, assumed and not the owner's answer", async () => {
     const griffey = recordedSearch("search_1990_topps_griffey.json");
     const base = griffey.find((c) => c.sourceId === "551033")!;

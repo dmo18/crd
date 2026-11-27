@@ -7,6 +7,7 @@ import { fixPhoto } from "@/lib/items/photos";
 import { planFix } from "./photo-fix";
 import { cropStored, cutStored, ImageError, readForRecognition, type StoredImage } from "@/lib/images/store";
 import { autoLinkIn } from "@/lib/catalog/pick";
+import { holdIfDuplicate } from "@/lib/items/duplicates";
 import { itemFromRecognition } from "@/lib/items/from-recognition";
 import { getRecognizer } from "@/lib/recognition";
 import { checkScanStreak } from "@/lib/audit/alert-rules";
@@ -174,9 +175,11 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
     const valueSource: ValueSource = recognizer.name === "sample" ? "sample" : "ai_estimate";
     const at = now();
     db.transaction((tx) => {
+      const made: number[] = [];
       recognized.forEach((r: RecognizedItem, i: number) => {
         const row = itemFromRecognition(r, { scanId, locationId: scan.locationId, valueSource, now: at, recognizer: recognizer.name, uncut });
         const item = tx.insert(items).values(row).returning().get();
+        made.push(item.id);
         if (r.kind === "card" && r.catalog?.status === "matched") linkVerifiedMatch(tx as unknown as Db, item.id, at);
         if (row.estValueCents != null) {
           tx.insert(valuations).values({
@@ -190,6 +193,8 @@ export async function processScan(scanId: number, deps: ProcessDeps = {}): Promi
         const back = backs.get(i);
         if (back) tx.insert(images).values({ itemId: item.id, scanId, role: "back", ...back }).run();
       });
+      // A card that may be one already in the collection (or another card of this scan) waits in Review.
+      for (const id of made) holdIfDuplicate(id, tx as unknown as Db);
       // One-item scans: the photos themselves belong to that item.
       if (scan.mode !== "multi" && recognized.length === 1) {
         // Not filtered by liveItem: the item was made a moment ago in this transaction.

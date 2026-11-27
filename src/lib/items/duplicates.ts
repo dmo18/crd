@@ -95,13 +95,32 @@ function whoKey(item: DupRow): string | null {
  * its year or brand).
  */
 function sameWithBlanks(a: DupRow, b: DupRow): boolean {
-  const k = whoKey(a);
-  if (!k || k !== whoKey(b)) return false;
   const fits = (x: string, y: string) => x === "" || y === "" || x === y;
+  const k = whoKey(a);
+  if (!k || k !== whoKey(b)) return sameButNumber(a, b) && fits(normalizeText(a.setName ?? ""), normalizeText(b.setName ?? "")) && fits(a.sport ?? "", b.sport ?? "");
   return fits(a.year == null ? "" : String(a.year), b.year == null ? "" : String(b.year))
     && fits(normalizeBrand(a.brand ?? ""), normalizeBrand(b.brand ?? ""))
     && fits(normalizeText(a.setName ?? ""), normalizeText(b.setName ?? ""))
     && fits(a.sport ?? "", b.sport ?? "");
+}
+
+/** Player, year and brand, for a card whose number is blank on one side. */
+function whenKey(item: DupRow): string | null {
+  const who = normalizeName(item.player ?? "");
+  const brand = normalizeBrand(item.brand ?? "");
+  return who && item.year != null && brand ? `${who}|${item.year}|${brand}` : null;
+}
+
+/**
+ * The same player, year and brand, with the card number blank on exactly
+ * one side (a number cut off by the photo's edge): only a question.
+ */
+function sameButNumber(a: DupRow, b: DupRow): boolean {
+  const k = whenKey(a);
+  if (!k || k !== whenKey(b)) return false;
+  const na = printedCardNumber(a.cardNumber ?? "");
+  const nb = printedCardNumber(b.cardNumber ?? "");
+  return (na === "") !== (nb === "");
 }
 
 const UNGRADED = JSON.stringify(["", ""]);
@@ -208,7 +227,7 @@ function classify(a: Side, b: Side, opts: { ignoreApart?: boolean } = {}): Dupli
  * confirmed item is only compared with confirmed ones, as before. Lowest id
  * first within each.
  */
-export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { ignoreApart?: boolean } = {}): DuplicateMatch[] {
+export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { ignoreApart?: boolean; againstAll?: boolean } = {}): DuplicateMatch[] {
   const item = db.select().from(items).where(and(eq(items.id, itemId), liveItem)).get();
   if (!item || (item.kind !== "card" && item.kind !== "sealed")) return [];
   const me = sideOf(item);
@@ -217,7 +236,7 @@ export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { i
     .where(and(
       liveItem,
       eq(items.kind, item.kind),
-      item.status === "confirmed" ? eq(items.status, "confirmed") : undefined,
+      item.status === "confirmed" && !opts.againstAll ? eq(items.status, "confirmed") : undefined,
       ne(items.id, item.id),
       or(
         sameYear,
@@ -236,6 +255,22 @@ export function findDuplicateMatches(itemId: number, db: Db = getDb(), opts: { i
     else waiting.push({ item: c, kind: "maybe" });
   }
   return [...confirmed, ...waiting];
+}
+
+/**
+ * A card just read (a scan of any kind, or the app's own catalog link) is
+ * never filed by itself when it may be a card already in the collection:
+ * compared with every live item, confirmed or in Review, by the duplicate
+ * rule, and when one matches it goes back to Review ("Needs a look", "May be
+ * a card you already have"). Items the owner kept apart do not count. True
+ * when the item was held. Runs inside the caller's transaction.
+ */
+export function holdIfDuplicate(itemId: number, db: Db): boolean {
+  const item = db.select({ status: items.status }).from(items).where(and(eq(items.id, itemId), liveItem)).get();
+  if (item?.status !== "confirmed") return false;
+  if (findDuplicateMatches(itemId, db, { againstAll: true }).length === 0) return false;
+  db.update(items).set({ status: "needs_review" }).where(eq(items.id, itemId)).run();
+  return true;
 }
 
 /** The items only, for callers that do not need the kind. */
@@ -273,6 +308,8 @@ export function duplicateIds(db: Db = getDb()): number[] {
     if (row.kind === "card") {
       const who = whoKey(row);
       if (who) put(`w${who}`, s);
+      const when = whenKey(row);
+      if (when) put(`p${when}`, s);
     }
     if (row.kind === "card" && row.catalogCardId != null) put(`c${row.catalogCardId}`, s);
   }

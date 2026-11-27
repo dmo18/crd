@@ -4,6 +4,7 @@ import { CATALOG_FIELDS, catalogCards, catalogSources, type CatalogField, type I
 import { countAuditSince, recordAudit } from "@/lib/audit/store";
 import { itemLabel } from "@/lib/audit/subjects";
 import { liveItem } from "@/lib/items/live";
+import { holdIfDuplicate } from "@/lib/items/duplicates";
 import { CERTAIN_FIELDS, HOLD_WORDS, REVIEW_THRESHOLD, type HoldReason } from "@/lib/recognition/types";
 import { applyCatalogCard, isListing, type CatalogDifference } from "./apply";
 import { candidateCard, linkSnapshot, parseCatalog, serializeCatalog, type LinkSnapshot, type NotCheckedReason, type StoredCandidate } from "./candidates";
@@ -170,6 +171,8 @@ export function autoLinkIn(tx: Db, itemId: number, now: Date = new Date()): bool
   if (!assumed && hasVersions && catalogVersionName(item, first) === "" && readNamesVersion(item)) return false;
   const res = pickCandidateIn(tx, itemId, 0, first.sourceId, now, { auto: true, hold: hold.length > 0 });
   if (!res.ok) return false;
+  // Raised by this link alone: a possible copy of a card already in the collection still waits for the owner.
+  if (item.status !== "confirmed" && res.confirmed) holdIfDuplicate(itemId, tx);
   if (assumed) {
     const linked = tx.select().from(items).where(eq(items.id, itemId)).get()!;
     const options = buildVersionOptions(linked, [...[assumed.base, ...assumed.versions].map(candidateCard)]);

@@ -44,7 +44,8 @@ describe("batch reports", () => {
     await scanIn(null);
     const b = await scanIn(B2, false);
     await processScan(a[0]!, { db, recognizer: reader([card]) });
-    await processScan(a[1]!, { db, recognizer: reader([{ ...card, confidence: 0.99 }]) });
+    // Another card: a second copy of the first would wait in Review as a possible duplicate (review 7).
+    await processScan(a[1]!, { db, recognizer: reader([{ ...card, confidence: 0.99, player: "Bo Jackson", cardNumber: "2" }]) });
     await processScan(a[2]!, { db, recognizer: reader(new RecognitionError("No card found in this photo.")) });
     const reports = batchReports(db);
     expect(reports.map((r) => r.key)).toEqual([B2, B1]);

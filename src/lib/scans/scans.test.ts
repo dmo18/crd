@@ -150,6 +150,73 @@ describe("processScan", () => {
     }
   });
 
+  describe("a card read again that may already be in the collection is never filed by itself (review 7, blocker)", () => {
+    const hardaway: RecognizedItemInput = { kind: "card", confidence: 0.93, sport: "basketball", year: 1993, brand: "Fleer", cardNumber: "65", player: "Tim Hardaway", estimate: null };
+    const milacki: RecognizedItemInput = { kind: "card", confidence: 0.93, sport: "baseball", year: 1992, brand: "Donruss", cardNumber: "101", player: "Bob Milacki", estimate: null };
+    const statusOf = (scanId: number) => db.select({ s: items.status, p: items.player }).from(items).where(eq(items.scanId, scanId)).all();
+    async function oneCard(read: RecognizedItemInput, batchKey: string | null = null) {
+      const { scanId } = await createScan({ mode: "single", batchKey, photos: [{ role: "front", data: await photo() }] }, db);
+      await processScan(scanId, { db, recognizer: fake([read]) });
+      return scanId;
+    }
+
+    it("one card scans: the first copy is filed, the second waits in Review as a possible duplicate", async () => {
+      const first = await oneCard(hardaway);
+      expect(statusOf(first)).toEqual([{ s: "confirmed", p: "Tim Hardaway" }]);
+      const second = await oneCard(hardaway);
+      expect(statusOf(second)).toEqual([{ s: "needs_review", p: "Tim Hardaway" }]);
+      const again = db.select().from(items).where(eq(items.scanId, second)).get()!;
+      // The choices of a same card: Count it with the old one is allowed.
+      expect(findDuplicateMatches(again.id, db).map((m) => m.kind)).toEqual(["same"]);
+    });
+
+    it("many photos, one card each (a batch): both copies of an owned card wait; a new card is filed", async () => {
+      await oneCard(hardaway);
+      await oneCard(milacki);
+      const a = await oneCard(hardaway, "b1");
+      const b = await oneCard(milacki, "b1");
+      const c = await oneCard({ ...milacki, player: "Cal Ripken, Jr.", cardNumber: "22" }, "b1");
+      expect(statusOf(a)[0]!.s).toBe("needs_review");
+      expect(statusOf(b)[0]!.s).toBe("needs_review");
+      expect(statusOf(c)[0]!.s).toBe("confirmed");
+    });
+
+    it("a copy of one still in Review waits too", async () => {
+      await oneCard({ ...hardaway, confidence: 0.5 });
+      expect(statusOf(await oneCard(hardaway))[0]!.s).toBe("needs_review");
+    });
+
+    it("many cards in one photo: the owned card waits, the others are filed; two copies in one photo both wait", async () => {
+      await oneCard(hardaway);
+      const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }] }, db);
+      await processScan(scanId, { db, recognizer: fake([
+        { ...hardaway, sourceIndex: 0, box: { x: 0.05, y: 0.05, w: 0.4, h: 0.4 } },
+        { ...milacki, sourceIndex: 0, box: { x: 0.55, y: 0.05, w: 0.4, h: 0.4 } },
+      ]) });
+      expect(statusOf(scanId)).toEqual([{ s: "needs_review", p: "Tim Hardaway" }, { s: "confirmed", p: "Bob Milacki" }]);
+      const twice = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }] }, db);
+      const ripken = { ...milacki, player: "Cal Ripken, Jr.", cardNumber: "22" };
+      await processScan(twice.scanId, { db, recognizer: fake([
+        { ...ripken, sourceIndex: 0, box: { x: 0.05, y: 0.05, w: 0.4, h: 0.4 } },
+        { ...ripken, sourceIndex: 0, box: { x: 0.55, y: 0.05, w: 0.4, h: 0.4 } },
+      ]) });
+      expect(statusOf(twice.scanId).map((r) => r.s)).toEqual(["needs_review", "needs_review"]);
+    });
+
+    it("the number blank on one side: the same player, year and brand still waits (Mills)", async () => {
+      const mills: RecognizedItemInput = { kind: "card", confidence: 0.93, sport: "other", year: 1991, brand: "Impel", cardNumber: "24", player: "Billy Mills", estimate: null };
+      await oneCard(mills);
+      expect(statusOf(await oneCard({ ...mills, cardNumber: null }))[0]!.s).toBe("needs_review");
+    });
+
+    it("a sold copy does not hold a new scan (only live items count)", async () => {
+      const first = await oneCard(hardaway);
+      const old = db.select().from(items).where(eq(items.scanId, first)).get()!;
+      db.update(items).set({ status: "sold" }).where(eq(items.id, old.id)).run();
+      expect(statusOf(await oneCard(hardaway))[0]!.s).toBe("confirmed");
+    });
+  });
+
   it("a card read from its back alone keeps its cut-out as its back photo, not as a front", async () => {
     const { scanId } = await createScan({ mode: "multi", photos: [{ role: "source", data: await photo() }] }, db);
     const backOnly: Recognizer = {
