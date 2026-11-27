@@ -176,7 +176,7 @@ export function parseCard(body: string): { card: CatalogCard | null } | null {
   return card ? { card } : null;
 }
 
-export function parseChecklist(body: string, requestedSetId: string): { cards: CatalogCard[]; complete: boolean } | null {
+export function parseChecklist(body: string, requestedSetId: string): { cards: CatalogCard[]; complete: boolean; total: number | null } | null {
   const a = readAnswer(body);
   if (a.kind !== "json") return null;
   const p = checklistSchema.safeParse(a.value);
@@ -192,7 +192,7 @@ export function parseChecklist(body: string, requestedSetId: string): { cards: C
     p.data.cards.length >= CHECKLIST_CAP ||
     (total !== null && p.data.cards.length < total) ||
     (total !== null && cards.length < total);
-  return { cards, complete: !truncated };
+  return { cards, complete: !truncated, total: total !== null && Number.isInteger(total) && total >= 0 && total <= 100_000 ? total : null };
 }
 
 // ---------- calls ----------

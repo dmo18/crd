@@ -47,6 +47,9 @@ export type Line = "now" | "background";
 export interface Catalog {
   search(q: { text: string; sport?: Sport; year?: number; limit?: number }, line: Line, limits?: CallLimits): Promise<CatalogResult<CatalogCard[]>>;
   card(sourceId: string, line: Line, limits?: CallLimits): Promise<CatalogResult<CatalogCard | null>>;
-  /** At most the first 500 cards: the source cannot page past that (`complete: false` then). */
-  checklist(sourceSetId: string, line: Line, limits?: CallLimits): Promise<CatalogResult<{ cards: CatalogCard[]; complete: boolean }>>;
+  /**
+   * At most the first 500 cards: the source cannot page past that (`complete: false` then).
+   * `total`: how many cards the source says the set has, when it says so.
+   */
+  checklist(sourceSetId: string, line: Line, limits?: CallLimits): Promise<CatalogResult<{ cards: CatalogCard[]; complete: boolean; total?: number | null }>>;
 }

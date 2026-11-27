@@ -84,6 +84,13 @@ function cellText(c: ReturnType<Col["get"]>): string {
   return quoteField(c.kind === "text" ? guardFormula(s) : s);
 }
 
+/** Any table of text as CSV in the same form as the export: BOM, CRLF, every cell guarded and quoted. */
+export function tableToCsv(header: readonly string[], rows: readonly (readonly string[])[]): string {
+  const lines = [header.map((h) => quoteField(h)).join(",")];
+  for (const r of rows) lines.push(r.map((v) => quoteField(guardFormula(String(v ?? "")))).join(","));
+  return `﻿${lines.join("\r\n")}\r\n`;
+}
+
 /** A whole collection as CSV text: BOM, CRLF line endings, header row first. */
 export function itemsToCsv(rows: Item[], locationNames: Map<number, string>): string {
   const lines = [COLUMNS.map((c) => quoteField(c.header)).join(",")];
