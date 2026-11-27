@@ -9,7 +9,7 @@ import type { Catalog, CatalogCard, CatalogResult } from "@/lib/catalog/types";
 import { loadChecklist, looksComplete, setIdFrom } from "./checklist";
 import { compareNumbers, keyOfFields, numberKeyOf, parseSetKey, setIdentityOf, setKeyOf, setLabel } from "./identity";
 import { missingCsv, missingText } from "./missing";
-import { listOwnedSets, setBreakdown, setView } from "./view";
+import { copiesLine, listOwnedSets, ownedLine, setBreakdown, setView } from "./view";
 
 /** Recorded answers only: tests never reach the network (docs/CATALOG-TRIAL.md, "Checklist probe"). */
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(process.cwd(), "tests/fixtures/catalog", name), "utf8"));
@@ -81,6 +81,27 @@ describe("the Sets list (no outside call)", () => {
       ["1992_donruss__baseball", "1992 Donruss", 1, 0, null],
     ]);
     expect(setBreakdown(10, db).map((s) => [s.label, s.units])).toEqual([["1990 Topps, Baseball", 3], ["1992 Donruss, Baseball", 1]]);
+  });
+});
+
+describe("owned wording adds up (review 7)", () => {
+  it("in Review is a part of the owned count, copies are copies", () => {
+    expect(ownedLine(1, 1)).toBe("1 card owned (in Review)");
+    expect(ownedLine(3, 1)).toBe("3 cards owned (1 in Review)");
+    expect(ownedLine(2, 0)).toBe("2 cards owned");
+    expect(copiesLine(3)).toBe("3 copies");
+    expect(copiesLine(1)).toBeNull();
+  });
+
+  it("one card in three items and a quantity: 1 card owned, 4 copies; Review counts distinct cards", () => {
+    add({ cardNumber: "336", player: "Ken Griffey Jr.", status: "needs_review" });
+    add({ cardNumber: "336", player: "Ken Griffey Jr.", status: "needs_review" });
+    add({ cardNumber: "336", player: "Ken Griffey Jr.", status: "needs_review", quantity: 2 });
+    const [s] = listOwnedSets(db);
+    expect(ownedLine(s.owned, s.inReview)).toBe("1 card owned (in Review)");
+    const v = setView(KEY, db)!;
+    expect(ownedLine(v.counts.owned, v.counts.inReview)).toBe("1 card owned (in Review)");
+    expect(copiesLine(v.rows[0].items.reduce((n, i) => n + i.quantity, 0))).toBe("4 copies");
   });
 });
 

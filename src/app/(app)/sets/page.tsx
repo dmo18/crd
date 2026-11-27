@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Card, EmptyState, LinkButton, PageHeader } from "@/components/ui";
 import { requireOwner } from "@/lib/auth/guard";
 import { SPORT_LABELS } from "@/lib/items/labels";
-import { cardsWithoutSet, listOwnedSets } from "@/lib/sets/view";
+import { cardsWithoutSet, listOwnedSets, ownedLine } from "@/lib/sets/view";
 
 export const metadata = { title: "Sets" };
 export const dynamic = "force-dynamic";
@@ -38,7 +38,7 @@ export default async function SetsPage() {
               <span className="min-w-0">
                 <span className="block font-semibold break-words">{s.title}</span>
                 <span className="block text-sm text-muted">
-                  {plural(s.owned, "card", "cards")} owned{s.inReview > 0 ? `, ${s.inReview} in Review` : ""}
+                  {ownedLine(s.owned, s.inReview)}
                 </span>
               </span>
               <span className="tabular shrink-0 text-sm font-semibold">

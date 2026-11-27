@@ -9,14 +9,13 @@ import { toggleWantAction } from "@/lib/sets/actions";
 import { SET_KEY_RE } from "@/lib/sets/identity";
 import { asFailure, MAY_BE_INCOMPLETE, NOT_IN_CATALOG, stoppedLine } from "@/lib/sets/messages";
 import { missingText } from "@/lib/sets/missing";
-import { CHECKLIST_KEEP_DAYS, setView, type SetRow } from "@/lib/sets/view";
+import { CHECKLIST_KEEP_DAYS, copiesLine, ownedLine, setView, type SetRow } from "@/lib/sets/view";
 
 export const metadata = { title: "Set" };
 export const dynamic = "force-dynamic";
 
 const SHOWS = ["all", "owned", "missing", "wanted"] as const;
 type Show = (typeof SHOWS)[number];
-const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 const day = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 
 function Row({ r, setKey, hasList }: { r: SetRow; setKey: string; hasList: boolean }) {
@@ -24,6 +23,7 @@ function Row({ r, setKey, hasList }: { r: SetRow; setKey: string; hasList: boole
   if (r.owned) {
     const first = r.items[0];
     const review = r.items.some((i) => i.inReview);
+    const copies = copiesLine(r.items.reduce((n, i) => n + i.quantity, 0));
     return (
       <li>
         <Link href={`/items/${first.id}`} className="flex min-h-11 items-center justify-between gap-3 rounded-xl bg-surface-2 px-3 py-2">
@@ -33,7 +33,8 @@ function Row({ r, setKey, hasList }: { r: SetRow; setKey: string; hasList: boole
             {hasList && !r.onList ? <span className="block text-sm text-muted">Not on the catalog&apos;s list</span> : null}
           </span>
           <span className="flex shrink-0 flex-col items-end gap-1">
-            <Badge tone="accent">Owned{r.items.length > 1 ? ` x${r.items.length}` : ""}</Badge>
+            <Badge tone="accent">Owned</Badge>
+            {copies ? <span className="text-sm text-muted">{copies}</span> : null}
             {review ? <Badge tone="warn">In Review</Badge> : null}
           </span>
         </Link>
@@ -95,7 +96,7 @@ export default async function SetPage({ params, searchParams }: { params: Promis
         <Link href="/sets" className="inline-flex min-h-11 items-center text-base font-semibold text-accent">All sets</Link>
         <PageHeader
           title={view.label}
-          subtitle={`${plural(counts.owned, "card", "cards")} owned${counts.inReview > 0 ? `, ${counts.inReview} still in Review` : ""}`}
+          subtitle={ownedLine(counts.owned, counts.inReview)}
         />
       </div>
 

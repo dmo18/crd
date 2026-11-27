@@ -75,6 +75,26 @@ function distinctOwned(cards: readonly OwnedCard[]): number {
   return numbers.size + blank;
 }
 
+/**
+ * Distinct cards with a copy still in Review: a part of the owned count,
+ * never added to it (review 7).
+ */
+function distinctInReview(cards: readonly OwnedCard[]): number {
+  return distinctOwned(cards.filter((c) => c.inReview));
+}
+
+/** "3 cards owned", "1 card owned (in Review)", "3 cards owned (1 in Review)". */
+export function ownedLine(owned: number, inReview: number): string {
+  const head = `${owned} ${owned === 1 ? "card" : "cards"} owned`;
+  if (inReview <= 0) return head;
+  return inReview >= owned ? `${head} (in Review)` : `${head} (${inReview} in Review)`;
+}
+
+/** "3 copies" for a card held more than once (quantities added), else null. */
+export function copiesLine(copies: number): string | null {
+  return copies > 1 ? `${copies} copies` : null;
+}
+
 export type SetSummary = {
   key: string;
   label: string;
@@ -107,7 +127,7 @@ export function listOwnedSets(db: Db = getDb()): SetSummary[] {
       }
       return {
         key: g.key, label: setLabel(g.spelling), title: setTitle(g.spelling), sport: g.spelling.sport, year: g.identity.year,
-        owned: distinctOwned(g.cards), inReview: g.cards.filter((c) => c.inReview).length, percent, hasChecklist,
+        owned: distinctOwned(g.cards), inReview: distinctInReview(g.cards), percent, hasChecklist,
       };
     })
     .sort((a, b) => (a.sport ?? "zz").localeCompare(b.sport ?? "zz") || a.year - b.year || a.label.localeCompare(b.label));
@@ -127,7 +147,7 @@ export type SetRow = {
   owned: boolean;
   wanted: boolean;
   /** The owner's copies (one or more items), in Review or not. */
-  items: { id: number; title: string; inReview: boolean }[];
+  items: { id: number; title: string; inReview: boolean; quantity: number }[];
   /** On the stored checklist (false: owned, but the catalog's list does not have this number). */
   onList: boolean;
   /** Set when the owner's card has this number but another player: the list's name, to check. */
@@ -198,7 +218,7 @@ export function setView(key: string, db: Db = getDb(), opts: { now?: Date; group
   const wantedKeys = new Set(wants.map((w) => w.numberKey));
 
   const rows = new Map<string, SetRow>();
-  const itemsOf = (list: OwnedCard[] | undefined) => (list ?? []).map((c) => ({ id: c.id, title: c.title, inReview: c.inReview }));
+  const itemsOf = (list: OwnedCard[] | undefined) => (list ?? []).map((c) => ({ id: c.id, title: c.title, inReview: c.inReview, quantity: c.quantity }));
   for (const e of entries) {
     if (!e.numberKey || rows.has(e.numberKey)) continue;
     const mine = byNumber.get(e.numberKey);
@@ -244,7 +264,7 @@ export function setView(key: string, db: Db = getDb(), opts: { now?: Date; group
       ownedOnList,
       missing: sorted.filter((r) => !r.owned && r.onList).length,
       wanted: sorted.filter((r) => r.wanted).length,
-      inReview: cards.filter((c) => c.inReview).length,
+      inReview: distinctInReview(cards),
     },
     percent,
   };
