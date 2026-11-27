@@ -2407,3 +2407,26 @@ separate pushes, each with a backup and a walk-through.
 Known limits told to the owner: the free catalog lacks many cards; guide
 prices are not checked against sales; outside links cannot be tested from
 the server (the owner tap-tests them).
+
+### Product run results (2026-11-27)
+
+Live pushes, each with a data backup in `/root/cardvault-db-backups/` and a tag:
+product1-live 560336f (catalog, photos, wording, price guide, import),
+product2-live d3509db (more sure marks, blank fields),
+product3-live 81166fe (batch scanning, Review in groups, migration 0010),
+product4-live d3cad77 (filters, sold and removed, Home break down, 0011),
+product5-live 504cbcc (the owner's real failed scans of 2026-11-25),
+product6-live acfb0e6 (sets and checklists, 0012),
+product7-live e1edff8 (final walk-through fixes, duplicates never filed).
+
+Measured on 9 one card scans before the last fixes: player, year, brand and
+number all right 7 of 9; filed with no "Check this" 2 of 9; price shown 7
+of 9; catalog tie 1 of 9; photos upright 9 of 9. The owner's three photo
+many cards scan: 3 items for 3 cards (8 before).
+
+Open: the free catalog matches few cards; checklists stop at 500 cards per
+set; the reader cannot read gold foil ("ULTRA"); sure marks stay low when a
+year or brand is printed once; many cards scans depend on fine margins and
+take about 2 minutes; outside links and guide prices need the owner's own
+check; no slab photos from the owner to test against yet. Judge reading on
+the owner's own photos in `/agent/reading-bench/owner-live/`.
