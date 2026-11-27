@@ -3,7 +3,7 @@ import { CatalogCandidates } from "@/components/items/CatalogCandidates";
 import { Badge, Card, LinkButton } from "@/components/ui";
 import { getDb } from "@/db";
 import { catalogCards, type Item } from "@/db/schema";
-import { NOT_CHECKED_LINES } from "@/lib/catalog/candidates";
+import { filedNotInCatalog, NOT_CHECKED_LINES, NOT_IN_CATALOG_LINE } from "@/lib/catalog/candidates";
 import { searchWords } from "@/lib/catalog/find";
 import { parseFirstSuggestion } from "@/lib/catalog/sources";
 import { unlinkCatalogAction, catalogValuesOnItemAction } from "@/lib/catalog/item-actions";
@@ -96,6 +96,11 @@ export function CatalogBlock({ item }: { item: Item }) {
                 ? "The app linked this card because the catalog has exactly one card with the same year, brand, number and player. Undo keeps the details and shows the suggestions again."
                 : "Unlinking keeps every detail on this item as it is."}
             </p>
+          </>
+        ) : filedNotInCatalog(item, view) ? (
+          <>
+            <p className="text-sm">{NOT_IN_CATALOG_LINE}</p>
+            <LinkButton href={`/search?${search.toString()}`} variant="secondary" className="w-full">Find this card in the catalog</LinkButton>
           </>
         ) : item.kind === "card" ? (
           <>

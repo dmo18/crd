@@ -172,6 +172,17 @@ export function candidateCard(c: StoredCandidate): CatalogCard {
   };
 }
 
+/** The one calm line of a filed card the free catalog has no entry for (review 7). */
+export const NOT_IN_CATALOG_LINE = "The free catalog does not have this card. Your details are kept as read.";
+
+/**
+ * A card already filed (checked) whose catalog search found nothing: the item
+ * page shows only NOT_IN_CATALOG_LINE, not the Review prompts.
+ */
+export function filedNotInCatalog(item: { kind: string; status: string; catalogCardId: number | null }, view: { status: string | null } | null): boolean {
+  return item.kind === "card" && item.status === "confirmed" && item.catalogCardId == null && view?.status === "none";
+}
+
 /** Plain words for Review when the catalog was not checked. */
 export const NOT_CHECKED_LINES: Record<NotCheckedReason, string> = {
   off: "The card catalog is switched off.",
