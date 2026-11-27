@@ -77,11 +77,13 @@ function distinctOwned(cards: readonly OwnedCard[]): number {
 }
 
 /**
- * Distinct cards with a copy still in Review: a part of the owned count,
- * never added to it (review 7).
+ * Distinct cards not yet checked: every copy still in Review (a card with a
+ * checked copy is owned for sure). A part of the owned count, never added to
+ * it (review 7).
  */
 function distinctInReview(cards: readonly OwnedCard[]): number {
-  return distinctOwned(cards.filter((c) => c.inReview));
+  const checked = new Set(cards.filter((c) => !c.inReview && c.numberKey).map((c) => c.numberKey));
+  return distinctOwned(cards.filter((c) => c.inReview && !(c.numberKey && checked.has(c.numberKey))));
 }
 
 /** "3 cards owned", "1 card owned (in Review)", "3 cards owned (1 in Review)". */

@@ -77,7 +77,8 @@ describe("the Sets list (no outside call)", () => {
     add({ kind: "sealed", title: "Box", cardNumber: null });
     const sets = listOwnedSets(db);
     expect(sets.map((s) => [s.key, s.title, s.owned, s.inReview, s.percent])).toEqual([
-      [KEY, "1990 Topps", 2, 1, null],
+      // Griffey has a checked copy, so no card of the set is only in Review.
+      [KEY, "1990 Topps", 2, 0, null],
       ["1992_donruss__baseball", "1992 Donruss", 1, 0, null],
     ]);
     expect(setBreakdown(10, db).map((s) => [s.label, s.units])).toEqual([["1990 Topps, Baseball", 3], ["1992 Donruss, Baseball", 1]]);
@@ -102,6 +103,11 @@ describe("owned wording adds up (review 7)", () => {
     const v = setView(KEY, db)!;
     expect(ownedLine(v.counts.owned, v.counts.inReview)).toBe("1 card owned (in Review)");
     expect(copiesLine(v.rows[0].items.reduce((n, i) => n + i.quantity, 0))).toBe("4 copies");
+    // One checked copy more: owned, nothing only in Review.
+    add({ cardNumber: "336", player: "Ken Griffey Jr." });
+    add({ cardNumber: "1", player: "Nolan Ryan", status: "needs_review" });
+    const [t] = listOwnedSets(db);
+    expect(ownedLine(t.owned, t.inReview)).toBe("2 cards owned (1 in Review)");
   });
 });
 
@@ -125,7 +131,8 @@ describe("a set page", () => {
     expect(v.rows.map((r) => [r.cardNumber, r.owned, r.items.length])).toEqual([["10", true, 1], ["336", true, 2]]);
     expect(v.rows[1].items.find((i) => i.id === review)?.inReview).toBe(true);
     expect(v.noNumber.map((c) => c.player)).toEqual(["Bo Jackson"]);
-    expect(v.counts).toMatchObject({ owned: 3, missing: 0, inReview: 1 });
+    // The Griffey in Review has a checked copy: the card is owned, not "in Review".
+    expect(v.counts).toMatchObject({ owned: 3, missing: 0, inReview: 0 });
     expect(v.checklist).toBeNull();
     expect(v.percent).toBeNull();
     expect(setView("1999_nothing__baseball", db)).toBeNull();
