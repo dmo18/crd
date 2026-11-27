@@ -3,7 +3,7 @@ import { GuideRefresh } from "@/components/items/GuideRefresh";
 import { QuickValue } from "@/components/items/QuickValue";
 import { Card } from "@/components/ui";
 import type { Item } from "@/db/schema";
-import { POPULATION_NOTE, priceLinks, type PriceLink } from "@/lib/links";
+import { linkLabel, POPULATION_NOTE, priceLinks, type PriceLink } from "@/lib/links";
 import { formatCents } from "@/lib/money";
 import { guidePrice } from "@/lib/valuation/guide";
 
@@ -16,7 +16,7 @@ function LinkList({ links }: { links: PriceLink[] }) {
       {links.map((link) => (
         <li key={link.label}>
           <a href={link.href} target="_blank" rel="noopener noreferrer" className={LINK_CLASS}>
-            {link.label}{link.paste === "words" ? " (paste the words)" : link.paste === "cert" ? " (paste the number)" : ""}
+            {linkLabel(link)}
           </a>
         </li>
       ))}
@@ -53,7 +53,7 @@ export function PriceLinks({ item }: { item: Item }) {
           <h3 className="font-semibold">Check real sales</h3>
           <p className="text-sm text-muted">These open other websites. Look for recent sold prices of the same card in similar condition.</p>
           <LinkList links={links.sales} />
-          {needsWords ? <CopyText text={links.query} label="Copy search words" /> : null}
+          {needsWords ? <CopyText text={links.query} label="Copy the card name" /> : null}
         </section>
       ) : null}
 

@@ -19,7 +19,7 @@ export type PriceLink = {
 };
 
 export type PriceLinks = {
-  /** The search words, also offered by "Copy search words". Empty when there is nothing to search. */
+  /** The search words, also offered by "Copy the card name". Empty when there is nothing to search. */
   query: string;
   sales: PriceLink[];
   /** Certificate lookups for a graded card. */
@@ -114,6 +114,11 @@ function graderOf(item: LinkFields): Grader | null {
   return g in GRADERS ? (g as Grader) : null;
 }
 
+/** The words on a link's button: a site that takes no words says what to paste. */
+export function linkLabel(link: PriceLink): string {
+  return `${link.label}${link.paste === "words" ? " (paste the card name)" : link.paste === "cert" ? " (paste the number)" : ""}`;
+}
+
 /** Every "Check real sales" link for an item. Each opens another website. */
 export function priceLinks(item: LinkFields): PriceLinks {
   const query = buildSearchQuery(item);
@@ -122,7 +127,8 @@ export function priceLinks(item: LinkFields): PriceLinks {
     const ebay = "https://www.ebay.com/sch/i.html";
     sales.push({ label: "eBay sold listings", href: withQuery(ebay, { _nkw: query, _sacat: EBAY_CATEGORY, LH_Sold: "1", LH_Complete: "1" }) });
     sales.push({ label: "eBay for sale now", href: withQuery(ebay, { _nkw: query, _sacat: EBAY_CATEGORY }) });
-    sales.push({ label: "130point sales", href: "https://130point.com/sales/", paste: "words" });
+    // 130point has no search address that takes words: the link says to paste the card name (copied below it).
+    sales.push({ label: "130point", href: "https://130point.com/sales/", paste: "words" });
     if (item.kind === "card") {
       sales.push({ label: "TCDB card search", href: withQuery("https://www.tcdb.com/Search.cfm", { q: query }) });
       sales.push({ label: "COMC search", href: `https://www.comc.com/Cards,=${encodeURIComponent(query)}` });

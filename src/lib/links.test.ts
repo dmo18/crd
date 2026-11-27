@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSearchQuery, EBAY_CATEGORY, POPULATION_NOTE, priceLinks } from "./links";
+import { buildSearchQuery, EBAY_CATEGORY, linkLabel, POPULATION_NOTE, priceLinks } from "./links";
 
 const blank = {
   kind: "card" as const, year: null, brand: null, setName: null, player: null, cardNumber: null, variation: null,
@@ -13,7 +13,7 @@ describe("price links", () => {
     expect(buildSearchQuery(item)).toBe("1989 Upper Deck Ken Griffey Jr. #1");
     const { sales } = priceLinks(item);
     expect(sales.map((l) => l.label)).toEqual([
-      "eBay sold listings", "eBay for sale now", "130point sales", "TCDB card search", "COMC search", "SportsCardsPro prices", "Google search",
+      "eBay sold listings", "eBay for sale now", "130point", "TCDB card search", "COMC search", "SportsCardsPro prices", "Google search",
     ]);
     const ebay = new URL(sales[0].href);
     expect(ebay.hostname).toBe("www.ebay.com");
@@ -23,7 +23,10 @@ describe("price links", () => {
     expect(ebay.searchParams.get("LH_Sold")).toBe("1");
     expect(ebay.searchParams.get("LH_Complete")).toBe("1");
     expect(new URL(sales[1].href).searchParams.has("LH_Sold")).toBe(false);
-    expect(sales[2]).toEqual({ label: "130point sales", href: "https://130point.com/sales/", paste: "words" });
+    expect(sales[2]).toEqual({ label: "130point", href: "https://130point.com/sales/", paste: "words" });
+    // The site takes no words in its address: the button says to paste the card name (review 7).
+    expect(linkLabel(sales[2]!)).toBe("130point (paste the card name)");
+    expect(linkLabel(sales[0]!)).toBe("eBay sold listings");
     expect(new URL(sales[3].href).searchParams.get("q")).toBe("1989 Upper Deck Ken Griffey Jr. #1");
     const scp = new URL(sales[5].href);
     expect(scp.hostname).toBe("www.sportscardspro.com");
@@ -76,7 +79,7 @@ describe("price links", () => {
   it("searches sealed product as sealed, and gives nothing for bulk or blank items", () => {
     const sealed = { ...blank, kind: "sealed" as const, year: 1990, brand: "Topps", sport: "baseball" as const, productType: "box" as const };
     expect(buildSearchQuery(sealed)).toBe("1990 Topps baseball wax box sealed");
-    expect(priceLinks(sealed).sales.map((l) => l.label)).toEqual(["eBay sold listings", "eBay for sale now", "130point sales", "Google search"]);
+    expect(priceLinks(sealed).sales.map((l) => l.label)).toEqual(["eBay sold listings", "eBay for sale now", "130point", "Google search"]);
     expect(priceLinks({ ...blank, kind: "bulk" as const, year: 1988, brand: "Donruss" }).sales).toEqual([]);
     expect(priceLinks(blank)).toEqual({ query: "", sales: [], cert: [], population: [] });
     expect(buildSearchQuery({ ...blank, player: "x".repeat(300) }).length).toBeLessThanOrEqual(120);
