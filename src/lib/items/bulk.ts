@@ -533,11 +533,12 @@ export type UndoableOp = { id: number; at: Date; summary: string; itemCount: num
 
 /** The latest bulk change that can still be undone, or null. */
 export function latestUndoable(db: Db = getDb(), now: Date = new Date()): UndoableOp | null {
-  // Only the latest change not yet undone; once it is undone the one before it is next.
-  const row = db.select({ id: bulkOps.id, at: bulkOps.at, summary: bulkOps.summary, itemCount: bulkOps.itemCount, action: bulkOps.action, undo: bulkOps.undo })
-    .from(bulkOps).where(isNull(bulkOps.undoneAt)).orderBy(desc(bulkOps.id)).limit(1).get();
-  if (!row || row.at.getTime() < now.getTime() - BULK_KEEP_DAYS * DAY_MS) return null;
-  const { undo, ...rest } = row;
+  // Only the very latest change. Once it is undone nothing is offered until a new change is made
+  // (review 7): an older change is never offered after an Undo.
+  const row = db.select({ id: bulkOps.id, at: bulkOps.at, summary: bulkOps.summary, itemCount: bulkOps.itemCount, action: bulkOps.action, undo: bulkOps.undo, undoneAt: bulkOps.undoneAt })
+    .from(bulkOps).orderBy(desc(bulkOps.id)).limit(1).get();
+  if (!row || row.undoneAt || row.at.getTime() < now.getTime() - BULK_KEEP_DAYS * DAY_MS) return null;
+  const { undo, undoneAt: _undone, ...rest } = row;
   const op: UndoableOp = { ...rest, from: undoOrigin(undo) };
   // A delete whose items were all put back by hand from Recently deleted: its Undo would do nothing.
   if (op.action === "delete" && !deleteStillInBin(db, op.at, undo)) return null;
@@ -593,7 +594,7 @@ export function undoBulk(opId: number, db: Db = getDb(), now: Date = new Date())
     const op = tx.select().from(bulkOps).where(eq(bulkOps.id, opId)).get();
     if (!op || op.at.getTime() < now.getTime() - BULK_KEEP_DAYS * DAY_MS) return { error: "This change can no longer be undone." };
     if (op.undoneAt) return { error: "This change was already undone." };
-    const latest = tx.select({ id: bulkOps.id }).from(bulkOps).where(isNull(bulkOps.undoneAt)).orderBy(desc(bulkOps.id)).limit(1).get();
+    const latest = tx.select({ id: bulkOps.id }).from(bulkOps).orderBy(desc(bulkOps.id)).limit(1).get();
     if (latest?.id !== op.id) return { error: "Only the latest change can be undone." };
     let parsed: z.infer<typeof undoSchema>;
     try {

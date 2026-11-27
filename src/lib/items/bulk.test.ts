@@ -489,17 +489,22 @@ describe("undo", () => {
     expect(get(deleted).locationId).toBeNull();
   });
 
-  it("only the latest change can be undone; undoing it makes the one before undoable again", () => {
+  it("only the latest change can be undone; after an undo nothing is offered until a new change (review 7)", () => {
     const a = add({ team: "A" });
     const first = ok(applyBulk(ids(a), set("team", "B"), db, later(MIN)));
     const second = ok(applyBulk(ids(a), set("team", "C"), db, later(2 * MIN)));
     expect(undoBulk(first.opId, db, later(3 * MIN))).toEqual({ error: "Only the latest change can be undone." });
     expect(get(a).team).toBe("C");
     expect(ok(undoBulk(second.opId, db, later(3 * MIN))).restored).toBe(1);
-    expect(get(a).team).toBe("B");
     // The undo put back the time of the first change too, so it is not taken for a later edit.
-    expect(ok(undoBulk(first.opId, db, later(4 * MIN))).restored).toBe(1);
-    expect(get(a)).toMatchObject({ team: "A", updatedAt: T0 });
+    expect(get(a)).toMatchObject({ team: "B", updatedAt: later(MIN) });
+    // The older change is not offered and cannot be undone now.
+    expect(latestUndoable(db, later(4 * MIN))).toBeNull();
+    expect(undoBulk(first.opId, db, later(4 * MIN))).toEqual({ error: "Only the latest change can be undone." });
+    expect(get(a).team).toBe("B");
+    // A new change is offered again.
+    const third = ok(applyBulk(ids(a), set("team", "D"), db, later(5 * MIN)));
+    expect(latestUndoable(db, later(6 * MIN))?.id).toBe(third.opId);
   });
 
   it("undo of a later bulk edit is skipped for items another bulk change touched after it", () => {
