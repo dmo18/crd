@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui";
 import type { BreakdownBy, GroupStat } from "@/lib/items/stats";
+import type { SetStat } from "@/lib/sets/view";
 import { SPORT_LABELS } from "@/lib/items/labels";
 import { formatCents } from "@/lib/money";
 import type { Sport } from "@/db/schema";
@@ -43,8 +44,27 @@ function Rows({ by, rows }: { by: BreakdownBy; rows: GroupStat[] }) {
 }
 
 /** Home: totals by sport, player, team and set, raw against graded, and the unpriced count. Each section starts closed. */
+/** "By set": each row opens its set page (owned, missing and wanted cards). */
+function SetRows({ rows }: { rows: SetStat[] }) {
+  if (rows.length === 0) return <p className="px-1 py-2 text-sm text-muted">Nothing to show yet.</p>;
+  return (
+    <>
+      {rows.map((r) => (
+        <Link key={r.key} href={`/sets/${r.key}`} className={rowClass}>
+          <span className="min-w-0">
+            <span className="block font-semibold break-words">{r.label}</span>
+            <span className="block text-sm text-muted">{plural(r.units, "unit", "units")}</span>
+          </span>
+          <span className="tabular shrink-0 font-semibold">{formatCents(r.valueCents)}</span>
+        </Link>
+      ))}
+      <Link href="/sets" className="inline-flex min-h-11 items-center px-1 font-semibold text-accent">See all sets</Link>
+    </>
+  );
+}
+
 export function Breakdowns({ sports, players, teams, sets, graded, raw, noPrice, gone }: {
-  sports: GroupStat[]; players: GroupStat[]; teams: GroupStat[]; sets: GroupStat[];
+  sports: GroupStat[]; players: GroupStat[]; teams: GroupStat[]; sets: SetStat[];
   graded: GroupStat; raw: GroupStat; noPrice: number; gone: number;
 }) {
   return (
@@ -53,7 +73,7 @@ export function Breakdowns({ sports, players, teams, sets, graded, raw, noPrice,
       <Section title="By sport"><Rows by="sport" rows={sports} /></Section>
       <Section title="By player" hint="Top 10"><Rows by="player" rows={players} /></Section>
       <Section title="By team" hint="Top 10"><Rows by="team" rows={teams} /></Section>
-      <Section title="By set" hint="Top 10"><Rows by="set" rows={sets} /></Section>
+      <Section title="By set" hint="Top 10"><SetRows rows={sets} /></Section>
       <Section title="Raw against graded">
         <Link href="/items?grading=raw" className={rowClass}>
           <span><span className="block font-semibold">Raw cards</span><span className="block text-sm text-muted">{plural(raw.units, "unit", "units")}</span></span>

@@ -32,6 +32,7 @@ import { SerialAsk } from "@/components/items/SerialAsk";
 import { RookieAsk } from "@/components/items/RookieAsk";
 import { rookieAsk } from "@/lib/items/rookie";
 import { parseSuggestion } from "@/lib/items/serial";
+import { keyOfFields, setLabel } from "@/lib/sets/identity";
 
 export const metadata = { title: "Item" };
 
@@ -120,6 +121,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
     : db.select().from(locations).where(eq(locations.id, item.locationId)).get();
 
   const { cents: value, waitingForVersion, ownersValue } = shownValue(item);
+  const setKey = item.kind === "card" ? keyOfFields(item) : null;
   const estimateHidden = item.versionState === "not_sure";
   const mode = recognitionMode();
   const source = item.manualValueCents != null ? "manual" : item.valueSource;
@@ -182,6 +184,11 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
           {confidenceLabel(item.confidence)}
           {location ? ` · Stored in ${location.name}` : ""}
         </p>
+        {setKey && item.year != null ? (
+          <Link href={`/sets/${setKey}`} className="inline-flex min-h-11 items-center text-sm font-semibold text-accent">
+            Set: {setLabel({ ...item, year: item.year })}. See the set
+          </Link>
+        ) : null}
       </header>
 
       <DuplicateNotice itemId={item.id} title={item.title} quantity={item.quantity} db={db} />

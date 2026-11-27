@@ -9,6 +9,7 @@ import { requireOwner } from "@/lib/auth/guard";
 import { BREAKDOWN_TOP, breakdownBy, decadeBreakdown, goneCount, gradedSplit, highlights, kindBreakdown, recentItems, topItems } from "@/lib/items/stats";
 import { formatCents } from "@/lib/money";
 import { summarize } from "@/lib/scans/view";
+import { setBreakdown } from "@/lib/sets/view";
 import { collectionTotals, getSnapshots, recordSnapshot, valueSplit } from "@/lib/valuation/snapshots";
 
 export const dynamic = "force-dynamic";
@@ -123,7 +124,7 @@ export default async function Home() {
 
       <Breakdowns
         sports={breakdownBy("sport", 20)} players={breakdownBy("player", BREAKDOWN_TOP)}
-        teams={breakdownBy("team", BREAKDOWN_TOP)} sets={breakdownBy("set", BREAKDOWN_TOP)}
+        teams={breakdownBy("team", BREAKDOWN_TOP)} sets={setBreakdown(BREAKDOWN_TOP)}
         {...gradedSplit()} noPrice={hl.noValue} gone={goneCount()}
       />
 
