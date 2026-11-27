@@ -39,6 +39,19 @@ export function isPublicPath(pathname: string): boolean {
 }
 
 /**
+ * A browser opening an address itself (a tapped download link such as
+ * /api/export), not a script's fetch: such a visit signed out goes to the
+ * sign-in page instead of a bare error. Fetches keep their 401.
+ */
+export function isPageVisit(method: string, headers: Headers): boolean {
+  if (method !== "GET" && method !== "HEAD") return false;
+  const mode = headers.get("sec-fetch-mode");
+  if (mode) return mode === "navigate";
+  // Browsers without Fetch Metadata: a request that asks for a page first.
+  return /^\s*text\/html\b/i.test(headers.get("accept") ?? "");
+}
+
+/**
  * The page's Content Security Policy. Scripts run only with this request's
  * nonce (Next.js adds it to its own scripts while rendering) or when loaded
  * by such a script. Styles keep 'unsafe-inline': React style attributes
@@ -83,7 +96,7 @@ export async function proxy(request: NextRequest) {
   if (!isPublicPath(request.nextUrl.pathname)) {
     const signedIn = await sessionCookieLooksValid(request.cookies.get(SESSION_COOKIE)?.value, e.SESSION_SECRET);
     if (!signedIn) {
-      const denied = request.nextUrl.pathname.startsWith("/api/")
+      const denied = request.nextUrl.pathname.startsWith("/api/") && !isPageVisit(request.method, request.headers)
         ? NextResponse.json({ error: "Please sign in." }, { status: 401 })
         : NextResponse.redirect(loginUrl(request, { appOrigin: e.APP_ORIGIN, nodeEnv: e.NODE_ENV }));
       denied.headers.set("Content-Security-Policy", csp);

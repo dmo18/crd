@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 import { sealDevice } from "@/lib/auth/seal";
-import { config, contentSecurityPolicy, isPublicPath, loginUrl, proxy } from "./proxy";
+import { config, contentSecurityPolicy, isPageVisit, isPublicPath, loginUrl, proxy } from "./proxy";
 
 const SECRET = "test-only-session-secret-0123456789abcdef";
 
@@ -74,6 +74,18 @@ describe("proxy session check", () => {
     const nonceOf = (r: Response) => /'nonce-([^']+)'/.exec(r.headers.get("content-security-policy") ?? "")?.[1];
     expect(nonceOf(a)).toBeTruthy();
     expect(nonceOf(a)).not.toBe(nonceOf(b));
+  });
+  it("a signed out browser visit to an API address goes to sign in; a fetch still gets 401 (review 7)", async () => {
+    const visit = (headers: Record<string, string>, method = "GET") => proxy(new NextRequest("http://localhost/api/export", { method, headers }));
+    const nav = await visit({ "sec-fetch-mode": "navigate", "sec-fetch-dest": "document", accept: "text/html,application/xhtml+xml" });
+    expect(nav.status).toBe(307);
+    expect(nav.headers.get("location")).toMatch(/\/login$/);
+    expect((await visit({ accept: "text/html,*/*" })).status).toBe(307);
+    expect((await visit({ "sec-fetch-mode": "cors", accept: "*/*" })).status).toBe(401);
+    expect((await visit({ "sec-fetch-mode": "same-origin", accept: "text/html" })).status).toBe(401);
+    expect((await visit({})).status).toBe(401);
+    expect((await visit({ "sec-fetch-mode": "navigate" }, "POST")).status).toBe(401);
+    expect(isPageVisit("GET", new Headers({ accept: "application/json" }))).toBe(false);
   });
   it("lets anyone open the public pages", async () => {
     expect((await proxy(req("/login"))).status).toBe(200);
