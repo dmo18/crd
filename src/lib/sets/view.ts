@@ -3,6 +3,7 @@ import { getDb, type Db } from "@/db";
 import { cardSets, checklistEntries, items, wantedCards, type CardSetRow, type Sport } from "@/db/schema";
 import { liveItem } from "@/lib/items/live";
 import { playerAgrees } from "@/lib/catalog/find";
+import { withNameSuffix } from "@/lib/catalog/mycardfolio";
 import { compareNumbers, keyOfFields as setKeyOfFields, numberKeyOf, parseSetKey, setIdentityOf, setKeyOf, setLabel, setTitle, type SetIdentity } from "./identity";
 
 /**
@@ -221,12 +222,14 @@ export function setView(key: string, db: Db = getDb(), opts: { now?: Date; group
   const itemsOf = (list: OwnedCard[] | undefined) => (list ?? []).map((c) => ({ id: c.id, title: c.title, inReview: c.inReview, quantity: c.quantity }));
   for (const e of entries) {
     if (!e.numberKey || rows.has(e.numberKey)) continue;
+    // A list stored before the suffix rule (team "Jr.") reads the same as a new one.
+    const { player, team } = withNameSuffix(e.player, e.team);
     const mine = byNumber.get(e.numberKey);
     // The player is the check: a copy with another player's name is shown with the list's name.
     const named = (mine ?? []).filter((c) => c.player);
-    const listSays = e.player && named.length > 0 && !named.some((c) => playerAgrees(c.player, e.player)) ? e.player : null;
+    const listSays = player && named.length > 0 && !named.some((c) => playerAgrees(c.player, player)) ? player : null;
     rows.set(e.numberKey, {
-      numberKey: e.numberKey, cardNumber: e.cardNumber, player: e.player, team: e.team, url: e.url,
+      numberKey: e.numberKey, cardNumber: e.cardNumber, player, team, url: e.url,
       owned: Boolean(mine), wanted: !mine && wantedKeys.has(e.numberKey), items: itemsOf(mine), onList: true, listSays,
     });
   }

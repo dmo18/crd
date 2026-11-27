@@ -105,6 +105,16 @@ describe("owned wording adds up (review 7)", () => {
   });
 });
 
+describe("a stored checklist row with the suffix as its team (review 7)", () => {
+  it("shows Cal Ripken Jr. with no team, so the suffix never lands on the status line", () => {
+    add({ cardNumber: "1", player: "Nolan Ryan" });
+    const set = db.insert(cardSets).values({ key: KEY, sport: "baseball", year: 1990, brand: "Topps", setName: "Topps", checklistAt: new Date(), checklistComplete: false }).returning().get();
+    db.insert(checklistEntries).values({ setId: set.id, position: 0, cardNumber: "22", numberKey: "22", player: "Cal Ripken", team: "Jr.", sourceId: "x22", url: null }).run();
+    const row = setView(KEY, db)!.rows.find((r) => r.numberKey === "22")!;
+    expect(row).toMatchObject({ player: "Cal Ripken Jr.", team: null, owned: false });
+  });
+});
+
 describe("a set page", () => {
   it("without a checklist: owned cards in number order, copies once, blank numbers apart, no percent", () => {
     add({ cardNumber: "336", player: "Ken Griffey Jr." });

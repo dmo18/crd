@@ -45,7 +45,8 @@ function Row({ r, setKey, hasList }: { r: SetRow; setKey: string; hasList: boole
     <li className="flex min-h-11 items-center justify-between gap-3 rounded-xl border border-border px-3 py-1">
       <span className="min-w-0">
         <span className="block font-semibold break-words">{num} {r.player ?? ""}</span>
-        <span className="block text-sm text-muted">{r.wanted ? "Wanted" : "Missing"}{r.team ? `, ${r.team}` : ""}</span>
+        {/* The button says Wanted; the line only says what the card is (review 7: not "Wanted Wanted"). */}
+        <span className="block text-sm text-muted">Missing{r.team ? `, ${r.team}` : ""}</span>
       </span>
       {r.numberKey ? (
         <form action={toggleWantAction} className="shrink-0">

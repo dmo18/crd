@@ -86,6 +86,23 @@ function s(v: string | number | null | undefined): string {
   return v === null || v === undefined ? "" : String(v);
 }
 
+/** A team field that is only a name suffix. */
+const NAME_SUFFIX = /^(jr|sr|ii|iii|iv|v)\.?$/i;
+const SUFFIX_FORMS: Record<string, string> = { jr: "Jr.", sr: "Sr.", ii: "II", iii: "III", iv: "IV", v: "V" };
+/** A name that already ends in a suffix. */
+const NAME_SUFFIX_END = /\b(jr|sr|ii|iii|iv)\.?$/i;
+
+/**
+ * A team that is only a name suffix ("Jr.") goes onto the player's name
+ * ("Cal Ripken Jr."), and the team is then blank. Anything else is kept.
+ */
+export function withNameSuffix(player: string | null, team: string | null): { player: string | null; team: string | null } {
+  const suffix = team ? NAME_SUFFIX.exec(team.trim()) : null;
+  if (!suffix) return { player, team };
+  if (!player || NAME_SUFFIX_END.test(player)) return { player, team: null };
+  return { player: `${player} ${SUFFIX_FORMS[suffix[1]!.toLowerCase()]}`, team: null };
+}
+
 /** One answer row to a cleaned card, or null when it is unusable. */
 export function toCard(rawRow: unknown, setIdHint: string | null = null): CatalogCard | null {
   const parsed = rowSchema.safeParse(rawRow);
@@ -103,7 +120,11 @@ export function toCard(rawRow: unknown, setIdHint: string | null = null): Catalo
     const o = z.object({ subject_name: z.string().nullish(), team_name: z.string().nullish() }).passthrough().safeParse(subj);
     if (!o.success) continue;
     const c = cleanName(o.data.subject_name);
-    if (names.length === 0 && c.name) team = o.data.team_name?.replace(/\s+/g, " ").trim().slice(0, 80) || null;
+    // Some rows carry the name's suffix in the team field ("Cal Ripken" with team "Jr."): it belongs to the name.
+    const fixed = withNameSuffix(c.name, o.data.team_name?.replace(/\s+/g, " ").trim().slice(0, 80) || null);
+    c.name = fixed.player;
+    const teamName = fixed.team;
+    if (names.length === 0 && c.name) team = teamName;
     if (c.name && !names.includes(c.name)) names.push(c.name);
     // Rookie and other words on listings are not trusted: tags only from clean entries.
     if (verified) for (const t of c.tags) if (!tags.includes(t)) tags.push(t);

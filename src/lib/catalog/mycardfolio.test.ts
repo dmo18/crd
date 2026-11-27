@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDb } from "@/db";
-import { createMyCardfolio, parseCard, parseChecklist, parseSearch, readAnswer } from "./mycardfolio";
+import { createMyCardfolio, parseCard, parseChecklist, parseSearch, readAnswer, toCard, withNameSuffix } from "./mycardfolio";
 
 function fixture(name: string): { response: unknown; arguments: unknown } {
   return JSON.parse(fs.readFileSync(path.join(process.cwd(), "tests/fixtures/catalog", name), "utf8"));
@@ -268,5 +268,20 @@ describe("stored answers", () => {
     const r = await c.search({ text: "1990 Topps Ken Griffey Jr." }, "now");
     expect(r.ok && r.fromStore).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a name suffix in the team field (review 7)", () => {
+  const row = (subject_name: string, team_name: string) => ({
+    card_id: "2309993", sport: "Baseball", year: "1992", product: "Donruss", set: "Base Set", card_number: "22",
+    subjects: [{ subject_name, team_name }], card_details: "", url: "https://mycardfolio.com/sports/baseball/1992/donruss-5009/base-set-38809/22-cal-ripken-2309993",
+  });
+  it("goes onto the player's name and leaves the team blank", () => {
+    expect(toCard(row("Cal Ripken", "Jr."))).toMatchObject({ player: "Cal Ripken Jr.", team: null });
+    expect(toCard(row("Ken Griffey", "jr"))).toMatchObject({ player: "Ken Griffey Jr.", team: null });
+    expect(toCard(row("Cal Ripken Jr.", "Jr."))).toMatchObject({ player: "Cal Ripken Jr.", team: null });
+    expect(toCard(row("Cal Ripken", "Orioles"))).toMatchObject({ player: "Cal Ripken", team: "Orioles" });
+    expect(withNameSuffix("Ken Griffey", "III")).toEqual({ player: "Ken Griffey III", team: null });
+    expect(withNameSuffix("Bo Jackson", "Royals")).toEqual({ player: "Bo Jackson", team: "Royals" });
   });
 });
