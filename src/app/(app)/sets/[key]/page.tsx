@@ -19,7 +19,7 @@ type Show = (typeof SHOWS)[number];
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
 const day = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 
-function Row({ r, setKey }: { r: SetRow; setKey: string }) {
+function Row({ r, setKey, hasList }: { r: SetRow; setKey: string; hasList: boolean }) {
   const num = r.cardNumber ? `#${r.cardNumber}` : "#?";
   if (r.owned) {
     const first = r.items[0];
@@ -30,7 +30,7 @@ function Row({ r, setKey }: { r: SetRow; setKey: string }) {
           <span className="min-w-0">
             <span className="block font-semibold break-words">{num} {r.player ?? ""}</span>
             {r.listSays ? <span className="block text-sm text-warn">The list says {r.listSays}. Check the name.</span> : null}
-            {!r.onList ? <span className="block text-sm text-muted">Not on the catalog&apos;s list</span> : null}
+            {hasList && !r.onList ? <span className="block text-sm text-muted">Not on the catalog&apos;s list</span> : null}
           </span>
           <span className="flex shrink-0 flex-col items-end gap-1">
             <Badge tone="accent">Owned{r.items.length > 1 ? ` x${r.items.length}` : ""}</Badge>
@@ -172,7 +172,7 @@ export default async function SetPage({ params, searchParams }: { params: Promis
 
       {rows.length > 0 ? (
         <ul className="flex flex-col gap-2">
-          {rows.map((r) => <Row key={r.numberKey ?? `${r.cardNumber}-${r.player}`} r={r} setKey={key} />)}
+          {rows.map((r) => <Row key={r.numberKey ?? `${r.cardNumber}-${r.player}`} r={r} setKey={key} hasList={present} />)}
         </ul>
       ) : (
         <p className="text-sm text-muted">
