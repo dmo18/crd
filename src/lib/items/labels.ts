@@ -1,9 +1,17 @@
-import type { CatalogField, Condition, ItemKind, ProductType, RarityTier, SealState, Sport } from "@/db/schema";
+import type { CatalogField, Condition, ItemKind, ItemStatus, ProductType, RarityTier, SealState, Sport } from "@/db/schema";
 
 export const KIND_LABELS: Record<ItemKind, string> = {
   card: "Card",
   sealed: "Sealed product",
   bulk: "Bulk lot",
+};
+
+/** An item's status as the Inventory filter shows it (also the export's Status column). */
+export const STATUS_LABELS: Record<ItemStatus, string> = {
+  needs_review: "Needs review",
+  confirmed: "Confirmed",
+  sold: "Sold",
+  removed: "Removed",
 };
 
 export const SPORT_LABELS: Record<Sport, string> = {
@@ -69,6 +77,12 @@ export const VALUE_SOURCE_LABELS = {
 export function valueSourceLabel(manualValueCents: number | null, origin: keyof typeof VALUE_SOURCE_LABELS | null): string {
   if (manualValueCents != null) return VALUE_SOURCE_LABELS.manual;
   return origin ? VALUE_SOURCE_LABELS[origin] : "";
+}
+
+/** e.g. 0.8 becomes "80%" (the export's Confidence column). Empty when not rated. */
+export function percentText(c: number | null): string {
+  if (c == null || Number.isNaN(c)) return "";
+  return `${Math.round(Math.min(Math.max(c, 0), 1) * 100)}%`;
 }
 
 /** e.g. 0.93 becomes "93% sure". */

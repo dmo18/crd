@@ -343,4 +343,35 @@ describe("round trip", () => {
     expect(get(ids[1])).toMatchObject({ player: "Frank E. Thomas", notes: "line one\nline two, with \"quotes\"", rookieState: "unknown" });
     expect(get(ids[2])).toEqual(before[2]);
   });
+
+  it("the export writes plain labels; that file and an old export with code words both import as the same items (review 7)", () => {
+    const ids = [
+      add({ player: "Ken Griffey Jr.", year: 1989, brand: "Upper Deck", cardNumber: "1", sport: "baseball", condition: "near_mint", rarityTier: "minor_star", status: "needs_review", confidence: 0.8, title: "x" }),
+      add({ kind: "sealed", year: 1991, brand: "Fleer", setName: "Fleer", sport: "basketball", productType: "rack_pack", sealState: "possibly_resealed", title: "z" }),
+    ];
+    const before = ids.map(get);
+    const csv = itemsToCsv(before, new Map());
+    const rows = csv.replace(/^\uFEFF/, "").split("\r\n");
+    const header = rows[0]!.split(",");
+    const cell = (line: number, h: string) => rows[line]!.split(",")[header.indexOf(h)];
+    expect([cell(1, "ID"), cell(1, "Kind"), cell(1, "Status"), cell(1, "Sport"), cell(1, "Condition"), cell(1, "Rarity"), cell(1, "Confidence")])
+      .toEqual([String(ids[0]), "Card", "Needs review", "Baseball", "Near mint", "Minor star", "80%"]);
+    expect([cell(2, "Kind"), cell(2, "Sport"), cell(2, "Product type"), cell(2, "Seal state")]).toEqual(["Sealed product", "Basketball", "Rack pack", "May have been resealed"]);
+    expect(ok(previewImport(csv, guess(csv), OPTS, db, NOW)).counts).toMatchObject({ rows: 2, added: 0, updated: 0, unchanged: 2, problems: 0 });
+    // An export made before this change: code words and 0.8.
+    const old = [
+      "ID,Kind,Status,Title,Sport,Year,Brand,Set,Card number,Player,Rarity,Condition,Product type,Seal state,Confidence",
+      `${ids[0]},card,needs_review,x,baseball,1989,Upper Deck,,1,Ken Griffey Jr.,minor_star,near_mint,,,0.8`,
+      `${ids[1]},sealed,confirmed,z,basketball,1991,Fleer,Fleer,,,,,rack_pack,possibly_resealed,`,
+    ].join("\r\n");
+    expect(ok(previewImport(old, guess(old), OPTS, db, NOW)).counts).toMatchObject({ rows: 2, added: 0, updated: 0, unchanged: 2, problems: 0 });
+    // As new rows (no ID), the labels and the code words give the same fields.
+    const fresh = (text: string) => text.split("\r\n").map((l, i) => (i === 0 ? l : l.replace(/^[^,]*/, ""))).join("\r\n");
+    const keep: ImportOptions = { ...OPTS, duplicates: "new" };
+    ok(applyImport(fresh(csv), guess(csv), keep, { skipProblems: false }, db, NOW));
+    ok(applyImport(fresh(old), guess(old), keep, { skipProblems: false }, db, NOW));
+    const pick = (i: Item) => [i.kind, i.sport, i.condition, i.rarityTier, i.productType, i.sealState];
+    const made = all().slice(2).map(pick);
+    expect(made).toEqual([...before, ...before].map(pick));
+  });
 });

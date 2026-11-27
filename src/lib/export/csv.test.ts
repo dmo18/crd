@@ -81,7 +81,7 @@ describe("itemsToCsv", () => {
     const lines = parse(itemsToCsv([row({ status: "sold", soldPriceCents: 4550, soldAt: new Date("2026-11-20T00:00:00Z") }), row()], none));
     const header = lines[0].split(",");
     const cell = (line: string, h: string) => line.split(",")[header.indexOf(h)];
-    expect(cell(lines[1], "Status")).toBe("sold");
+    expect(cell(lines[1], "Status")).toBe("Sold");
     expect(cell(lines[1], "Sold price (USD)")).toBe("45.50");
     expect(cell(lines[1], "Sold date")).toBe("2026-11-20");
     expect(cell(lines[2], "Sold price (USD)")).toBe("");

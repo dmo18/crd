@@ -1,5 +1,7 @@
 import type { Item } from "@/db/schema";
-import { valueSourceLabel } from "@/lib/items/labels";
+import {
+  CONDITION_LABELS, KIND_LABELS, PRODUCT_LABELS, RARITY_LABELS, SEAL_LABELS, SPORT_LABELS, STATUS_LABELS, percentText, valueSourceLabel,
+} from "@/lib/items/labels";
 import { readRookie } from "@/lib/items/rookie";
 
 type Cell = string | number | boolean | Date | null | undefined;
@@ -17,14 +19,17 @@ const rookieCell = (r: Item) => {
 const dollars = (cents: number | null | undefined) => raw(cents == null ? "" : (cents / 100).toFixed(2));
 const count = (n: number | null | undefined) => raw(n == null ? "" : String(n));
 
+/** The plain label the app shows on screen for a stored value list entry (the import reads labels and code words alike). */
+const label = <T extends string>(labels: Record<T, string>, v: T | null | undefined) => text(v == null ? "" : (labels[v] ?? v));
+
 const unitCents = (r: Item) => r.manualValueCents ?? r.estValueCents ?? null;
 
 const COLUMNS: Col[] = [
   { header: "ID", get: (r) => count(r.id) },
-  { header: "Kind", get: (r) => text(r.kind) },
-  { header: "Status", get: (r) => text(r.status) },
+  { header: "Kind", get: (r) => label(KIND_LABELS, r.kind) },
+  { header: "Status", get: (r) => label(STATUS_LABELS, r.status) },
   { header: "Title", get: (r) => text(r.title) },
-  { header: "Sport", get: (r) => text(r.sport) },
+  { header: "Sport", get: (r) => label(SPORT_LABELS, r.sport) },
   { header: "Year", get: (r) => count(r.year) },
   { header: "Year end", get: (r) => count(r.yearEnd) },
   { header: "Brand", get: (r) => text(r.brand) },
@@ -40,14 +45,14 @@ const COLUMNS: Col[] = [
   { header: "Autograph", get: (r) => yesNo(r.isAutograph) },
   { header: "Memorabilia", get: (r) => yesNo(r.isMemorabilia) },
   { header: "Serial number", get: (r) => text(r.serialNumber) },
-  { header: "Rarity", get: (r) => text(r.rarityTier) },
-  { header: "Condition", get: (r) => text(r.condition) },
+  { header: "Rarity", get: (r) => label(RARITY_LABELS, r.rarityTier) },
+  { header: "Condition", get: (r) => label(CONDITION_LABELS, r.condition) },
   { header: "Grader", get: (r) => text(r.grader) },
   { header: "Grade", get: (r) => text(r.grade) },
   { header: "Cert number", get: (r) => text(r.certNumber) },
-  { header: "Product type", get: (r) => text(r.productType) },
+  { header: "Product type", get: (r) => label(PRODUCT_LABELS, r.productType) },
   { header: "Pack count", get: (r) => count(r.packCount) },
-  { header: "Seal state", get: (r) => text(r.sealState) },
+  { header: "Seal state", get: (r) => label(SEAL_LABELS, r.sealState) },
   { header: "Estimated count", get: (r) => count(r.estCount) },
   { header: "Quantity", get: (r) => count(r.quantity) },
   { header: "Location", get: (r, l) => text(r.locationId == null ? "" : (l.get(r.locationId) ?? "")) },
@@ -57,7 +62,7 @@ const COLUMNS: Col[] = [
   { header: "Estimate high (USD)", get: (r) => dollars(r.estHighCents) },
   { header: "Value source", get: (r) => text(valueSourceLabel(r.manualValueCents, r.valueSource)) },
   { header: "Your value (USD)", get: (r) => dollars(r.manualValueCents) },
-  { header: "Confidence", get: (r) => raw(r.confidence == null ? "" : String(Math.round(r.confidence * 100) / 100)) },
+  { header: "Confidence", get: (r) => raw(percentText(r.confidence)) },
   { header: "Notes", get: (r) => text(r.notes) },
   { header: "Added (ISO date)", get: (r) => raw(r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : "") },
   { header: "Sold price (USD)", get: (r) => dollars(r.soldPriceCents) },

@@ -3,10 +3,10 @@ import { SmartChips } from "@/components/items/SmartChips";
 import { SubmitOnChange } from "@/components/items/SubmitOnChange";
 import { Button, Field, INPUT_CLASS, LinkButton } from "@/components/ui";
 import { ITEM_KINDS, ITEM_STATUSES, RARITY_TIERS, SPORTS, type Location } from "@/db/schema";
-import { KIND_LABELS, RARITY_LABELS, SPORT_LABELS } from "@/lib/items/labels";
+import { KIND_LABELS, RARITY_LABELS, SPORT_LABELS, STATUS_LABELS as ITEM_STATUS_LABELS } from "@/lib/items/labels";
 import { countFilters, type InventoryFilters as Filters } from "@/lib/items/query";
 
-const STATUS_LABELS = { needs_review: "Needs review", confirmed: "Confirmed", sold: "Sold", removed: "Removed", gone: "Sold and removed" } as const;
+const STATUS_LABELS = { ...ITEM_STATUS_LABELS, gone: "Sold and removed" } as const;
 /** The yes or no marks, each its own box in the sheet. Same names as the link. */
 const MARK_LABELS = {
   autograph: "Autograph", relic: "Relic or memorabilia", error: "Error card", parallel: "Parallel", insert: "Insert",
